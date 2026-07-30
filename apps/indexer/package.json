@@ -1,0 +1,22 @@
+{
+  "name": "@verdant/indexer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "ponder dev",
+    "start": "ponder start",
+    "codegen": "ponder codegen",
+    "build": "echo \"@verdant/indexer is activated in P8; nothing to build at P0\" && exit 0",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "echo \"@verdant/indexer tests land with the schema in P8\" && exit 0"
+  },
+  "dependencies": {
+    "@verdant/config": "workspace:*",
+    "viem": "^2.40.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "typescript": "^5.9.3"
+  }
+}

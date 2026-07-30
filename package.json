@@ -1,0 +1,29 @@
+{
+  "name": "verdant",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Verdant — a market-creation layer on Robinhood Chain. Programmable Uniswap v4 markets with verified models and bounded parameters.",
+  "packageManager": "pnpm@10.30.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "dev": "turbo run dev",
+    "chain:probe": "node scripts/probe.ts",
+    "contracts:deps": "bash scripts/vendor-contracts-deps.sh",
+    "contracts:build": "pnpm --filter @verdant/contracts build",
+    "contracts:test": "pnpm --filter @verdant/contracts test",
+    "contracts:snapshot": "pnpm --filter @verdant/contracts snapshot",
+    "vectors:generate": "pnpm --filter @verdant/sdk vectors:generate",
+    "bounds:emit": "pnpm --filter @verdant/config bounds:emit"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.8",
+    "typescript": "^5.9.3"
+  }
+}

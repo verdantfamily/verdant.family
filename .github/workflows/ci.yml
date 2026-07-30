@@ -1,0 +1,115 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Never write to a chain from CI. Nothing here needs a key, and a workflow that
+  # cannot sign cannot accidentally deploy.
+  FOUNDRY_PROFILE: default
+
+jobs:
+  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: build
+        run: pnpm build
+
+      - name: typecheck
+        run: pnpm typecheck
+
+      - name: test
+        run: pnpm test
+
+      # packages/config/generated/bounds.json is committed because the contracts
+      # job has no Node toolchain and the Solidity parity test reads it. A
+      # committed generated file drifts unless something checks, so regenerate it
+      # and require the result to be identical — the same rule as the gas
+      # snapshot: a change to a protocol bound must appear in a diff.
+      - name: generated bounds are current
+        run: |
+          pnpm bounds:emit
+          git diff --exit-code -- packages/config/generated/bounds.json
+
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      # Invoked directly rather than through pnpm so this job needs no Node
+      # toolchain at all.
+      - name: vendor pinned dependencies
+        run: bash scripts/vendor-contracts-deps.sh
+
+      - name: forge build
+        working-directory: packages/contracts
+        run: forge build --sizes
+
+      - name: forge fmt
+        working-directory: packages/contracts
+        run: forge fmt --check
+
+      # `forge lint` exits 0 even when it reports warnings, so the warnings are
+      # counted rather than trusted. The suppressions in the tree are per line
+      # and each carries its justification, which keeps this at zero without
+      # turning a rule off globally.
+      - name: forge lint
+        run: bash scripts/check-lint.sh
+
+      - name: forge test
+        working-directory: packages/contracts
+        run: forge test -vvv
+
+      # The gas snapshot is committed. A change to it is a change to the cost of
+      # using the protocol, so it must appear in a diff and be argued for, not
+      # discovered after a deployment.
+      #
+      # Scoped to the gas suite deliberately. A whole-project snapshot would
+      # include fuzz averages, which move with the fuzzer's seed, and the vector
+      # suites, whose cost is dominated by JSON parsing — both would make this
+      # check fail for reasons that have nothing to do with protocol cost.
+      - name: gas snapshot unchanged
+        working-directory: packages/contracts
+        run: forge snapshot --check --match-contract ScheduleLibGasTest
+
+      # The acceptance bar, enforced per file. A total would let one well-tested
+      # library carry an untested contract, which is the case worth catching.
+      - name: coverage floor
+        run: bash scripts/check-coverage.sh
+
+  # Read-only, and allowed to fail without failing the build: this job asserts
+  # facts about somebody else's chain, so a red X here means "the chain changed
+  # or the RPC is down", which is information rather than a broken commit.
+  chain-probe:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: probe both chains
+        run: node scripts/probe.ts

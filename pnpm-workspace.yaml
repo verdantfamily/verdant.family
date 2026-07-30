@@ -1,0 +1,10 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# pnpm 10 blocks dependency install scripts by default. These two are the only
+# ones this workspace needs, and both are build tooling rather than runtime code:
+# esbuild backs vitest, sharp backs Next's image optimiser.
+onlyBuiltDependencies:
+  - esbuild
+  - sharp

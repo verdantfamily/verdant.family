@@ -1,0 +1,15 @@
+{
+  "name": "@verdant/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test",
+    "typecheck": "echo \"solidity: covered by forge build\" && exit 0",
+    "lint": "forge fmt --check && bash ../../scripts/check-lint.sh",
+    "fmt": "forge fmt",
+    "snapshot": "forge snapshot --match-contract ScheduleLibGasTest",
+    "snapshot:check": "forge snapshot --check --match-contract ScheduleLibGasTest",
+    "coverage": "forge coverage --no-match-coverage \"(vendor|test)\" --no-match-contract ScheduleLibGasTest"
+  }
+}

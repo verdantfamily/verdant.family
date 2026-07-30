@@ -1,0 +1,75 @@
+{
+  "$comment": "GENERATED FILE - do not edit by hand. Regenerate with `pnpm bounds:emit`. The parameter register, as data, for the consumers that cannot import TypeScript. packages/config/src/bounds.ts is the source; this is a projection of it. Model arrays are index-aligned and their order IS the on-chain model discriminant.",
+  "schedule": {
+    "minStages": 1,
+    "maxStages": 8,
+    "minFeePpm": 100,
+    "maxFeePpm": 100000,
+    "defaultFeePpm": 10000,
+    "minStageGap": 300,
+    "maxHorizon": 63072000
+  },
+  "splits": {
+    "total": 10000,
+    "minCreatorBps": 0,
+    "maxCreatorBps": 8000,
+    "minProtocolBps": 0,
+    "maxProtocolBps": 2000,
+    "defaultProtocolBps": 1000,
+    "minReserveBps": 1000,
+    "maxReserveBps": 8000
+  },
+  "token": {
+    "decimals": 18,
+    "minSupplyTokens": "1000000",
+    "maxSupplyTokens": "1000000000000000",
+    "minCreatorAllocationBps": 0,
+    "maxCreatorAllocationBps": 2000,
+    "maxNameLength": 32,
+    "maxSymbolLength": 11,
+    "maxMetadataUriLength": 256
+  },
+  "vesting": {
+    "minDuration": 2592000,
+    "maxDuration": 63072000
+  },
+  "liquidity": {
+    "tickSpacing": 200,
+    "minUsableTick": -887200,
+    "maxUsableTick": 887200,
+    "minLockDuration": 15552000,
+    "minTokenShareBps": 6000,
+    "maxTokenShareBps": 10000
+  },
+  "modelCount": 3,
+  "modelNames": [
+    "fixed",
+    "progressive",
+    "evergreen"
+  ],
+  "modelEnabled": [
+    true,
+    true,
+    true
+  ],
+  "modelMinStages": [
+    1,
+    2,
+    1
+  ],
+  "modelMaxStages": [
+    1,
+    8,
+    8
+  ],
+  "modelMinReserveBps": [
+    0,
+    0,
+    1000
+  ],
+  "modelMaxReserveBps": [
+    0,
+    0,
+    8000
+  ]
+}

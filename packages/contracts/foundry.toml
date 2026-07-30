@@ -1,0 +1,70 @@
+[profile.default]
+src = "src"
+out = "out"
+test = "test"
+script = "script"
+# vendor/ rather than lib/: Foundry treats a plain directory under lib/ as an
+# uninitialised git submodule and tries to install it on every build. See README.
+libs = ["vendor"]
+
+solc_version = "0.8.26"
+optimizer = true
+optimizer_runs = 1_000_000
+evm_version = "cancun"
+
+# Uniswap v4 requires EIP-1153 transient storage. v4 is deployed and in active
+# use on 4663, which is how we know TSTORE is available there — inferred from
+# deployment, not read from a Robinhood document. See docs/verification.md.
+
+ffi = false
+ast = true
+build_info = true
+extra_output = ["storageLayout"]
+
+# The differential harness reads shared vectors from the SDK so that Foundry and
+# vitest assert against byte-identical input. This is the mechanism that makes
+# "preview equals reality" a tested property (§20.4).
+fs_permissions = [
+  { access = "read", path = "../sdk/src/models/vectors" },
+  # The parameter register, projected to JSON by `pnpm bounds:emit`. Solidity
+  # cannot import TypeScript, so the bounds arrive as data and BoundsParity.t.sol
+  # asserts that what the registry returns equals what this file says.
+  { access = "read", path = "../config/generated" },
+  # Own build artefacts, for the ABI-inspection tests. A contract's ABI is part of
+  # its security surface — "there is no mint function" is a claim about the ABI,
+  # so it is asserted against the ABI rather than against the source.
+  { access = "read", path = "./out" },
+]
+
+[profile.default.fuzz]
+runs = 10_000
+max_test_rejects = 500_000
+
+[profile.default.invariant]
+runs = 256
+depth = 20
+call_override = false
+fail_on_revert = false
+
+# Fast profile for iteration; the gates always run under the default profile.
+[profile.quick.fuzz]
+runs = 256
+
+[profile.quick.invariant]
+runs = 16
+depth = 10
+
+[fmt]
+line_length = 120
+tab_width = 4
+bracket_spacing = false
+int_types = "long"
+
+[rpc_endpoints]
+robinhood = "https://rpc.mainnet.chain.robinhood.com"
+robinhood_testnet = "https://rpc.testnet.chain.robinhood.com"
+
+# Verification is Blockscout only. Etherscan does not index chain 4663.
+[etherscan]
+robinhood = { key = "unused", chain = 4663, url = "https://robinhoodchain.blockscout.com/api/" }
+robinhood_testnet = { key = "unused", chain = 46630, url = "https://explorer.testnet.chain.robinhood.com/api/" }

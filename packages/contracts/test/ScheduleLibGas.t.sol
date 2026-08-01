@@ -184,6 +184,29 @@ contract ScheduleLibGasTest is Test {
         assertLt(used, 15_000, "worst-case scan got more expensive than budgeted");
     }
 
+    /// @notice The property the two-word encoding exists for: within the first
+    /// word, reading the fee costs the same whether the market declared one stage
+    /// or four.
+    ///
+    /// @dev Asserted rather than reported. Two phase reports quoted different
+    /// numbers for this cost — one the metered figure below, the other the whole
+    /// test function's gas from the committed snapshot — and neither could settle
+    /// whether the property still held, because nothing tested it. The snapshot
+    /// cannot: its per-test totals include the emit and the assert, so they differ
+    /// between these tests (11 370, 11 403, 11 404) even when the reads do not.
+    ///
+    /// Tolerance is eight gas rather than zero because the three paths are the
+    /// same opcodes over the same single slot but not bit-identical traces. Making
+    /// stage count matter would cost a cold SLOAD, 2 100 gas.
+    function test_gas_costIsFlatFromOneStageToFour() public view {
+        uint256 one = _measure(oneStage, LATE);
+        uint256 three = _measure(threeStage, LATE);
+        uint256 four = _measure(fourStage, LATE);
+
+        assertApproxEqAbs(one, three, 8, "one and three stages must cost the same");
+        assertApproxEqAbs(three, four, 8, "three and four stages must cost the same");
+    }
+
     /// @dev The comparison the encoding is justified by. Reported rather than
     /// asserted with a tight bound, because the exact delta is a function of the
     /// optimizer and is allowed to move; the sign of it is not.

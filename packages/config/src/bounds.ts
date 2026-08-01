@@ -80,6 +80,16 @@ export type MarketModel = (typeof MARKET_MODELS)[number];
 /** Sentinel for a permanent liquidity lock: type(uint32).max. */
 export const PERMANENT_LOCK = 4_294_967_295 as const;
 
+/**
+ * Ceiling on the protocol's share of a market's fee revenue.
+ *
+ * `ModelRegistry` sets `protocolBps` for future markets and each market
+ * snapshots it at creation, so this is the bound that limits what the registry
+ * owner can ever take. It is enforced in `ModelRegistry` as an immutable
+ * constructor argument, not only asserted here.
+ */
+export const MAX_PROTOCOL_BPS = 2_000 as const;
+
 export const BOUNDS = {
   token: {
     nameLength: { min: 1, max: 32 },
@@ -124,13 +134,33 @@ export const BOUNDS = {
   },
 
   splits: {
-    /** Every split must sum to exactly this. */
+    /**
+     * The denominator, and the sum the three shares must come to. Asserted by
+     * the factory on the *derived* creator share rather than validated as three
+     * independent inputs — see docs/decisions/005-splits-belong-to-the-splitter.md.
+     */
     total: 10_000,
-    creatorBps: { min: 0, max: 8_000, default: 5_000 },
-    /** Set by ModelRegistry and snapshotted per market at creation. */
-    protocolBps: { min: 0, max: 2_000, default: 1_000 },
-    /** Zero unless the model is evergreen, where the floor applies. */
-    reserveBps: { min: 1_000, max: 8_000, default: 2_000 },
+    /**
+     * Set by ModelRegistry and snapshotted per market at creation. The cap is
+     * enforced in the contract as well as here, so the registry cannot
+     * confiscate a future market's economics.
+     */
+    protocolBps: { min: 0, max: MAX_PROTOCOL_BPS, default: 1_000 },
+    /**
+     * Zero in v1. Only Evergreen unlocks a reserve share, and the floor below
+     * applies where it is unlocked — `MODEL_BOUNDS.fixed` and
+     * `MODEL_BOUNDS.progressive` pin it to `{ min: 0, max: 0 }`.
+     */
+    reserveBps: { min: 1_000, max: 8_000 },
+    /**
+     * There is deliberately no `creatorBps` here. The creator share is
+     * `total - protocolBps - reserveBps`, which leaves the creator nothing to
+     * choose and nothing to get wrong. It was previously an input with its own
+     * cap of 8 000, which could not be reconciled with the sum: for Fixed and
+     * Progressive, where the reserve is 0, the only split reaching 10 000 would
+     * have been exactly 8 000/2 000, and the register's own defaults
+     * (5 000 + 1 000 + 2 000) came to 8 000 rather than 10 000.
+     */
   },
 
   liquidity: {
@@ -189,8 +219,26 @@ export const MODEL_BOUNDS = {
     maxStages: 8,
     reserveBps: { min: 0, max: 0 },
   },
+  /**
+   * Disabled in v1, and the two facts below are really one fact.
+   *
+   * Evergreen is the model whose fees partly reinforce the locked position, so
+   * its `reserveBps` floor is 1 000 — an Evergreen market that reserved nothing
+   * would be a Progressive market wearing another name. But v1 has no consumer
+   * for a reserve share: `reinforce()` does not exist yet, so `VerdantFactory`
+   * asks the registry `creationAllowed(model, stages, 0)` with the reserve pinned
+   * to zero (ADR-005). Zero is below the floor, so every Evergreen creation is
+   * refused.
+   *
+   * Left enabled, that combination is worse than useless: the interface reads
+   * `enabled` to decide what to offer, so it would advertise a model whose every
+   * launch reverts. `BoundsParity.t.sol` asserts the general form — an enabled
+   * model must be creatable with the reserve share v1 actually passes — so
+   * re-enabling this without shipping `reinforce()` fails a test rather than
+   * reaching a creator.
+   */
   evergreen: {
-    enabled: true,
+    enabled: false,
     minStages: 1,
     maxStages: 8,
     reserveBps: BOUNDS.splits.reserveBps,

@@ -29,6 +29,8 @@ import {
   MAX_USABLE_TICK,
   MIN_USABLE_TICK,
   MODEL_BOUNDS,
+  QUOTE_ASSET_CHAIN_ID,
+  QUOTE_ASSETS,
   TICK_SPACING,
   // From the build output rather than from src, because Node's type-stripping
   // does not rewrite module specifiers: `../src/index.js` would not resolve to
@@ -59,8 +61,6 @@ const document = {
 
   splits: {
     total: BOUNDS.splits.total,
-    minCreatorBps: BOUNDS.splits.creatorBps.min,
-    maxCreatorBps: BOUNDS.splits.creatorBps.max,
     minProtocolBps: BOUNDS.splits.protocolBps.min,
     maxProtocolBps: BOUNDS.splits.protocolBps.max,
     defaultProtocolBps: BOUNDS.splits.protocolBps.default,
@@ -103,6 +103,18 @@ const document = {
   modelMaxStages: MARKET_MODELS.map((m) => MODEL_BOUNDS[m].maxStages),
   modelMinReserveBps: MARKET_MODELS.map((m) => MODEL_BOUNDS[m].reserveBps.min),
   modelMaxReserveBps: MARKET_MODELS.map((m) => MODEL_BOUNDS[m].reserveBps.max),
+
+  // The reviewed quote assets, which `ModelRegistry` is seeded with so that the
+  // allowlist is a contract's answer rather than an interface's. Index-aligned
+  // with the symbols for the sake of a deployment log that can be read.
+  //
+  // These addresses exist on exactly one chain, and the chain id says which. A
+  // deployment elsewhere would be admitting addresses that hold no code, so the
+  // deploy script logs the mismatch rather than pretending the list applies.
+  quoteAssetChainId: QUOTE_ASSET_CHAIN_ID,
+  quoteAssetCount: QUOTE_ASSETS.length,
+  quoteAssetSymbols: QUOTE_ASSETS.map((asset) => asset.symbol),
+  quoteAssets: QUOTE_ASSETS.map((asset) => asset.address),
 } as const;
 
 mkdirSync(dirname(OUT_PATH), { recursive: true });
@@ -110,3 +122,7 @@ writeFileSync(OUT_PATH, `${JSON.stringify(document, null, 2)}\n`, "utf8");
 
 console.log(`wrote ${OUT_PATH}`);
 console.log(`  ${document.modelCount} models: ${document.modelNames.join(", ")}`);
+console.log(
+  `  ${document.quoteAssetCount} quote assets on chain ${document.quoteAssetChainId}: ` +
+    `${document.quoteAssetSymbols.join(", ")}`,
+);

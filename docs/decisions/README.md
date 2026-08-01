@@ -11,9 +11,15 @@ original design intent, and these files are the diff.
 
 | ADR | Decision | Supersedes |
 |---|---|---|
-| [001](001-tick-spacing.md) | `tickSpacing` is 200 for every Verdant pool | §19.1, §7.2, §8.3 range presets |
-| [002](002-reinforce-liquidity-delta.md) | `reinforce()` computes the liquidity delta caller-side and is a slippage-bearing transaction | §7.5, §5.3 |
-| [003](003-reject-permissioned-pools.md) | Uniswap's Permissioned Pools standard is not adopted | §9.5 (confirms, does not change) |
+| [001](001-tick-spacing.md) | `tickSpacing` is 200 for every Verdant pool | ?19.1, ?7.2, ?8.3 range presets |
+| [002](002-reinforce-liquidity-delta.md) | `reinforce()` computes the liquidity delta caller-side and is a slippage-bearing transaction | ?7.5, ?5.3 |
+| [003](003-reject-permissioned-pools.md) | Uniswap's Permissioned Pools standard is not adopted | ?9.5 (confirms, does not change) |
+| [004](004-ihooks-not-basehook.md) | `VerdantHook` implements `IHooks` directly; `BaseHook` does not exist at the pinned commit | resolves V15 |
+| [005](005-splits-belong-to-the-splitter.md) | Fee splits belong to the splitter; `creatorBps` is derived, not supplied | ?19.1 splits, ?5.2 |
+| [006](006-msgsender-authenticates-liquidity.md) | `beforeAddLiquidity` authenticates the initiator through `IMsgSender` | ?9.3, resolves V11 |
+| [007](007-the-factory-address-is-anchored.md) | The factory's address is anchored to a contract, not predicted from a nonce | ?21.1 deployment order |
+| [008](008-the-quote-asset-is-a-parameter.md) | A market's quote asset is a parameter; the launch token is always `currency1` | extends 003 |
+| [009](009-the-first-buy-is-part-of-the-launch.md) | The creator's first buy happens inside `create`, which is `payable` | extends 008 |
 
 ## Format
 
@@ -22,6 +28,6 @@ are written as a checklist of what has to change, because an ADR whose
 consequences are not enumerated tends to be applied to one file and forgotten in
 four others.
 
-Every quantitative claim cites where the number came from — a probe in
+Every quantitative claim cites where the number came from ? a probe in
 `docs/verification.md`, a line of deployed source, or arithmetic that is shown
 rather than asserted.

@@ -18,6 +18,12 @@ export interface ModelDefinition {
   thesis: string;
   /** Plain-language mechanism. No metaphor without a definition. */
   mechanism: string;
+  /**
+   * What the creator actually chooses for this model. A parameter listed here
+   * is rendered as a control in the create flow, so listing one the creator
+   * cannot set is a false disclosure rather than a cosmetic error — see
+   * ADR-005 for why `creatorBps` is not, and can never be, on this list.
+   */
   unlockedParameters: readonly string[];
   risks: readonly string[];
   traits: readonly string[];
@@ -30,7 +36,7 @@ export const MODELS: Record<MarketModel, ModelDefinition> = {
     thesis: "One fee, unchanged for the life of the market.",
     mechanism:
       "A single fee stage. The LP fee is constant and is set at creation. Fee revenue accrues to the locked liquidity position and is split between the creator and the protocol when anyone calls collect().",
-    unlockedParameters: ["initialFeePpm", "creatorBps"],
+    unlockedParameters: ["initialFeePpm"],
     risks: [
       "A fixed fee does not adapt to changing liquidity or volume.",
       "Fee revenue depends entirely on trading activity, which Verdant does not and cannot guarantee.",
@@ -44,7 +50,7 @@ export const MODELS: Record<MarketModel, ModelDefinition> = {
     thesis: "A fee schedule fixed at creation, advancing on a timetable.",
     mechanism:
       "Two to eight stages. Stage n activates at the pool's initialization time plus that stage's offset in seconds. The active fee is the fee of the latest stage whose offset has elapsed. The schedule is immutable and derives only from block.timestamp — there is no discretion, no oracle, and no off-chain trigger.",
-    unlockedParameters: ["stages", "creatorBps"],
+    unlockedParameters: ["stages"],
     risks: [
       "A fee schedule is not a price guarantee and says nothing about outcomes.",
       "Stage transitions land on L2 timestamps, so a transition may occur slightly before or after the countdown shown in the interface.",
@@ -60,7 +66,7 @@ export const MODELS: Record<MarketModel, ModelDefinition> = {
       "A share of fee revenue is added back to the locked position as liquidity.",
     mechanism:
       "Any valid fee schedule, plus a mandatory reserve share of collected fees. Reserve balances accumulate in both currencies and can be converted into additional liquidity in the locked position by anyone, at any time, via reinforce(). No swap is performed. Reserve balances can never be withdrawn by the creator or by the protocol.",
-    unlockedParameters: ["stages", "creatorBps", "reserveBps"],
+    unlockedParameters: ["stages", "reserveBps"],
     risks: [
       "Reinforcement is not automatic. It requires someone to call reinforce(), which anyone may do and nobody is obliged to do.",
       "Reserve funds are unclaimable by any party, so a market whose reinforcement never succeeds leaves them permanently unused.",

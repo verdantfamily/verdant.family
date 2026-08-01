@@ -33,6 +33,7 @@ contract MarketRegistryTest is Test {
         return MarketRegistry.Market({
             poolId: poolId,
             token: token,
+            quoteAsset: address(0),
             creator: creator,
             model: 1,
             createdAt: uint40(block.timestamp),
@@ -197,6 +198,39 @@ contract MarketRegistryTest is Test {
 
         assertEq(keccak256(abi.encode(registry.marketOf(poolIdA))), snapshot, "an earlier record changed");
         assertEq(registry.marketAt(0).poolId, poolIdA, "creation order changed");
+    }
+
+    // --- the quote asset -------------------------------------------------------
+
+    /// @dev The one field of a market's pool key that cannot be derived from the
+    /// token, so a record that lost it would make the market unresolvable.
+    function test_theQuoteAssetIsPartOfTheRecord() public {
+        bytes32 poolId = keccak256("pool-1");
+        address token = address(0x2222);
+        address equity = address(0x1111);
+
+        MarketRegistry.Market memory market = _market(poolId, token, CREATOR);
+        market.quoteAsset = equity;
+
+        vm.prank(FACTORY);
+        registry.register(market);
+
+        assertEq(registry.marketOf(poolId).quoteAsset, equity, "by pool id");
+        assertEq(registry.marketByToken(token).quoteAsset, equity, "by token");
+    }
+
+    /// @dev Not reachable through the factory, which deploys the token in the same
+    /// call. Refused here because such a record would make `marketByToken`
+    /// ambiguous about which side of the pair it answered for.
+    function test_aMarketCannotBeQuotedInItsOwnToken() public {
+        address token = address(0x1111);
+
+        MarketRegistry.Market memory market = _market(keccak256("pool-1"), token, CREATOR);
+        market.quoteAsset = token;
+
+        vm.expectRevert(abi.encodeWithSelector(MarketRegistry.QuoteAssetIsToken.selector, token));
+        vm.prank(FACTORY);
+        registry.register(market);
     }
 
     // --- input validation ----------------------------------------------------

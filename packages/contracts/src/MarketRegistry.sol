@@ -45,6 +45,13 @@ contract MarketRegistry {
         /// v4 dependency to be a record of v4 pools.
         bytes32 poolId;
         address token;
+        /// @dev The pool's `currency0`: what this market is priced and traded in.
+        /// `address(0)` for native ether, or the equity token a stock-paired market
+        /// was launched against. Recorded because it cannot be derived from the
+        /// token alone — every other field of the pool key is a constant, and this
+        /// one is the reason a market's key has to be looked up rather than
+        /// assumed.
+        address quoteAsset;
         address creator;
         /// @dev Index into `ModelRegistry`'s models, and the same discriminant
         /// `ScheduleLib` packs into its header.
@@ -90,6 +97,12 @@ contract MarketRegistry {
     error UnknownMarket(bytes32 poolId);
     error IndexOutOfRange(uint256 index, uint256 count);
 
+    /// @notice A market whose quote asset is its own token.
+    /// @dev Not reachable through the factory, which deploys the token in the same
+    /// call. Refused here because a record like it would make `marketByToken`
+    /// ambiguous about which side of the pair it answered for.
+    error QuoteAssetIsToken(address token);
+
     constructor(address writer_) {
         if (writer_ == address(0)) revert ZeroWriter();
         writer = writer_;
@@ -103,6 +116,7 @@ contract MarketRegistry {
         if (market.poolId == bytes32(0)) revert ZeroPoolId();
         if (market.token == address(0)) revert ZeroToken();
         if (market.creator == address(0)) revert ZeroCreator();
+        if (market.quoteAsset == market.token) revert QuoteAssetIsToken(market.token);
 
         // Append-only means an append must never be able to act as an overwrite.
         // A pool id already present would replace a record; a token already

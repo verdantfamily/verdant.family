@@ -23,6 +23,7 @@ export {
   NATIVE_CURRENCY,
   MARKET_MODELS,
   PERMANENT_LOCK,
+  MAX_PROTOCOL_BPS,
   BOUNDS,
   MODEL_BOUNDS,
   type MarketModel,
@@ -32,8 +33,38 @@ export {
 } from "./bounds.js";
 
 export {
+  DEPLOYMENTS,
+  deploymentFor,
+  isDeployed,
+  type VerdantDeployment,
+} from "./deployments.js";
+
+export {
   MODELS,
   TRAIT_DEFINITIONS,
   type ModelDefinition,
   type TraitId,
 } from "./models.js";
+
+export {
+  LAUNCH_MODELS,
+  LAUNCH_MODEL_ORDER,
+  LAUNCH_MODEL_STATUS_LABELS,
+  launchModel,
+  type LaunchModelDefinition,
+  type LaunchModelId,
+  type LaunchModelStatus,
+} from "./launch-models.js";
+
+export {
+  QUOTE_ASSETS,
+  QUOTE_ASSET_CATEGORIES,
+  QUOTE_ASSET_CHAIN_ID,
+  QUOTE_ASSET_MINIMUM_HOLDERS,
+  isReviewedQuoteAsset,
+  quoteAssetByAddress,
+  quoteAssetBySymbol,
+  quoteAssetsByCategory,
+  type QuoteAsset,
+  type QuoteAssetCategory,
+} from "./quote-assets.js";

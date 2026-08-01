@@ -16,6 +16,12 @@ evm_version = "cancun"
 # use on 4663, which is how we know TSTORE is available there — inferred from
 # deployment, not read from a Robinhood document. See docs/verification.md.
 
+# Fork tests are excluded from the default run: they need a live RPC, and `forge
+# test` and `forge coverage` have to work without one. CI runs them as their own
+# job under FOUNDRY_PROFILE=fork, allowed to fail, because they assert facts about
+# somebody else's chain.
+no_match_path = "test/fork/*"
+
 ffi = false
 ast = true
 build_info = true
@@ -45,6 +51,15 @@ runs = 256
 depth = 20
 call_override = false
 fail_on_revert = false
+
+# The fork suite, against the bytecode deployed on 4663 rather than this repo's
+# build of it. See test/fork/Launch.fork.t.sol for why that difference matters.
+[profile.fork]
+match_path = "test/fork/*"
+# Profiles inherit from `default`, so the exclusion above would apply here too and
+# this profile would match nothing at all. Overridden to a directory that holds
+# libraries rather than tests. Do not "simplify" this away.
+no_match_path = "test/utils/*"
 
 # Fast profile for iteration; the gates always run under the default profile.
 [profile.quick.fuzz]

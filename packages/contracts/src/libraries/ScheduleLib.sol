@@ -171,6 +171,13 @@ library ScheduleLib {
     /// @notice A fee falls outside [MIN_FEE_PPM, MAX_FEE_PPM].
     error FeeOutOfBounds(uint256 index, uint256 feePpm, uint256 min, uint256 max);
 
+    /// @notice `recordInitTime` was given zero, which is indistinguishable from
+    /// "not yet recorded" and would leave the field writable again.
+    error ZeroInitTime();
+
+    /// @notice `recordInitTime` was called on a schedule that already has one.
+    error InitTimeAlreadyRecorded(uint40 initTime);
+
     // --- types --------------------------------------------------------------
 
     /// @notice One step of the schedule.
@@ -408,6 +415,34 @@ library ScheduleLib {
             return feeAt(Packed({word0: w0, word1: 0}), timestamp);
         }
         return feeAt(Packed({word0: w0, word1: packed.word1}), timestamp);
+    }
+
+    /// @notice Writes the pool's initialisation time into an already-packed
+    /// schedule in storage.
+    ///
+    /// @dev Exists so that the one contract that has to fill in `initTime` after
+    /// the fact does not need to know where in `word0` it lives. A schedule is
+    /// packed when its market is configured, but `initTime` is only knowable once
+    /// the pool has actually been initialised, and the two are separate calls
+    /// because v4's initialise path carries no hook data (see V15 in
+    /// docs/verification.md).
+    ///
+    /// Recording is one-shot: a second attempt reverts rather than overwriting.
+    /// initTime is the origin every stage offset is measured from, so moving it
+    /// would silently reschedule every transition of a live market.
+    ///
+    /// Costs ~100 gas when it follows `pack` in the same transaction, because the
+    /// slot is already dirty; it is not worth folding into the header write to
+    /// save that.
+    function recordInitTime(Packed storage packed, uint40 initTime) internal {
+        if (initTime == 0) revert ZeroInitTime();
+
+        uint256 w0 = packed.word0;
+        uint256 existing = (w0 >> INIT_TIME_SHIFT) & MASK_U40;
+        // forge-lint: disable-next-line(unsafe-typecast) -- masked to 40 bits above
+        if (existing != 0) revert InitTimeAlreadyRecorded(uint40(existing));
+
+        packed.word0 = w0 | (uint256(initTime) & MASK_U40) << INIT_TIME_SHIFT;
     }
 
     /// @notice The number of stages in a packed schedule.

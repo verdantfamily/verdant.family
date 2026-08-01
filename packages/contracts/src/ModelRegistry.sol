@@ -27,10 +27,12 @@ import {ScheduleLib} from "./libraries/ScheduleLib.sol";
 ///   - change the bounds new markets are created under;
 ///   - enable or disable a model for new creations;
 ///   - pause creation entirely;
-///   - change the protocol's fee share for new markets, up to an immutable cap.
+///   - change the protocol's fee share for new markets, up to an immutable cap;
+///   - admit or withdraw an asset that new markets may be quoted in.
 ///
 /// What no one can do: touch a market that exists. Every value here is read once,
-/// at creation, and snapshotted into the market's own immutable state.
+/// at creation, and snapshotted into the market's own immutable state — or, in the
+/// case of the quote asset, written into a pool key that nothing can rewrite.
 ///
 /// ## Bounds have exactly one source
 ///
@@ -39,7 +41,9 @@ import {ScheduleLib} from "./libraries/ScheduleLib.sol";
 /// `BoundsParity.t.sol` asserts that a deployed registry returns exactly what that
 /// file says. Where a bound is already owned by another contract — stage counts by
 /// `ScheduleLib` — this contract references that contract's constant instead of
-/// holding a second copy.
+/// holding a second copy. The quote assets are seeded the same way, from
+/// `packages/config/generated/quote-assets.json`, and asserted by
+/// `QuoteAssetParity.t.sol`.
 ///
 /// ## Ownership
 ///
@@ -92,10 +96,29 @@ contract ModelRegistry is Ownable2Step {
 
     mapping(uint8 model => ModelBounds) private _bounds;
 
+    /// @dev Whether a new market may be quoted in this asset, right now. Native
+    /// ether is not a key here: it is admitted by `quoteAllowed` unconditionally,
+    /// because a registry that could withdraw it would be able to stop the
+    /// protocol's own base pair being launched against, which is `creationPaused`
+    /// wearing a disguise.
+    mapping(address quoteAsset => bool) private _quoteAdmitted;
+
+    /// @dev Every asset that has ever been admitted, in the order it first was.
+    /// Append-only, and never reordered or shortened — withdrawing an asset clears
+    /// its flag and leaves it here, so that "this was once admitted" stays
+    /// answerable. Grows only by owner action, which is why an unbounded array is
+    /// safe to iterate in a view.
+    address[] private _quoteAssetsSeen;
+
     event ModelBoundsUpdated(uint8 indexed model, ModelBounds bounds);
     event ModelEnabledSet(uint8 indexed model, bool enabled);
     event CreationPausedSet(bool paused);
     event ProtocolBpsSet(uint16 previousBps, uint16 newBps);
+
+    /// @notice An asset was admitted as a quote side for new markets, or withdrawn.
+    /// @dev Emitted on every call, including one that restates the current value,
+    /// so the event stream is a complete record of what the owner asserted and when.
+    event QuoteAssetSet(address indexed quoteAsset, bool admitted);
 
     error UnknownModel(uint8 model, uint8 count);
     error NoModels();
@@ -109,11 +132,25 @@ contract ModelRegistry is Ownable2Step {
     error ProtocolBpsAboveCap(uint16 provided, uint16 cap);
     error CapAboveDenominator(uint16 cap, uint16 denominator);
 
+    /// @notice The zero address was offered as a quote asset.
+    /// @dev Zero means native ether, which `quoteAllowed` admits without being
+    /// asked. Accepting it here would create two ways to say the same thing and one
+    /// of them would eventually be read as "ether is not allowed".
+    error ZeroQuoteAsset();
+
     /// @param bounds_ Index-aligned with the model discriminant: element 0 is
     /// model 0. Seeded from `packages/config/generated/bounds.json`.
-    constructor(address initialOwner, uint16 maxProtocolBps_, uint16 initialProtocolBps, ModelBounds[] memory bounds_)
-        Ownable(initialOwner)
-    {
+    /// @param quoteAssets_ Assets a new market may be quoted in, besides ether.
+    /// Seeded from `packages/config/generated/quote-assets.json`. May be empty, in
+    /// which case only ether-quoted markets can be created until the owner admits
+    /// one.
+    constructor(
+        address initialOwner,
+        uint16 maxProtocolBps_,
+        uint16 initialProtocolBps,
+        ModelBounds[] memory bounds_,
+        address[] memory quoteAssets_
+    ) Ownable(initialOwner) {
         if (bounds_.length == 0) revert NoModels();
         if (bounds_.length > type(uint8).max) revert TooManyModels(bounds_.length, type(uint8).max);
         if (maxProtocolBps_ > BPS_DENOMINATOR) revert CapAboveDenominator(maxProtocolBps_, BPS_DENOMINATOR);
@@ -127,6 +164,10 @@ contract ModelRegistry is Ownable2Step {
             _validate(bounds_[i]);
             _bounds[i] = bounds_[i];
             emit ModelBoundsUpdated(i, bounds_[i]);
+        }
+
+        for (uint256 i = 0; i < quoteAssets_.length; i++) {
+            _setQuoteAsset(quoteAssets_[i], true);
         }
     }
 
@@ -145,9 +186,9 @@ contract ModelRegistry is Ownable2Step {
     }
 
     /// @notice Whether a creation with these parameters is currently permitted.
-    /// @dev The single call the factory makes. Taking model and stage count rather
-    /// than a market identifier is the whole design: this function cannot be
-    /// pointed at something that already exists.
+    /// @dev The single call the factory makes about a model. Taking model and stage
+    /// count rather than a market identifier is the whole design: this function
+    /// cannot be pointed at something that already exists.
     function creationAllowed(uint8 model, uint8 stageCount, uint16 reserveBps) external view returns (bool) {
         if (creationPaused || model >= modelCount) return false;
 
@@ -157,6 +198,46 @@ contract ModelRegistry is Ownable2Step {
         if (reserveBps < bounds.minReserveBps || reserveBps > bounds.maxReserveBps) return false;
 
         return true;
+    }
+
+    /// @notice Whether a new market may be quoted in this asset.
+    /// @dev Ether — `address(0)` — is always allowed. Everything else has to have
+    /// been admitted, which is what makes "the quote side of a Verdant market was
+    /// reviewed" a claim a contract enforces rather than an interface.
+    ///
+    /// Read once, at creation. The pool key that results is immutable, so
+    /// withdrawing an asset afterwards stops new markets being created against it
+    /// and does nothing at all to the ones that exist.
+    function quoteAllowed(address quoteAsset) external view returns (bool) {
+        return quoteAsset == address(0) || _quoteAdmitted[quoteAsset];
+    }
+
+    /// @notice Every asset currently admitted as a quote side, excluding ether.
+    /// @dev For an interface that would rather display what the chain admits than
+    /// its own copy of the list, and for the parity test that compares the two.
+    function admittedQuoteAssets() external view returns (address[] memory admitted) {
+        uint256 seen = _quoteAssetsSeen.length;
+
+        uint256 count = 0;
+        for (uint256 i = 0; i < seen; i++) {
+            if (_quoteAdmitted[_quoteAssetsSeen[i]]) count++;
+        }
+
+        admitted = new address[](count);
+        uint256 next = 0;
+        for (uint256 i = 0; i < seen; i++) {
+            address asset = _quoteAssetsSeen[i];
+            if (_quoteAdmitted[asset]) {
+                admitted[next] = asset;
+                next++;
+            }
+        }
+    }
+
+    /// @notice How many assets have ever been admitted, whether or not they still
+    /// are.
+    function quoteAssetsSeenCount() external view returns (uint256) {
+        return _quoteAssetsSeen.length;
     }
 
     // --- writes, all owner-only, all future-scoped ---------------------------
@@ -193,10 +274,42 @@ contract ModelRegistry is Ownable2Step {
         protocolBps = newBps;
     }
 
+    /// @notice Admit an asset as a quote side for new markets, or withdraw it.
+    /// @dev Withdrawal is deliberately not retroactive and cannot be made so: this
+    /// contract has no record of which markets exist and no function that takes
+    /// one. An asset that turns out to be a mistake can be stopped from being used
+    /// again, and that is the whole of the power available here.
+    function setQuoteAsset(address quoteAsset, bool admitted) external onlyOwner {
+        _setQuoteAsset(quoteAsset, admitted);
+    }
+
     // --- internal ------------------------------------------------------------
 
     function _requireKnown(uint8 model) private view {
         if (model >= modelCount) revert UnknownModel(model, modelCount);
+    }
+
+    function _setQuoteAsset(address quoteAsset, bool admitted) private {
+        if (quoteAsset == address(0)) revert ZeroQuoteAsset();
+
+        // First time this asset has been named at all: remember it, so the list
+        // can be enumerated later. Admission itself is the mapping, not the array.
+        if (_quoteAssetIndexUnset(quoteAsset)) _quoteAssetsSeen.push(quoteAsset);
+
+        _quoteAdmitted[quoteAsset] = admitted;
+        emit QuoteAssetSet(quoteAsset, admitted);
+    }
+
+    /// @dev Whether this asset has never appeared in `_quoteAssetsSeen`. A linear
+    /// scan, on a list only the owner can grow and only ever a few dozen long, in a
+    /// function only the owner can reach. The alternative — a second mapping of
+    /// index positions — is more state to keep consistent for no reachable gain.
+    function _quoteAssetIndexUnset(address quoteAsset) private view returns (bool) {
+        uint256 seen = _quoteAssetsSeen.length;
+        for (uint256 i = 0; i < seen; i++) {
+            if (_quoteAssetsSeen[i] == quoteAsset) return false;
+        }
+        return true;
     }
 
     /// @dev Stage counts are checked against `ScheduleLib.MAX_STAGES` rather than

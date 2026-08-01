@@ -36,7 +36,8 @@ contract BoundsParityTest is Test {
             PLACEHOLDER_OWNER,
             uint16(vm.parseJsonUint(json, ".splits.maxProtocolBps")),
             uint16(vm.parseJsonUint(json, ".splits.defaultProtocolBps")),
-            _boundsFromConfig()
+            _boundsFromConfig(),
+            _quoteAssetsFromConfig()
         );
     }
 
@@ -64,6 +65,14 @@ contract BoundsParityTest is Test {
         }
     }
 
+    /// @dev The quote assets travel by the same route as the bounds and for the
+    /// same reason: thirty addresses retyped into Solidity is how one of them ends
+    /// up wrong.
+    function _quoteAssetsFromConfig() internal view returns (address[] memory assets) {
+        assets = vm.parseJsonAddressArray(json, ".quoteAssets");
+        assertEq(assets.length, vm.parseJsonUint(json, ".quoteAssetCount"), "quoteAssets length");
+    }
+
     // --- the registry against the config -------------------------------------
 
     function test_registryReturnsExactlyTheConfiguredModelBounds() public view {
@@ -89,6 +98,23 @@ contract BoundsParityTest is Test {
             assertEq(onChain.maxStages, uint8(maxStages[model]), string.concat(names[model], ": maxStages"));
             assertEq(onChain.minReserveBps, uint16(minReserve[model]), string.concat(names[model], ": minReserveBps"));
             assertEq(onChain.maxReserveBps, uint16(maxReserve[model]), string.concat(names[model], ": maxReserveBps"));
+        }
+    }
+
+    function test_registryAdmitsExactlyTheConfiguredQuoteAssets() public view {
+        address[] memory configured = vm.parseJsonAddressArray(json, ".quoteAssets");
+        string[] memory symbols = vm.parseJsonStringArray(json, ".quoteAssetSymbols");
+        address[] memory admitted = registry.admittedQuoteAssets();
+
+        assertEq(admitted.length, configured.length, "admitted count");
+
+        // Positionally, because the registry appends in the order it was seeded and
+        // that order is the register's. A list that had been reordered on the way in
+        // would still admit the same set, and would still be a transport that lost
+        // something.
+        for (uint256 i = 0; i < configured.length; i++) {
+            assertEq(admitted[i], configured[i], string.concat(symbols[i], ": admitted address"));
+            assertTrue(registry.quoteAllowed(configured[i]), string.concat(symbols[i], ": allowed"));
         }
     }
 
@@ -130,6 +156,49 @@ contract BoundsParityTest is Test {
         assertEq(
             int256(VerdantConstants.MAX_USABLE_TICK), vm.parseJsonInt(json, ".liquidity.maxUsableTick"), "maxUsableTick"
         );
+    }
+
+    /// @notice An enabled model must be creatable. Evergreen once was not.
+    ///
+    /// @dev `VerdantFactory` asks `creationAllowed(model, stageCount, 0)` — the
+    /// reserve share is pinned to zero in v1 because `reinforce()`, the only thing
+    /// that would consume one, does not exist yet (ADR-005). A model whose
+    /// `minReserveBps` is above zero therefore cannot be created at all, and one
+    /// that is *enabled* as well as unreachable is the worse of the two: the
+    /// interface reads `enabled` to decide what to offer a creator, so it would
+    /// advertise a model whose every launch reverts.
+    ///
+    /// That is not hypothetical. Evergreen was enabled with a floor of 1 000 and no
+    /// test noticed, because nothing in the suite created a market of that model.
+    /// This asserts the general shape rather than the specific fix, so re-enabling
+    /// it without the reserve mechanism fails here rather than in production.
+    function test_everyEnabledModelCanActuallyBeCreated() public view {
+        uint256 count = vm.parseJsonUint(json, ".modelCount");
+
+        for (uint256 i = 0; i < count; i++) {
+            // The registry refuses a model count above uint8 in its own constructor.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            uint8 model = uint8(i);
+            ModelRegistry.ModelBounds memory bounds = registry.boundsOf(model);
+            if (!bounds.enabled) continue;
+
+            assertEq(
+                uint256(bounds.minReserveBps),
+                0,
+                "an enabled model demands a reserve share v1 cannot supply, so every launch of it would revert"
+            );
+
+            // The more useful half: the registry's own answer, at both ends of the
+            // model's stage range, for the reserve share the factory actually passes.
+            assertTrue(
+                registry.creationAllowed(model, bounds.minStages, 0),
+                "an enabled model is refused at its own minimum stage count"
+            );
+            assertTrue(
+                registry.creationAllowed(model, bounds.maxStages, 0),
+                "an enabled model is refused at its own maximum stage count"
+            );
+        }
     }
 
     function test_theConfigIsInternallyConsistent() public view {

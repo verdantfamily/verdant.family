@@ -26,8 +26,19 @@ contract ModelRegistryTest is Test {
 
     string internal constant ARTIFACT = "out/ModelRegistry.sol/ModelRegistry.json";
 
+    /// @dev Stand-ins for the tokenized equities a market may be quoted in. Plain
+    /// addresses, because this contract admits an address and reads nothing at it.
+    address internal constant EQUITY = address(0xE0017);
+    address internal constant OTHER_EQUITY = address(0xE0018);
+
     function setUp() public {
-        registry = new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, _defaultBounds());
+        registry = new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, _defaultBounds(), _noQuoteAssets());
+    }
+
+    /// @dev Ether needs no admission, so a registry seeded with nothing can still
+    /// create the markets every other case here is about.
+    function _noQuoteAssets() internal pure returns (address[] memory) {
+        return new address[](0);
     }
 
     /// @dev The three models, as the parameter register defines them. Kept local
@@ -70,7 +81,7 @@ contract ModelRegistryTest is Test {
         // whole state without an archive node, which means the seed values have to
         // be emitted rather than only written.
         vm.recordLogs();
-        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, _defaultBounds());
+        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, _defaultBounds(), _noQuoteAssets());
 
         // Read once: getRecordedLogs drains the buffer, so calling it inside the
         // loop condition would return an empty array on the second iteration.
@@ -87,7 +98,9 @@ contract ModelRegistryTest is Test {
 
     function test_refusesToDeployWithNoModels() public {
         vm.expectRevert(ModelRegistry.NoModels.selector);
-        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, new ModelRegistry.ModelBounds[](0));
+        new ModelRegistry(
+            OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, new ModelRegistry.ModelBounds[](0), _noQuoteAssets()
+        );
     }
 
     function test_refusesMoreModelsThanTheDiscriminantCanAddress() public {
@@ -103,19 +116,19 @@ contract ModelRegistryTest is Test {
         }
 
         vm.expectRevert(abi.encodeWithSelector(ModelRegistry.TooManyModels.selector, 256, 255));
-        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, tooMany);
+        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, tooMany, _noQuoteAssets());
     }
 
     function test_refusesAnInitialShareAboveTheCap() public {
         vm.expectRevert(
             abi.encodeWithSelector(ModelRegistry.ProtocolBpsAboveCap.selector, MAX_PROTOCOL_BPS + 1, MAX_PROTOCOL_BPS)
         );
-        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, MAX_PROTOCOL_BPS + 1, _defaultBounds());
+        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, MAX_PROTOCOL_BPS + 1, _defaultBounds(), _noQuoteAssets());
     }
 
     function test_refusesACapAboveTheDenominator() public {
         vm.expectRevert(abi.encodeWithSelector(ModelRegistry.CapAboveDenominator.selector, 10_001, 10_000));
-        new ModelRegistry(OWNER, 10_001, 0, _defaultBounds());
+        new ModelRegistry(OWNER, 10_001, 0, _defaultBounds(), _noQuoteAssets());
     }
 
     function test_refusesStageBoundsTheEncodingCannotHold() public {
@@ -130,7 +143,7 @@ contract ModelRegistryTest is Test {
                 ModelRegistry.StageBoundsInvalid.selector, 1, uint8(ScheduleLib.MAX_STAGES) + 1, ScheduleLib.MAX_STAGES
             )
         );
-        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, bad);
+        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, bad, _noQuoteAssets());
     }
 
     function test_refusesInvertedStageBounds() public {
@@ -139,7 +152,7 @@ contract ModelRegistryTest is Test {
         bad[0].maxStages = 3;
 
         vm.expectRevert(abi.encodeWithSelector(ModelRegistry.StageBoundsInvalid.selector, 5, 3, ScheduleLib.MAX_STAGES));
-        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, bad);
+        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, bad, _noQuoteAssets());
     }
 
     function test_refusesAZeroMinimumStageCount() public {
@@ -149,7 +162,7 @@ contract ModelRegistryTest is Test {
         bad[0].minStages = 0;
 
         vm.expectRevert(abi.encodeWithSelector(ModelRegistry.StageBoundsInvalid.selector, 0, 1, ScheduleLib.MAX_STAGES));
-        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, bad);
+        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, bad, _noQuoteAssets());
     }
 
     function test_refusesInvertedReserveBounds() public {
@@ -158,7 +171,7 @@ contract ModelRegistryTest is Test {
         bad[2].maxReserveBps = 1_000;
 
         vm.expectRevert(abi.encodeWithSelector(ModelRegistry.ReserveBoundsInvalid.selector, 9_000, 1_000));
-        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, bad);
+        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, bad, _noQuoteAssets());
     }
 
     function test_refusesAReserveShareAboveTheDenominator() public {
@@ -166,7 +179,7 @@ contract ModelRegistryTest is Test {
         bad[2].maxReserveBps = 10_001;
 
         vm.expectRevert(abi.encodeWithSelector(ModelRegistry.ReserveBoundsInvalid.selector, 1_000, 10_001));
-        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, bad);
+        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, bad, _noQuoteAssets());
     }
 
     // --- reads ---------------------------------------------------------------
@@ -250,6 +263,9 @@ contract ModelRegistryTest is Test {
 
         vm.expectRevert(expected);
         registry.setProtocolBps(0);
+
+        vm.expectRevert(expected);
+        registry.setQuoteAsset(EQUITY, true);
 
         vm.stopPrank();
     }
@@ -395,6 +411,121 @@ contract ModelRegistryTest is Test {
         registry.acceptOwnership();
     }
 
+    // --- quote assets --------------------------------------------------------
+
+    /// @dev Ether is not a key in the admitted set and cannot be made one, because
+    /// a registry that could withdraw it would be able to stop the protocol's own
+    /// base pair being launched against — which is the creation pause wearing a
+    /// disguise.
+    function test_etherIsAlwaysAnAllowedQuoteAsset() public view {
+        assertTrue(registry.quoteAllowed(address(0)), "ether needs no admission");
+    }
+
+    function test_anAssetIsRefusedUntilTheOwnerAdmitsIt() public {
+        assertFalse(registry.quoteAllowed(EQUITY), "nothing is admitted by default");
+
+        vm.expectEmit(true, true, true, true, address(registry));
+        emit ModelRegistry.QuoteAssetSet(EQUITY, true);
+        vm.prank(OWNER);
+        registry.setQuoteAsset(EQUITY, true);
+
+        assertTrue(registry.quoteAllowed(EQUITY), "admitted");
+    }
+
+    /// @dev Withdrawal clears the flag and leaves the asset in the seen list, so
+    /// "this was once admitted" stays answerable after the answer to "is it now"
+    /// has changed.
+    function test_withdrawingAnAssetClearsItWithoutForgettingIt() public {
+        vm.startPrank(OWNER);
+        registry.setQuoteAsset(EQUITY, true);
+
+        vm.expectEmit(true, true, true, true, address(registry));
+        emit ModelRegistry.QuoteAssetSet(EQUITY, false);
+        registry.setQuoteAsset(EQUITY, false);
+        vm.stopPrank();
+
+        assertFalse(registry.quoteAllowed(EQUITY), "withdrawn for new markets");
+        assertEq(registry.quoteAssetsSeenCount(), 1, "and still on the record");
+        assertEq(registry.admittedQuoteAssets().length, 0, "but no longer listed as admitted");
+    }
+
+    function test_admittedQuoteAssetsListsExactlyWhatIsAdmittedNow() public {
+        vm.startPrank(OWNER);
+        registry.setQuoteAsset(EQUITY, true);
+        registry.setQuoteAsset(OTHER_EQUITY, true);
+        vm.stopPrank();
+
+        address[] memory both = registry.admittedQuoteAssets();
+        assertEq(both.length, 2, "two admitted");
+        assertEq(both[0], EQUITY, "in the order they were admitted");
+        assertEq(both[1], OTHER_EQUITY, "second");
+
+        vm.prank(OWNER);
+        registry.setQuoteAsset(EQUITY, false);
+
+        address[] memory remaining = registry.admittedQuoteAssets();
+        assertEq(remaining.length, 1, "one withdrawn");
+        assertEq(remaining[0], OTHER_EQUITY, "and the list closes over the gap");
+        assertEq(registry.quoteAssetsSeenCount(), 2, "the seen list is append-only");
+    }
+
+    /// @dev Re-admitting an asset already on the seen list must not append it a
+    /// second time, or `admittedQuoteAssets` would report it twice.
+    function test_readmittingAnAssetDoesNotDuplicateIt() public {
+        vm.startPrank(OWNER);
+        registry.setQuoteAsset(EQUITY, true);
+        registry.setQuoteAsset(EQUITY, false);
+        registry.setQuoteAsset(EQUITY, true);
+        vm.stopPrank();
+
+        assertEq(registry.quoteAssetsSeenCount(), 1, "one asset, however many times it was named");
+        assertEq(registry.admittedQuoteAssets().length, 1, "listed once");
+    }
+
+    /// @dev Zero already means ether. Accepting it here would create a second way
+    /// to say the same thing, and one of them would eventually be read as "ether is
+    /// not allowed".
+    function test_theZeroAddressIsNotAnAssetThatCanBeAdmitted() public {
+        vm.expectRevert(ModelRegistry.ZeroQuoteAsset.selector);
+        vm.prank(OWNER);
+        registry.setQuoteAsset(address(0), true);
+
+        vm.expectRevert(ModelRegistry.ZeroQuoteAsset.selector);
+        vm.prank(OWNER);
+        registry.setQuoteAsset(address(0), false);
+    }
+
+    function test_onlyTheOwnerCanAdmitAQuoteAsset() public {
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, STRANGER));
+        vm.prank(STRANGER);
+        registry.setQuoteAsset(EQUITY, true);
+
+        assertFalse(registry.quoteAllowed(EQUITY), "and nothing happened");
+    }
+
+    /// @dev The path a deployment takes: the reviewed list is seeded from the
+    /// parameter register at construction rather than admitted one call at a time
+    /// afterwards, so a freshly deployed registry is already usable.
+    function test_quoteAssetsCanBeSeededAtDeployment() public {
+        address[] memory seed = new address[](2);
+        seed[0] = EQUITY;
+        seed[1] = OTHER_EQUITY;
+
+        ModelRegistry seeded = new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, _defaultBounds(), seed);
+
+        assertTrue(seeded.quoteAllowed(EQUITY), "first");
+        assertTrue(seeded.quoteAllowed(OTHER_EQUITY), "second");
+        assertEq(seeded.admittedQuoteAssets().length, 2, "both");
+        assertEq(seeded.quoteAssetsSeenCount(), 2, "and both recorded");
+    }
+
+    function test_seedingRefusesTheZeroAddressToo() public {
+        address[] memory seed = new address[](1);
+
+        vm.expectRevert(ModelRegistry.ZeroQuoteAsset.selector);
+        new ModelRegistry(OWNER, MAX_PROTOCOL_BPS, INITIAL_PROTOCOL_BPS, _defaultBounds(), seed);
+    }
+
     // --- the constraint that matters: no reach into a live market ------------
 
     function test_abiCannotBeHandedAPoolIdOrAMarket() public view {
@@ -428,6 +559,8 @@ contract ModelRegistryTest is Test {
         assertTrue(Abi.declaresFunction(abiSection, "setModelBounds"));
         assertTrue(Abi.declaresFunction(abiSection, "setCreationPaused"));
         assertTrue(Abi.declaresFunction(abiSection, "protocolBps"));
+        assertTrue(Abi.declaresFunction(abiSection, "quoteAllowed"));
+        assertTrue(Abi.declaresFunction(abiSection, "setQuoteAsset"));
     }
 
     function test_settersTouchNoStoredMarketDataBecauseThereIsNone() public {

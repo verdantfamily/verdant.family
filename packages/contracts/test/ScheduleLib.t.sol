@@ -18,6 +18,14 @@ contract ScheduleLibTest is Test {
 
     uint40 internal constant INIT_TIME = 1_800_000_000;
 
+    /// @dev The library's one storage-writing function cannot be reached from a
+    /// pure context, so it gets a holder that keeps a schedule where a hook would.
+    InitTimeHolder internal holder;
+
+    function setUp() public {
+        holder = new InitTimeHolder();
+    }
+
     // --- helpers ------------------------------------------------------------
 
     function _stages(uint32[] memory offsets, uint24[] memory fees)
@@ -704,5 +712,67 @@ contract ScheduleLibTest is Test {
         // not a zero fee, which would be a free swap.
         assertEq(packed.stageAt(uint256(INIT_TIME)), 0, "must fall back to stage 0");
         assertEq(packed.feeAt(uint256(INIT_TIME)), 42_000, "must return stage 0's fee");
+    }
+
+    // --- recording the initialisation time ----------------------------------
+    // initTime is the origin every offset is measured from. It is written after
+    // packing, because a schedule is configured before its pool exists, so these
+    // assert the one property that makes that safe: it can be written once.
+
+    function test_theInitTimeCanBeRecordedOnce() public {
+        holder.store(0, 0, _one(0, 10_000));
+        assertEq(ScheduleLib.initTimeOf(holder.read()), 0, "unset to begin with");
+
+        holder.record(INIT_TIME);
+        assertEq(ScheduleLib.initTimeOf(holder.read()), INIT_TIME, "recorded");
+
+        // And the stages are untouched by the header write.
+        (,, ScheduleLib.Stage[] memory stages) = ScheduleLib.unpack(holder.read());
+        assertEq(stages.length, 1, "stage count survived");
+        assertEq(stages[0].feePpm, 10_000, "fee survived");
+    }
+
+    function test_theInitTimeCannotBeRecordedTwice() public {
+        holder.store(0, 0, _one(0, 10_000));
+        holder.record(INIT_TIME);
+
+        vm.expectRevert(abi.encodeWithSelector(ScheduleLib.InitTimeAlreadyRecorded.selector, INIT_TIME));
+        holder.record(INIT_TIME + 1);
+    }
+
+    function test_recordingZeroIsRefused() public {
+        // Zero is how "not yet recorded" is represented, so accepting it would
+        // leave the field writable again — and a market whose origin can move is
+        // a market whose whole schedule can be rewritten.
+        holder.store(0, 0, _one(0, 10_000));
+
+        vm.expectRevert(ScheduleLib.ZeroInitTime.selector);
+        holder.record(0);
+    }
+
+    function testFuzz_anyNonZeroInitTimeIsRecordedExactly(uint40 initTime) public {
+        vm.assume(initTime != 0);
+        holder.store(0, 0, _one(0, 10_000));
+
+        holder.record(initTime);
+        assertEq(ScheduleLib.initTimeOf(holder.read()), initTime, "recorded exactly");
+    }
+}
+
+/// @notice Holds a packed schedule in storage, as VerdantHook does, so that the
+/// storage-writing part of the library can be exercised at all.
+contract InitTimeHolder {
+    ScheduleLib.Packed internal schedule;
+
+    function store(uint8 model, uint40 initTime, ScheduleLib.Stage[] calldata stages) external {
+        schedule = ScheduleLib.pack(model, initTime, stages);
+    }
+
+    function record(uint40 initTime) external {
+        ScheduleLib.recordInitTime(schedule, initTime);
+    }
+
+    function read() external view returns (ScheduleLib.Packed memory) {
+        return schedule;
     }
 }

@@ -54,11 +54,44 @@ forge test --gas-report
 pnpm snapshot            # rewrite the committed gas baseline
 pnpm snapshot:check      # CI gate: fails on regression
 FOUNDRY_PROFILE=quick forge test   # 256 fuzz runs instead of 10 000
+bash ../../scripts/fork-test.sh    # the fork suite, as CI runs it; needs network
+                                   # (sets the fork profile itself; runs from anywhere)
 forge coverage
+
+# deployment; simulate first, and read the address book it prints
+POOL_MANAGER=0x... POSITION_MANAGER=0x... TREASURY=0x... \
+  forge script script/Deploy.s.sol --rpc-url robinhood --sender 0xYOU
+POOL_MANAGER=0x... POSITION_MANAGER=0x... FACTORY=0x... \
+  forge script script/MineHook.s.sol   # reproduce the hook's salt, deploy nothing
+
+# the whole market feed, end to end, with no network: starts a chain, deploys a
+# Uniswap and a Verdant onto it, launches and trades three markets across a fee
+# transition, indexes it, and asks the contracts to confirm what the indexer says.
+# The three scripts below marked "rig only" exist for this and are never run on 4663.
+bash ../../scripts/indexer-proof.sh
+
+# and afterwards, before publishing the addresses: reads the deployment back and
+# checks every wiring from both ends. Broadcasts nothing, needs no key.
+FACTORY=0x... ORIGIN=0x... EXPECTED_TREASURY=0x... EXPECTED_REGISTRY_OWNER=0x... \
+  forge script script/Verify.s.sol --rpc-url robinhood
 ```
 
-The snapshot scripts wrap `forge snapshot --match-contract ScheduleLibGasTest`
-rather than calling it bare. A whole-project snapshot would include fuzz averages
+The full sequence, with the reason for each step and the two addresses that cannot
+be changed afterwards, is in [docs/deployment.md](../../docs/deployment.md).
+
+Run the fork suite through `scripts/fork-test.sh` rather than calling
+`FOUNDRY_PROFILE=fork forge test` directly. Three reasons, all learned the hard way:
+`forge test` exits **0** when it matches no tests, so a run that executed nothing
+looks exactly like a run that passed; the default profile excludes `test/fork`, so an
+ordinary `forge test` can leave a cache state in which the fork profile finds no tests
+at all; and forgetting the profile runs the *default* suite, whose 352 passing tests
+say nothing whatsoever about the deployed chain. The script fails on the first,
+rebuilds once to clear the second, and sets the profile itself for the third.
+If you do hit "No tests found in project" while invoking forge yourself,
+`forge build --force` is the fix.
+
+The snapshot scripts wrap `forge snapshot --match-contract "GasTest"` — the
+schedule read and the hook's `beforeSwap` — rather than calling it bare. A whole-project snapshot would include fuzz averages
 (which move with the fuzzer's seed) and the vector suites (whose cost is
 dominated by JSON parsing), so it would fail for reasons unrelated to what a user
 of the protocol pays.
@@ -89,12 +122,42 @@ for a dozen reasons and still look plausible.
 
 ## Layout
 
+Read in this order to understand a launch: `VerdantFactory`, then `VerdantHook`,
+then `PositionLocker` and `FeeSplitter`.
+
 ```
 src/
-  libraries/ScheduleLib.sol     P1 — the fee-schedule primitive
+  VerdantFactory.sol            a market and its first buy, atomically. Opens the pool
+  VerdantHook.sol               the scheduled fee, and the liquidity guard
+  VerdantDeployer.sol           CREATE2s a market's four contracts for the factory
+  VerdantToken.sol              fixed supply, no mint, no owner
+  PositionLocker.sol            permanent custody of the position NFT
+  FeeSplitter.sol               immutable shares, pull-based claims
+  TokenVesting.sol              the creator's allocation, released linearly
+  ModelRegistry.sol             bounds for FUTURE markets. Owner-controlled
+  MarketRegistry.sol            append-only record, factory-written
+  FactoryOrigin.sol             publishes the factory's address before it exists
+  libraries/ScheduleLib.sol     the fee schedule, in two storage words
+  libraries/LaunchBounds.sol    the bounds no registry governs
+  libraries/VerdantConstants.sol  tick grid and pool-key constants
+script/
+  Deploy.s.sol                  the whole system, in the only order that works
+  Verify.s.sol                  reads a deployment back and checks it from both ends
+  MineHook.s.sol                reproduces a hook salt for review. Deploys nothing
+  LocalUniswap.s.sol            a Uniswap v4 for a machine with no chain. Rig only
+  Multicall3Lite.sol            aggregate3 and nothing else, because anvil has none
+  Seed.s.sol                    markets, trades and claims, in phases. Rig only
 test/
-  Remappings.t.sol              P0 — proves imports resolve, pins upstream constants
-  ScheduleLib.vectors.t.sol     P1 — differential harness against the SDK vectors
-  ScheduleLib.t.sol             P1 — validation, fuzz, invariants
-  ScheduleLibGas.t.sol          P1 — gas baseline at 1/3/8 stages
+  VerdantLaunch.t.sol           a launch, a trade, a fee claim, end to end
+  Deploy.t.sol                  runs Deploy.s.sol, then launches on its output
+  Verify.t.sol                  every check in Verify.s.sol, shown failing
+  ScriptEnv.t.sol               the only suite that may touch the environment
+  fork/Launch.fork.t.sol        the launch path against the v4 deployed on 4663
+  VerdantHook.permissions.t.sol real mining, and the address's permission bits
+  ScheduleLib.vectors.t.sol     differential harness against the SDK vectors
+  *Gas.t.sol                    the committed cost baselines
+  utils/Abi.sol                 asserts absent functions against the built ABI
+  utils/DeployHarness.sol       the deploy script, from the environment or injected
+  utils/VerifyHarness.sol       the verifier, with its inputs injected
+  utils/HookMiner.sol           CREATE2 salt search; absent at the pinned commit
 ```

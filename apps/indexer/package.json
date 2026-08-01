@@ -7,12 +7,16 @@
     "dev": "ponder dev",
     "start": "ponder start",
     "codegen": "ponder codegen",
-    "build": "echo \"@verdant/indexer is activated in P8; nothing to build at P0\" && exit 0",
+    "build": "echo \"@verdant/indexer has no build step; ponder-env.d.ts is committed\" && exit 0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "echo \"@verdant/indexer tests land with the schema in P8\" && exit 0"
+    "test": "echo \"the indexer is tested end to end by 'pnpm proof:feed', which needs anvil\" && exit 0",
+    "proof": "bash ../../scripts/indexer-proof.sh"
   },
   "dependencies": {
     "@verdant/config": "workspace:*",
+    "@verdant/sdk": "workspace:*",
+    "hono": "^4.12.33",
+    "ponder": "^0.17.4",
     "viem": "^2.40.0"
   },
   "devDependencies": {

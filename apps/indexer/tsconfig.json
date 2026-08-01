@@ -2,7 +2,22 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node"],
+
+    // The base config emits declarations because most of this workspace is
+    // libraries. This is an application: nothing imports its types, and asking for
+    // declarations here makes TypeScript demand that every inferred type be
+    // *nameable* from outside. Ponder's tables infer types out of drizzle's
+    // internals, which pnpm stores under a content-addressed path, so that check
+    // fails with TS2742 on every table — a portability complaint about types that
+    // are never exported.
+    "declaration": false,
+    "declarationMap": false
   },
-  "include": ["src/**/*.ts", "*.ts"]
+  // `scripts/` is included, and was not until the SDK's `poolIdFor` gained an
+  // argument. `assert-feed.ts` went on calling it with the old two, node ran it
+  // unchecked because it strips types rather than checking them, and `pnpm typecheck`
+  // said nothing — the one file whose job is to catch disagreements was the one file
+  // outside the gate.
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "*.ts"]
 }

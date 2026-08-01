@@ -18,19 +18,20 @@ sent. Re-run the chain probes with `pnpm chain:probe`.
 | V2 | CREATE2 deployer on both chains | **RESOLVED — yes** | Hook mining; `VerdantCreate2Factory` dropped |
 | V3 | Canonical mainnet WETH | **RESOLVED** | Only if D4 reverses |
 | V4 | Native-ETH v4 pools first-class | **RESOLVED — dominant** | D4 confirmed |
-| V5 | Third-party routers vs hooked dynamic-fee pools | **OPEN** | `VerdantRouter` primary vs fallback |
+| V5 | Third-party routers vs hooked dynamic-fee pools | **OPEN — test written, awaiting its first run** | Whether `VerdantRouter` needs to exist at all |
 | V6 | ArbOS version and `block.timestamp` drift bound | **OPEN (partial)** | 300 s minimum stage gap margin |
 | V7 | `block.number` is the L1 block number | **RESOLVED — confirmed** | Ban on `block.number` |
 | V8 | Blockscout programmatic verification | **OPEN (encouraging)** | Automated verify in deploy script |
-| V9 | Atomic creation gas ceiling | **OPEN** | One transaction vs two |
-| V10 | Ponder on 4663 | **OPEN** | Ponder vs Envio |
-| V11 | `sender` in `beforeAddLiquidity` | **RESOLVED — PositionManager; mechanism specified** | Liquidity-restriction mechanism |
-| V12 | `V4Quoter` reflects the fee override | **OPEN (near-certain)** | Trade panel trust across a transition |
+| V9 | Atomic creation gas ceiling | **RESOLVED — 3.2M of a 32M per-tx limit** | One transaction, confirmed |
+| V10 | Ponder on 4663 | **OPEN — RPC log cap now known** | Ponder vs Envio; range splitting |
+| V11 | `sender` in `beforeAddLiquidity` | **RESOLVED — PositionManager; implemented, ADR-006** | Liquidity-restriction mechanism |
+| V12 | `V4Quoter` reflects the fee override | **RESOLVED — yes, to the wei; `slot0.lpFee` proven stale** | Trade panel reads the quoter or the hook, never slot0 |
 | V13 | Zero-liquidity decrease as fee collection | **RESOLVED — yes** | `collect()` implementation |
 | V14 | Unbalanced `increaseLiquidity` with remainder | **RESOLVED — NO, refuted** | `reinforce()` redesign required |
-| V15 | `BaseHook` suitability | **RESOLVED — absent** | Hook implements `IHooks` directly |
+| V15 | `BaseHook` suitability | **CLOSED — absent at the pin; ADR-004** | `IHooks` directly; `initialize` carries no `hookData` |
 | V16 | Sequencer mempool and reorg depth | **OPEN** | Indexer finality depth; MEV disclosure |
 | — | tickSpacing convention | **CARRIED** | `PoolKey` constant, frozen at audit |
+| — | Deployment ordering / factory address | **RESOLVED — anchored, ADR-007** | `FactoryOrigin`; the deploy script is testable |
 | — | Prior art on 4663 | **CARRIED** | Positioning; §0.3 and §2.2 |
 
 ---
@@ -139,10 +140,27 @@ whether the Uniswap *interface* renders a Verdant pool — is cosmetic and folde
 300 000-block window on this chain, so routers here demonstrably handle both. That is
 circumstantial, not a test of Verdant's own pool.
 
-**Method to close.** On a 4663 fork, create a Verdant market and execute a swap through
-Universal Router `0x8876789976decbfcbbbe364623c63652db8c0904`; assert the fee charged equals
-`hook.feeAt(block.timestamp)`. Then repeat through `VerdantRouter` and assert identical
-output. Phase P6.
+**Method, now implemented.** `test_aThirdPartyRouterChargesTheScheduledFee` in
+`test/fork/Launch.fork.t.sol` launches a market on a 4663 fork and swaps through the
+Universal Router at `0x8876789976dEcBfCbBbe364623C63652db8C0904`, asserting the tokens
+received equal what the quoter predicts.
+
+Two details make it the right test rather than a plausible one. It runs **after a stage
+transition**, because that is the case a router can get wrong while looking correct: the
+pool's stored fee stays at stage 0 forever (V12), so a router consulting `slot0` instead
+of executing the hook would charge 1% where the schedule says 0.3%, and a test at the
+opening stage would pass either way. And it compares against the quoter, which is only
+legitimate because V12 established the quoter agrees with an executed swap to the wei.
+
+The comparison against a `VerdantRouter` that the original method called for is dropped,
+because the point of the question is whether that contract needs to exist. If the
+Universal Router is correct here, every wallet and aggregator already routing through it
+works with no further work, and building a router would add audit surface to no end. If
+it is wrong, the router becomes necessary and its absence is the finding.
+
+The test is written, compiles, and lints clean; it has not been run against the chain
+yet, so this stays open until it has. Phase P6 in the original plan; brought forward
+because it is the only open question that could still require new contract code.
 
 ## V6 — ArbOS version and `block.timestamp` drift bound
 
@@ -214,17 +232,65 @@ multi-contract input. `forge verify-contract --verifier blockscout` has not itse
 
 ## V9 — Does atomic create-token + init-pool + mint-position fit under the gas ceiling?
 
-**OPEN.** The header's `gasLimit` of `0x4000000000000` (1.125 × 10¹⁵) is Arbitrum's nominal
-per-block figure and is not the binding constraint; the real limits are the per-transaction
-cap and the L1 data-posting component, which `eth_estimateGas` folds into the returned units
-on Nitro. `baseFeePerGas` at probe time was ≈0.0202 gwei.
+**RESOLVED: yes, with a factor of eight to spare in the worst case the bounds allow.**
+The header's `gasLimit` of `0x4000000000000` (1.125 × 10¹⁵) is Arbitrum's nominal
+per-block figure and is not the binding constraint. The binding one is the per-transaction cap, which `ArbGasInfo` at
+`0x…006C` reports directly:
 
-**Method to close.** Measure `createMarket` on a 4663 fork in the worst case: 8 stages,
-seeded mode, vesting configured. Phase P5.
+```
+eth_call 0x…006C getGasAccountingParams() ->
+  speedLimitPerSecond  7 000 000
+  gasPoolMax          32 000 000
+  maxTxGasLimit       32 000 000
+```
+
+Identical on both chains, and now printed by `pnpm chain:probe`. Measured against the
+PoolManager and PositionManager actually deployed on 4663 rather than this repo's build
+of them, a launch costs **3 275 941 gas** — about 10% of what one transaction may spend.
+At the ≈0.02 gwei base fee observed at probe time that is on the order of 0.00007 ETH
+plus the L1 data component, which `eth_estimateGas` folds into the returned units on
+Nitro.
+
+Reading the header's figure as the limit would have made this question look answered
+without answering it, which is why the probe now prints both and labels which is which.
+
+The worst case the bounds permit is measured too, because a ceiling is only cleared by
+the most expensive thing that can reach it:
+`test_theMostExpensiveLaunchTheBoundsAllowStillFits` launches with eight stages (the
+packing maximum, which writes ScheduleLib's second word), the maximum creator allocation
+with a real cliff and duration so a `TokenVesting` is deployed and funded, and name,
+symbol and metadata URI all at their maximum lengths with the metadata left mutable. Each
+of those is read from a bound rather than chosen, so the number it logs is the ceiling of
+what any creator can spend: **4 104 701 gas**, or 12.8% of the cap.
+
+That is the figure to reason with, not the 3.27M of a typical launch. The gap between
+them — 829k, a quarter again — is one extra schedule word and a `TokenVesting`
+deployment, and it is the whole cost of every bound being at its maximum
+simultaneously. The cap is clear by a factor of nearly eight, so no combination of
+parameters a creator can choose comes close to it, and no future addition to the launch
+path threatens it without roughly septupling the cost of creation.
+
+Both figures come from `test/fork/Launch.fork.t.sol`, which asserts them against the 32M
+cap, so they stop being local estimates and stay measured on every run of the fork
+profile.
 
 ## V10 — Ponder's sync performance and reorg behaviour on 4663
 
-**OPEN.** Untouched.
+**OPEN, but the RPC's shape is now known.** The public endpoint caps `eth_getLogs` at
+**10 000 matched logs per query**, and refuses wide spans by timing out against the node
+behind it:
+
+```
+1 000 blocks,  PoolManager only  -> 972 logs, ok
+10 000 blocks, PoolManager only  -> "logs matched by query exceeds limit of 10000"
+77 000 blocks, PoolManager only  -> upstream i/o timeout
+```
+
+Two things follow. The cap is on *matched* logs rather than block span, so an indexer
+filtered to Verdant's own addresses — which will emit a tiny fraction of what the whole
+PoolManager does — can use far wider ranges than these numbers suggest. And range
+splitting on that error is mandatory regardless of filter, which Ponder already does by
+halving. So the public RPC looks sufficient, and a paid provider is not a prerequisite.
 
 **Method to close.** Run Ponder against 4663 for 24 h on an existing high-traffic contract;
 record cold-sync time and observed reorg depth. Phase P8.
@@ -233,6 +299,10 @@ record cold-sync time and observed reorg depth. Phase P8.
 
 **RESOLVED: `sender` is the `PositionManager`. Authenticate with a pinned `sender` plus
 `IMsgSender.msgSender()`. `hookData` survives the path intact but is not a credential.**
+
+Implemented and recorded in
+[`docs/decisions/006-msgsender-authenticates-liquidity.md`](decisions/006-msgsender-authenticates-liquidity.md);
+the three checks and what each one rules out are stated there.
 
 All line numbers below are from the vendored, pinned copies — v4-periphery `3c31961fb9`,
 v4-core `59d3ecf53afa` — which are the deployed bytecode on 4663. Every quotation was read
@@ -444,13 +514,52 @@ either way. Unforgeable transport of forgeable content.
 
 ## V12 — Does `V4Quoter` reflect the `beforeSwap` fee override?
 
-**OPEN, near-certain.** The quoter simulates a real swap, and deployed `Hooks.beforeSwap`
+**RESOLVED — the quoter is honest, and `slot0` is not.** Confirmed against the quoter
+deployed at `0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94` on 4663 by
+`test_theQuoterSeesTheHooksFeeAndAgreesWithTheSwap`: a quote taken and then the same
+swap executed, with nothing touching the pool in between, agree **exactly**. Not
+approximately — to the wei. A quoter reading the pool's stored fee would have returned a
+plausible number and disagreed by the ratio of 10 000 to 3 000.
+
+The original reasoning, which the test now replaces as evidence: the quoter simulates a
+real swap, and deployed `Hooks.beforeSwap`
 parses the override for any dynamic-fee pool (line 263, below). Still requires the fork test
 the document asks for.
 
 **Method to close.** Fork test: quote, `vm.warp` across a stage transition, quote again,
 assert both match `hook.feeAt`. Phase P6.
 
+
+### What `slot0.lpFee` says, and why nothing may trust it
+
+Established by the fork suite, on its first run, by getting it wrong.
+
+`VerdantHook.beforeSwap` returns `feePpm | LPFeeLibrary.OVERRIDE_FEE_FLAG`. An override
+applies to the swap it is returned from and **does not write the pool's stored fee**. So
+`slot0.lpFee` holds whatever `afterInitialize` set at the open — stage 0's fee — for the
+rest of the market's life, however many transitions the schedule passes through.
+
+The fork test asserted the transition by reading `slot0` and failed with
+`10000 != 3000`, having concluded the schedule had not moved. What had actually happened
+is that the deployed PoolManager charged 3 000 and recorded nothing. The corrected test
+measures the fees two swaps really earn on either side of the boundary and compares
+their ratio, which is also the only form of the assertion that shows the *deployed*
+PoolManager honours the override at all.
+
+Consequences for anything that displays a fee:
+
+- **`StateView` and any `slot0` read give the opening fee, forever.** The obvious way to
+  build a trade panel is wrong, and it is wrong quietly — it shows a plausible number.
+- **`V4Quoter` is the honest source, confirmed on chain.** It simulates the swap, so
+  `beforeSwap` runs and the override applies. `test_theQuoterSeesTheHooksFeeAndAgreesWithTheSwap`
+  takes a quote and then executes that same swap with nothing touching the pool in
+  between, and the two agree to the wei.
+- **`VerdantHook.feeAt(poolId, timestamp)` is the authority**, and it takes a timestamp,
+  so a preview across a boundary can quote both sides honestly.
+
+`test/fork/Launch.fork.t.sol` pins the stale value with an explicit assertion, so that a
+future reader who finds `slot0.lpFee` and assumes it is live has a test telling them
+otherwise.
 ## V13 — Does a zero-liquidity `decreaseLiquidity` collect fees, and at what cost?
 
 **RESOLVED: yes, stated explicitly in the deployed source.**
@@ -540,6 +649,25 @@ path containing "Hook" is `src/interfaces/external/IHookStats.sol`. There is no
   substitutes.
 - P0 must pin `v4-core` and `v4-periphery` to commits matching the deployed bytecode rather
   than tracking `main`.
+
+**Closed in P3.1, and confirmed against the pin rather than against `main`.**
+`find packages/contracts/vendor/v4-periphery -name BaseHook.sol` returns nothing at
+`3c31961fb9` either, so the file is absent from both the deployed commit and current `main`.
+The decision and the reasoning that would have applied had it existed are recorded in
+[ADR-004](decisions/004-ihooks-not-basehook.md). `HookMiner` is likewise absent and is
+reimplemented in `packages/contracts/test/utils/HookMiner.sol` — 40 lines against the CREATE2
+address formula, with tests that a mined address carries the target bits and that mining is
+deterministic.
+
+One thing this probe did **not** anticipate, found while implementing: at the pinned commit
+neither `IPoolManager.initialize(PoolKey, uint160)` nor
+`IHooks.beforeInitialize(address, PoolKey, uint160)` carries `hookData`. v4 removed it from
+the initialise path. A hook therefore cannot receive configuration during initialisation, so
+Verdant's factory writes the schedule in a separate `configure` call and `beforeInitialize`
+refuses to let a pool exist unless a configuration is already present for its PoolId. Since
+`PoolId` is a hash of the whole `PoolKey`, validating the key at configure time and requiring
+a configuration at initialise time means the pool that comes into existence is necessarily
+the pool whose key was checked.
 
 ## V16 — Sequencer mempool visibility and practical reorg depth
 
@@ -642,6 +770,53 @@ None of it is present at the pinned commit, and the deployed 4663 bundle is the 
 — the adapter admin can call `unwindPosition` on an LP's position, which is exactly the lever
 Verdant's disclosure position (§6.2, D5) states does not exist. Its LP-identity technique is
 borrowed and recorded in V11 above; nothing else is taken.
+
+### `IMsgSender` is in the deployed bytecode, not just the pinned source — CONFIRMED
+
+V11 established the mechanism by reading the pinned v4-periphery source, and the pin
+itself was established by diffing Blockscout's verified bundle. That is one inference
+away from the thing Verdant depends on. Asked of the deployed contract directly:
+
+```
+eth_call 0x58daec31…04fa7  msgSender()   -> 0x00…00   (present; transient slot empty)
+eth_call 0x58daec31…04fa7  poolManager() -> 0x8366a39c…40951
+```
+
+A dispatcher without that selector reverts, so a successful call **is** the presence
+of the function. The zero address is the expected answer outside a transaction. The
+second call closes the pair: the deployed PositionManager names the deployed
+PoolManager Verdant pins, rather than the two merely both having code.
+
+Both are now in `pnpm chain:probe`, and a missing `msgSender()` is a hard probe
+failure rather than an observation — without it ADR-006's liquidity guard has no
+mechanism and Verdant cannot be deployed against that PositionManager at all.
+
+### Deployment ordering, and why the factory's address is not predicted — RESOLVED, see ADR-007
+
+Three contracts (`MarketRegistry`, `VerdantDeployer`, `VerdantHook`) take the factory's
+address in a constructor, so the factory is deployed last and its address must be known
+first. The question was how to know it.
+
+Two facts settle it:
+
+1. **A contract's nonce starts at 1 and only moves when it creates** (EIP-161). An
+   account's nonce moves on every transaction. So the offset that predicts a `CREATE`
+   address from a test harness is legitimately different from the one that predicts it
+   from an operator's account, and a nonce-offset prediction is a step that can only be
+   exercised in production.
+2. **The canonical CREATE2 deployer `0x4e59b448…4956C` is present in Foundry's test EVM
+   at 69 bytes** — the same length probed on both Robinhood chains (V2). Verified by
+   reading `.code.length` inside `forge test`.
+
+Together they make a faithful test of the deployment possible: anchor the factory's
+address to a fresh contract's first creation (`FactoryOrigin`), and reach the hook through
+the same CREATE2 deployer by explicit call in both environments. `test/Deploy.t.sol` then
+runs the real script and launches a real market on its output.
+
+Note the second fact is the one that decides `_create2` over `new Hook{salt: ...}`: under
+`--broadcast` Foundry routes a salted `new` through the deterministic deployer, and under
+`forge test` it does not, so the mined salt would be right on chain and wrong in CI. The
+explicit call is the same in both.
 
 ---
 

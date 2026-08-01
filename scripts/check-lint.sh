@@ -13,6 +13,8 @@
 # written yet.
 #
 # vendor/ is excluded by passing our own paths rather than by ignoring theirs.
+# script/ is included: a deployment script is the one file whose truncation bug
+# nobody catches in review, because it is read once and run once.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,7 +23,7 @@ cd "$ROOT/packages/contracts"
 log="$(mktemp)"
 trap 'rm -f "$log"' EXIT
 
-forge lint src test 2>&1 | tee "$log"
+forge lint src test script 2>&1 | tee "$log"
 
 if grep -q '^warning\[' "$log"; then
   count="$(grep -c '^warning\[' "$log")"
@@ -29,4 +31,4 @@ if grep -q '^warning\[' "$log"; then
   exit 1
 fi
 
-echo "forge lint: no findings in src/ or test/"
+echo "forge lint: no findings in src/, test/ or script/"

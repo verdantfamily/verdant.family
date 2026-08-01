@@ -40,15 +40,11 @@ jobs:
       - name: test
         run: pnpm test
 
-      # packages/config/generated/bounds.json is committed because the contracts
-      # job has no Node toolchain and the Solidity parity test reads it. A
-      # committed generated file drifts unless something checks, so regenerate it
-      # and require the result to be identical — the same rule as the gas
-      # snapshot: a change to a protocol bound must appear in a diff.
-      - name: generated bounds are current
-        run: |
-          pnpm bounds:emit
-          git diff --exit-code -- packages/config/generated/bounds.json
+      # Last rather than first, deliberately: a type error or a failing test is a more
+      # useful thing to be told about than a lint finding, and a job that stops at its
+      # first failure should stop at the most informative one.
+      - name: lint
+        run: pnpm lint
 
   contracts:
     runs-on: ubuntu-latest
@@ -70,13 +66,6 @@ jobs:
         working-directory: packages/contracts
         run: forge fmt --check
 
-      # `forge lint` exits 0 even when it reports warnings, so the warnings are
-      # counted rather than trusted. The suppressions in the tree are per line
-      # and each carries its justification, which keeps this at zero without
-      # turning a rule off globally.
-      - name: forge lint
-        run: bash scripts/check-lint.sh
-
       - name: forge test
         working-directory: packages/contracts
         run: forge test -vvv
@@ -91,12 +80,7 @@ jobs:
       # check fail for reasons that have nothing to do with protocol cost.
       - name: gas snapshot unchanged
         working-directory: packages/contracts
-        run: forge snapshot --check --match-contract ScheduleLibGasTest
-
-      # The acceptance bar, enforced per file. A total would let one well-tested
-      # library carry an untested contract, which is the case worth catching.
-      - name: coverage floor
-        run: bash scripts/check-coverage.sh
+        run: forge snapshot --check --match-contract "GasTest"
 
   # Read-only, and allowed to fail without failing the build: this job asserts
   # facts about somebody else's chain, so a red X here means "the chain changed

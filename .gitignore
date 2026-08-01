@@ -5,6 +5,10 @@ out/
 .turbo/
 *.tsbuildinfo
 
+# Vercel's link to a project, and the build it uploads. Both are produced by the
+# CLI and neither is source.
+.vercel/
+
 # Foundry
 packages/contracts/out/
 packages/contracts/cache/
@@ -14,10 +18,29 @@ packages/contracts/broadcast/*/dry-run/
 packages/contracts/vendor/
 packages/contracts/foundry.lock
 
+# Brand originals: camera-resolution photographs and full-canvas logo exports, tens of
+# megabytes each and never served. `pnpm --filter @verdant/landing brand` turns them into
+# the files in apps/landing/public/brand/, which are committed.
+apps/landing/brand-source/
+
 # env
 .env
 .env.*
 !.env.example
+
+# Ponder's local store and generated env types: a PGlite database and a declaration
+# file, both rebuilt from ponder.config.ts on every dev run.
+apps/indexer/.ponder/
+apps/indexer/ponder-env.d.ts
+
+# A second Next build directory, so a preview build and the dev server can run at the
+# same time without fighting over .next/. See NEXT_DIST_DIR in apps/web/next.config.ts.
+apps/web/.next-preview/
+
+# The rig's logs and the notes taken while reading other people's contracts. Neither is
+# source and the first is rewritten on every run.
+.proof/
+.research/
 
 # os
 .DS_Store

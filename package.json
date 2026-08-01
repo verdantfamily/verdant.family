@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Verdant — a market-creation layer on Robinhood Chain. Programmable Uniswap v4 markets with verified models and bounded parameters.",
+  "description": "Verdant \u2014 a market-creation layer on Robinhood Chain. Programmable Uniswap v4 markets with verified models and bounded parameters.",
   "packageManager": "pnpm@10.30.0",
   "engines": {
     "node": ">=22"
@@ -20,7 +20,12 @@
     "contracts:test": "pnpm --filter @verdant/contracts test",
     "contracts:snapshot": "pnpm --filter @verdant/contracts snapshot",
     "vectors:generate": "pnpm --filter @verdant/sdk vectors:generate",
-    "bounds:emit": "pnpm --filter @verdant/config bounds:emit"
+    "bounds:emit": "pnpm --filter @verdant/config bounds:emit",
+    "abis:emit": "pnpm --filter @verdant/sdk abis:emit",
+    "proof": "bash scripts/indexer-proof.sh",
+    "proof:feed": "bash scripts/indexer-proof.sh",
+    "proof:fork": "bash scripts/fork-test.sh",
+    "dev:stack": "VERDANT_KEEP=1 bash scripts/indexer-proof.sh"
   },
   "devDependencies": {
     "turbo": "^2.5.8",

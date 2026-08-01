@@ -10,9 +10,11 @@
 # the case worth catching: one well-tested library carrying an untested contract.
 #
 # Excludes mirror packages/contracts/package.json's `coverage` script:
-#   vendor/, test/  — not our code, and tests are not the subject
-#   ScheduleLibGasTest — coverage builds without the optimiser, which inflates
-#                        gas past the budgets that suite asserts
+#   vendor/, test/, script/ — not our code, tests are not the subject, and a
+#                             deployment script is run by a human with its own
+#                             pre-broadcast assertions rather than covered
+#   *GasTest — coverage builds without the optimiser, which inflates gas past the
+#              budgets those suites assert
 set -euo pipefail
 
 FLOOR="${COVERAGE_FLOOR:-95}"
@@ -22,8 +24,8 @@ cd "$ROOT/packages/contracts"
 
 report="$(
   forge coverage \
-    --no-match-coverage "(vendor|test)" \
-    --no-match-contract ScheduleLibGasTest \
+    --no-match-coverage "(vendor|test|script)" \
+    --no-match-contract "GasTest" \
     --report summary
 )"
 

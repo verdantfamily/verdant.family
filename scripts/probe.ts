@@ -116,6 +116,31 @@ const ARB_SYS = "0x0000000000000000000000000000000000000064";
 const SELECTOR_ARB_OS_VERSION = "0x051038f2"; // arbOSVersion()
 const SELECTOR_ARB_BLOCK_NUMBER = "0xa3b1b31d"; // arbBlockNumber()
 
+/** ArbGasInfo, for the per-transaction gas ceiling an atomic launch must fit in. */
+const ARB_GAS_INFO = "0x000000000000000000000000000000000000006C";
+const SELECTOR_GAS_ACCOUNTING_PARAMS = "0x612af178"; // getGasAccountingParams()
+
+/**
+ * The PositionManager function Verdant's liquidity guard is built on.
+ *
+ * `VerdantHook.beforeAddLiquidity` authenticates the initiator by asking the
+ * PositionManager who called it (ADR-006), because v4 reports the PoolManager's
+ * caller rather than the transaction's originator. `IMsgSender` is present in the
+ * pinned v4-periphery source, but the pin was established by diffing verified
+ * source, and this asks the deployed bytecode instead: a contract whose dispatcher
+ * has no such selector reverts, so a successful call is the presence of the
+ * function. Outside a transaction it answers with the zero address, which is the
+ * transient slot being empty and is the expected result.
+ *
+ * If this ever stops answering, Verdant cannot be deployed against that
+ * PositionManager at all, so the probe treats it as a hard failure rather than an
+ * observation.
+ */
+const SELECTOR_MSG_SENDER = "0xd737d0c7"; // msgSender()
+const SELECTOR_POOL_MANAGER = "0xdc4c90d3"; // poolManager()
+const POSITION_MANAGER = "0x58daec3116aae6d93017baaea7749052e8a04fa7";
+const POOL_MANAGER = "0x8366a39cc670b4001a1121b8f6a443a643e40951";
+
 let rpcId = 0;
 
 async function rpc<T>(url: string, method: string, params: unknown[]): Promise<T> {
@@ -164,6 +189,11 @@ interface ChainReport {
   readonly gasLimit: bigint;
   readonly arbBlockNumber: bigint | null;
   readonly arbOsVersion: bigint | null;
+  readonly maxTxGasLimit: bigint | null;
+  /** `null` when the call reverted, i.e. the deployed contract has no such function. */
+  readonly msgSenderAnswer: string | null;
+  /** What the PositionManager says its PoolManager is. */
+  readonly poolManagerOnPosm: string | null;
   readonly codeSizes: ReadonlyMap<string, number>;
 }
 
@@ -201,6 +231,27 @@ async function probeChain(target: ChainTarget): Promise<ChainReport> {
     arbCall(SELECTOR_ARB_OS_VERSION),
   ]);
 
+  const rawCall = async (to: string, data: string): Promise<string | null> => {
+    try {
+      return await rpc<string>(target.rpc, "eth_call", [{ to, data }, "latest"]);
+    } catch {
+      return null;
+    }
+  };
+
+  // getGasAccountingParams() returns (speedLimitPerSecond, gasPoolMax,
+  // maxTxGasLimit); the third word is the one an atomic launch has to fit in.
+  const gasParams = await rawCall(ARB_GAS_INFO, SELECTOR_GAS_ACCOUNTING_PARAMS);
+  const maxTxGasLimit =
+    gasParams === null || gasParams.length < 2 + 64 * 3
+      ? null
+      : BigInt(`0x${gasParams.slice(2 + 64 * 2, 2 + 64 * 3)}`);
+
+  const [msgSenderAnswer, poolManagerOnPosm] = await Promise.all([
+    rawCall(POSITION_MANAGER, SELECTOR_MSG_SENDER),
+    rawCall(POSITION_MANAGER, SELECTOR_POOL_MANAGER),
+  ]);
+
   const codeSizes = new Map<string, number>();
   for (const entry of ADDRESSES) {
     const code = await rpc<string>(target.rpc, "eth_getCode", [
@@ -223,6 +274,9 @@ async function probeChain(target: ChainTarget): Promise<ChainReport> {
     gasLimit: BigInt(header.gasLimit),
     arbBlockNumber,
     arbOsVersion,
+    maxTxGasLimit,
+    msgSenderAnswer,
+    poolManagerOnPosm,
     codeSizes,
   };
 }
@@ -274,6 +328,40 @@ function reportChain(report: ChainReport): string[] {
   console.log(
     `  header gasLimit     ${report.gasLimit.toLocaleString("en-US")}  (nominal on Orbit; not the tx limit)`,
   );
+  if (report.maxTxGasLimit !== null) {
+    // The real ceiling. An atomic launch measures around 3.2M, so this is the
+    // number that decides whether creation can be one transaction (V9).
+    console.log(
+      `  maxTxGasLimit       ${report.maxTxGasLimit.toLocaleString("en-US")}  <- the per-tx ceiling a launch must fit`,
+    );
+  }
+
+  // ADR-006: the liquidity guard asks the deployed PositionManager who called it.
+  if (report.msgSenderAnswer === null) {
+    console.log(`  msgSender()         ABSENT  <- Verdant cannot deploy here`);
+    problems.push(
+      `${t.label}: PositionManager ${POSITION_MANAGER} does not implement msgSender(); ADR-006's liquidity guard has no mechanism`,
+    );
+  } else {
+    console.log(
+      `  msgSender()         answers (${report.msgSenderAnswer.slice(0, 10)}…)  <- IMsgSender is deployed`,
+    );
+  }
+
+  // And that the two halves of the pinned bundle refer to each other, rather than
+  // being two addresses that each happen to have code.
+  if (report.poolManagerOnPosm !== null) {
+    const named = `0x${report.poolManagerOnPosm.slice(-40)}`.toLowerCase();
+    const matches = named === POOL_MANAGER.toLowerCase();
+    console.log(
+      `  posm.poolManager()  ${named}${matches ? "" : "  MISMATCH"}`,
+    );
+    if (!matches) {
+      problems.push(
+        `${t.label}: PositionManager names ${named} as its PoolManager, not ${POOL_MANAGER}`,
+      );
+    }
+  }
 
   console.log("");
   console.log(`  ${pad("contract", 22)}${pad("address", 44)}${padStart("bytes", 8)}`);

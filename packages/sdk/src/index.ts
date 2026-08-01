@@ -7,11 +7,34 @@
  * against. A number shown to a user and a number a contract computes must not be
  * able to disagree.
  *
- * P1 adds the schedule primitive here. Nothing else is exported until the
- * contract it mirrors exists.
+ * Nothing is exported until the contract it mirrors exists.
  */
 
 export const SDK_PACKAGE_VERSION = "0.0.0";
+
+/**
+ * The contract ABIs, generated from the Foundry artefacts rather than written.
+ *
+ * A namespace because `verdantFactoryAbi` and its siblings are names a consumer
+ * should have to ask for: `abi.verdantFactoryAbi` reads as what it is, and a bare
+ * export list of eleven ABIs at the top level of the SDK would crowd out the
+ * functions people actually call.
+ */
+export * as abi from "./abi/index.js";
+
+/**
+ * Which pool a market trades in, derived locally from its token address.
+ *
+ * A twin of the factory's `poolKeyFor` and of v4's `PoolIdLibrary`, held to both
+ * by `src/models/vectors/pool.json`.
+ */
+export * as pool from "./markets/pool.js";
+
+/**
+ * Reading a market: the registry's record, the hook's fee ladder, the token's own
+ * disclosures, and the derived values an interface shows.
+ */
+export * as markets from "./markets/read.js";
 
 /**
  * The fee schedule, mirroring `ScheduleLib.sol` function for function. The two
@@ -23,3 +46,22 @@ export const SDK_PACKAGE_VERSION = "0.0.0";
  * will later hold several models.
  */
 export * as schedule from "./models/schedule.js";
+
+/**
+ * Building a launch: the `create` calldata, and choosing the salt that gives the
+ * token an address the market can be built on.
+ *
+ * The first of the two write paths, and the reason the SDK is no longer read-only.
+ * Nothing here signs or sends anything — every function returns bytes or an
+ * address, so the decision to spend gas stays with the caller.
+ */
+export * as launch from "./launch/index.js";
+
+/**
+ * Quoting and building a swap, through the Universal Router already deployed on
+ * 4663.
+ *
+ * Includes the Permit2 approvals an ERC-20 input needs, which are the part of
+ * trading a stock-paired market that an ether-quoted market never had.
+ */
+export * as trade from "./trade/index.js";

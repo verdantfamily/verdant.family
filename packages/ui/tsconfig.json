@@ -1,9 +1,16 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "noEmit": true,
+    // Compiled to dist like @verdant/config and @verdant/sdk, rather than shipping raw
+    // TypeScript. The scaffold did the latter, and it does not survive contact with a
+    // bundler: the sources use `.js` specifiers as ESM requires, and webpack will not
+    // map those back to `.ts` for a package it is transpiling from source.
+    "outDir": "dist",
+    "rootDir": "src",
     "jsx": "react-jsx",
-    "lib": ["ES2022", "DOM"]
+    "lib": ["ES2022", "DOM"],
+    "types": ["vitest/globals"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }

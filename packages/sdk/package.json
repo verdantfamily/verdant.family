@@ -10,7 +10,8 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./vectors/schedule.json": "./src/models/vectors/schedule.json"
+    "./vectors/schedule.json": "./src/models/vectors/schedule.json",
+    "./vectors/pool.json": "./src/models/vectors/pool.json"
   },
   "files": ["dist", "src/models/vectors"],
   "scripts": {
@@ -18,7 +19,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "vectors:generate": "node scripts/generate-schedule-vectors.ts"
+    "vectors:generate": "node scripts/generate-schedule-vectors.ts",
+    "vectors:generate:pool": "node scripts/generate-pool-vectors.ts",
+    "vectors:generate:swap": "pnpm build && node scripts/generate-swap-vectors.ts",
+    "abis:emit": "node scripts/emit-abis.ts"
   },
   "dependencies": {
     "@verdant/config": "workspace:*",

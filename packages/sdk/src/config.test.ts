@@ -7,6 +7,7 @@ import {
   DYNAMIC_FEE_FLAG,
   EXTERNAL_ADDRESSES,
   MARKET_MODELS,
+  MAX_PROTOCOL_BPS,
   MAX_TICK_ABSOLUTE,
   MAX_USABLE_TICK,
   MIN_USABLE_TICK,
@@ -65,13 +66,18 @@ describe("parameter register", () => {
     expect(BOUNDS.schedule.startOffset.max).toBe(63_072_000);
   });
 
-  it("creator share is 0..8000 bps", () => {
-    expect(BOUNDS.splits.creatorBps.min).toBe(0);
-    expect(BOUNDS.splits.creatorBps.max).toBe(8_000);
+  it("has no creator share to configure, because it is derived", () => {
+    // ADR-005. The creator share is total - protocol - reserve, so there is no
+    // input to bound and no third number that can disagree with the other two.
+    expect("creatorBps" in BOUNDS.splits).toBe(false);
   });
 
-  it("protocol share defaults to 1000 bps", () => {
+  it("caps the protocol share at 2000 bps and defaults it to 1000", () => {
+    expect(BOUNDS.splits.protocolBps.min).toBe(0);
+    expect(BOUNDS.splits.protocolBps.max).toBe(2_000);
     expect(BOUNDS.splits.protocolBps.default).toBe(1_000);
+    expect(MAX_PROTOCOL_BPS).toBe(2_000);
+    expect(BOUNDS.splits.protocolBps.max).toBe(MAX_PROTOCOL_BPS);
   });
 
   it("evergreen reserve share is 1000..8000 bps", () => {
@@ -83,20 +89,48 @@ describe("parameter register", () => {
     expect(BOUNDS.splits.total).toBe(10_000);
   });
 
-  it("a maximal creator plus protocol plus reserve split can still sum to the total", () => {
-    // If the individual maxima summed to less than the total, some split would
-    // be unreachable; if the individual minima summed to more, some would be
-    // impossible. Both are configuration bugs rather than validation bugs.
-    const maxSum =
-      BOUNDS.splits.creatorBps.max +
-      BOUNDS.splits.protocolBps.max +
-      BOUNDS.splits.reserveBps.max;
-    const minSum =
-      BOUNDS.splits.creatorBps.min +
-      BOUNDS.splits.protocolBps.min +
-      BOUNDS.splits.reserveBps.min;
-    expect(maxSum).toBeGreaterThanOrEqual(BOUNDS.splits.total);
-    expect(minSum).toBeLessThanOrEqual(BOUNDS.splits.total);
+  it("leaves the creator a positive share at every reachable protocol and reserve setting", () => {
+    // The previous version of this test asked whether the three maxima could
+    // reach the total and whether the three minima could stay under it. Both
+    // held, and the register was still broken: with the reserve at 0 the caps
+    // admitted exactly one split, and the stated defaults came to 8 000. The
+    // question worth asking is the one the derivation raises — whether the
+    // derived share is always well defined, i.e. never negative.
+    //
+    // It is exactly 0 at Evergreen's extreme (2 000 protocol + 8 000 reserve),
+    // which is a legitimate market: everything the creator would have taken is
+    // reinforced into the locked position instead. One basis point more of
+    // either cap would make the derivation underflow, so this is the assertion
+    // that keeps the two caps honest against the total.
+    for (const model of MARKET_MODELS) {
+      const reserve = MODEL_BOUNDS[model].reserveBps.max;
+      const creator =
+        BOUNDS.splits.total - BOUNDS.splits.protocolBps.max - reserve;
+      expect(creator).toBeGreaterThanOrEqual(0);
+      expect(creator + BOUNDS.splits.protocolBps.max + reserve).toBe(
+        BOUNDS.splits.total,
+      );
+    }
+  });
+
+  it("no model offers the creator a share to set, because none exists", () => {
+    // `unlockedParameters` is rendered as the create flow's controls, so a
+    // parameter listed here is a promise that the creator chooses it. The
+    // creator share is derived (ADR-005), which makes listing it a false
+    // disclosure rather than a stale string.
+    for (const model of MARKET_MODELS) {
+      expect(MODELS[model].unlockedParameters).not.toContain("creatorBps");
+    }
+  });
+
+  it("only evergreen unlocks the reserve share", () => {
+    // The reserve is the one split input a creator has, and only under the one
+    // model whose mechanism spends it.
+    for (const model of MARKET_MODELS) {
+      const unlocked = MODELS[model].unlockedParameters.includes("reserveBps");
+      expect(unlocked).toBe(model === "evergreen");
+      expect(unlocked).toBe(MODEL_BOUNDS[model].reserveBps.max > 0);
+    }
   });
 
   it("supply is 1e6..1e15 whole tokens", () => {

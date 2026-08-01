@@ -1,0 +1,185 @@
+import {
+  LAUNCH_MODELS,
+  LAUNCH_MODEL_ORDER,
+  LAUNCH_MODEL_STATUS_LABELS,
+  type LaunchModelDefinition,
+} from "@verdant/config";
+import type { Metadata } from "next";
+import Link from "next/link";
+
+import { Badge, PageHeading } from "../../components/primitives";
+
+export const metadata: Metadata = {
+  title: "Choose a launch model",
+  description:
+    "Pair a fixed-supply token against ether or a tokenized equity, with the fee written into the pool at creation.",
+};
+
+/**
+ * The model chooser.
+ *
+ * A creator's first decision is what their market is quoted in, because it is the one
+ * decision that cannot be revisited afterwards — it is part of the pool's identity, and a
+ * pool cannot be repriced against a different asset later. So it is a page of its own,
+ * before any form, rather than a dropdown inside one.
+ *
+ * Models that are not ready are shown rather than hidden, with the work that remains
+ * spelled out. A roadmap that is legible is worth more than a chooser that looks finished.
+ */
+export default function LaunchPage() {
+  return (
+    <div className="pb-10">
+      <section className="aurora px-6 pb-14 pt-20">
+        <PageHeading
+          eyebrow={<Badge tone="accent">Step 1 of 2</Badge>}
+          title="Choose a launch model"
+          lede="A model decides what your token is priced against, how the fee is charged and who can ever touch the launch position. Everything it fixes is fixed at creation."
+        />
+      </section>
+
+      <div className="mx-auto grid max-w-6xl gap-6 px-6 lg:grid-cols-3">
+        {LAUNCH_MODEL_ORDER.map((id, index) => (
+          <ModelCard key={id} model={LAUNCH_MODELS[id]} index={index} />
+        ))}
+      </div>
+
+      <div className="mx-auto mt-14 max-w-3xl px-6">
+        <div className="hairline" />
+        <h2 className="mt-10 text-center text-[1.35rem] font-semibold tracking-tight text-ink">
+          What every model does, regardless of which you pick
+        </h2>
+        <dl className="mt-8 grid gap-x-10 gap-y-6 sm:grid-cols-2">
+          {[
+            [
+              "Supply is minted once",
+              "There is no mint function, no owner and no upgrade path. The number that exists at launch is the number that will ever exist.",
+            ],
+            [
+              "The fee cannot be edited",
+              "It is written into the hook at creation. Not by the creator, not by Verdant, not by a governance vote.",
+            ],
+            [
+              "The launch position is locked",
+              "It is transferred to a locker with no operator and no early-release path. Fees can be collected from it; liquidity cannot be pulled out of it.",
+            ],
+            [
+              "Fee recipients are fixed",
+              "Where fee revenue goes is decided at creation and cannot be redirected afterwards by anyone.",
+            ],
+          ].map(([title, body]) => (
+            <div key={title}>
+              <dt className="text-[0.9rem] font-semibold text-ink">{title}</dt>
+              <dd className="mt-1.5 text-[0.82rem] leading-relaxed text-ink-muted">{body}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Art per model, drawn with gradients so there is no image to load or licence.
+ *
+ * Deep rather than pastel. The three hue relationships are the ones they always were —
+ * green through cyan for Classic, blue through violet for Stock-Paired, green through moss
+ * for Evergreen — but each is dropped to roughly a third of its old lightness. A pastel
+ * band across the head of a card is a bright object on a dark page, and three of them side
+ * by side stop being illustration and start being the only thing on the screen.
+ */
+const ART: Record<string, string> = {
+  classic:
+    "linear-gradient(150deg, oklch(0.4 0.09 158), oklch(0.32 0.08 196) 55%, oklch(0.36 0.06 96))",
+  "stock-paired":
+    "linear-gradient(150deg, oklch(0.36 0.09 254), oklch(0.32 0.09 300) 55%, oklch(0.38 0.06 20))",
+  evergreen:
+    "linear-gradient(150deg, oklch(0.38 0.07 140), oklch(0.31 0.08 165) 55%, oklch(0.36 0.05 110))",
+};
+
+function ModelCard({
+  model,
+  index,
+}: {
+  readonly model: LaunchModelDefinition;
+  readonly index: number;
+}) {
+  const openable = model.status !== "design";
+
+  return (
+    <article className="group flex flex-col overflow-hidden rounded-panel border border-border bg-surface shadow-card backdrop-blur-xl transition duration-200 hover:-translate-y-0.5 hover:shadow-lift">
+      <div
+        className="relative h-40 border-b border-border"
+        style={{ backgroundImage: ART[model.id] }}
+      >
+        <div className="absolute inset-0 grid place-items-center">
+          <span className="numeric text-[2.6rem] font-semibold text-ink/70">
+            0{index + 1}
+          </span>
+        </div>
+        <div className="absolute left-4 top-4">
+          <Badge tone={model.status === "ready" ? "ink" : "neutral"}>
+            {LAUNCH_MODEL_STATUS_LABELS[model.status]}
+          </Badge>
+        </div>
+      </div>
+
+      <div className="flex flex-1 flex-col p-6">
+        <h2 className="text-[1.2rem] font-semibold tracking-tight text-ink">{model.label}</h2>
+        <p className="mt-2 text-[0.85rem] leading-relaxed text-ink-muted">{model.summary}</p>
+
+        <dl className="mt-5 space-y-2 border-t border-border pt-4 text-[0.78rem]">
+          <div className="flex justify-between gap-3">
+            <dt className="text-ink-muted">Quoted in</dt>
+            <dd className="text-right text-ink">{model.pair}</dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-ink-muted">You earn in</dt>
+            <dd className="text-right text-ink">{model.rewardCurrency}</dd>
+          </div>
+        </dl>
+
+        <ul className="mt-4 space-y-1.5">
+          {model.highlights.map((highlight) => (
+            <li key={highlight} className="flex gap-2 text-[0.8rem] leading-relaxed text-ink-muted">
+              <span aria-hidden="true" className="mt-1.5 size-1 shrink-0 rounded-full bg-accent" />
+              {highlight}
+            </li>
+          ))}
+        </ul>
+
+        {model.remaining === undefined ? null : (
+          <div className="mt-4 rounded-xl border border-border bg-surface-sunken px-4 py-3">
+            <p className="text-[0.72rem] font-semibold uppercase tracking-wider text-ink-muted">
+              Still to build
+            </p>
+            <ul className="mt-1.5 space-y-1">
+              {model.remaining.map((item) => (
+                <li key={item} className="text-[0.75rem] leading-relaxed text-ink-muted">
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="mt-6 flex-1" />
+
+        {openable ? (
+          <Link
+            href={`/launch/${model.id}`}
+            className="inline-flex h-11 items-center justify-center rounded-full bg-ink px-6 text-[0.9rem] font-medium text-ink-inverse transition hover:bg-ink/90 active:scale-[0.985]"
+          >
+            {model.status === "ready" ? "Launch" : "Open the form"}
+          </Link>
+        ) : (
+          <Link
+            href="/docs/models"
+            className="inline-flex h-11 items-center justify-center rounded-full border border-border bg-surface px-6 text-[0.9rem] font-medium text-ink-muted transition hover:border-border-strong hover:bg-surface-raised hover:text-ink"
+          >
+            Read the design
+          </Link>
+        )}
+      </div>
+    </article>
+  );
+}

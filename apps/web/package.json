@@ -8,22 +8,30 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "echo \"eslint config lands with the first real surfaces in P7\" && exit 0",
-    "test": "echo \"@verdant/web tests land with the create flow in P7\" && exit 0"
+    "lint": "eslint src scripts",
+    "test": "vitest run"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.101.4",
     "@verdant/config": "workspace:*",
     "@verdant/sdk": "workspace:*",
     "@verdant/ui": "workspace:*",
     "next": "^15.5.4",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "viem": "^2.40.0"
+    "viem": "^2.40.0",
+    "wagmi": "^3.7.5"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.6",
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^22.18.0",
     "@types/react": "^19.1.9",
     "@types/react-dom": "^19.1.7",
-    "typescript": "^5.9.3"
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^15.5.22",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
   }
 }

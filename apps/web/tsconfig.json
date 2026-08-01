@@ -5,6 +5,10 @@
     "jsx": "preserve",
     "noEmit": true,
     "allowJs": true,
+    // `scripts/` runs under node's type stripping, which does not rewrite import
+    // specifiers — so a script importing `../src/lib/launch.ts` has to name the file
+    // that exists. Legal only because this project never emits.
+    "allowImportingTsExtensions": true,
     "incremental": true,
     "module": "ESNext",
     "moduleResolution": "bundler",

@@ -46,7 +46,16 @@ buildCommand = "pnpm --filter \"@verdant/indexer^...\" build"
 # gone before this runs. It is chained ahead of `start` rather than run by hand so that the
 # cleanup cannot be the step somebody forgets — the failure it prevents arrives weeks later
 # and looks like a database problem rather than a deployment one.
-startCommand = "pnpm --filter @verdant/indexer exec ponder db prune && pnpm --filter @verdant/indexer exec ponder start --schema $RAILWAY_DEPLOYMENT_ID --hostname 0.0.0.0"
+#
+# `||` and not `&&`, which is the whole point of this line. Chained with `&&`, a prune that
+# could not run stopped `start` from running at all, and the way prune fails is by being
+# unable to reach the database — which is exactly the state a full disk produces. So the
+# cleanup meant to prevent an outage became the thing that guaranteed one: Postgres refused
+# connections, prune exited non-zero, the feed never started, and every request answered 502.
+#
+# Housekeeping must never be load-bearing for serving traffic. An indexer that starts with
+# stale schemas still answers questions; one that refuses to start answers nothing.
+startCommand = "pnpm --filter @verdant/indexer exec ponder db prune || echo 'prune failed, starting anyway'; pnpm --filter @verdant/indexer exec ponder start --schema $RAILWAY_DEPLOYMENT_ID --hostname 0.0.0.0"
 
 # `/health` answers as soon as the server is listening; `/ready` waits for the backfill.
 # The first deploy has a third of a million blocks to read, and a health check that waited

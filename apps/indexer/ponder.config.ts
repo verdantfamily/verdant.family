@@ -64,11 +64,27 @@ export default createConfig({
     // pool it has never heard of. On a chain this size that is cheap; if it stops
     // being cheap, the answer is a filtered configuration per pool id rather than a
     // guess about which pools matter.
+    //
+    // It stopped being cheap, and this filter is the first half of the answer.
+    //
+    // Ponder caches every log it syncs, so an unfiltered subscription to the
+    // singleton PoolManager was paying storage for `ModifyLiquidity` on every pool
+    // on the chain — an event with no handler here, whose rows were written, cached
+    // and never read. Naming the two events that do have handlers stops them being
+    // fetched at all, rather than fetching and discarding them.
+    //
+    // The second half — filtering `Swap` down to Verdant's own pools — is not
+    // expressible here. `Swap` carries its pool as an indexed argument, but the set
+    // of Verdant pool ids is only known as markets are created, and Ponder's
+    // `factory()` resolves child *addresses* for the `address` field; it cannot
+    // supply a growing list of topic values. So swaps still arrive for every pool
+    // and `PoolManager:Swap` still drops the ones it does not recognise.
     PoolManager: {
       abi: abi.poolManagerAbi,
       chain: "robinhood",
       address: POOL_MANAGER,
       startBlock: START_BLOCK,
+      filter: [{ event: "Initialize", args: {} }, { event: "Swap", args: {} }],
     },
 
     VerdantToken: {

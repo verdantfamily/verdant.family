@@ -75,6 +75,41 @@ const INK = 16;
 /** Empty columns this wide separate the mark from the wordmark rather than two letters. */
 const LOCKUP_GAP = 24;
 const OG = { width: 1200, height: 630 } as const;
+
+/**
+ * The art at the head of each launch model's card, and where it goes.
+ *
+ * Only the launchpad serves these, so unlike everything else here they are written to one
+ * destination. The names are the model ids in `packages/config`, which is what lets the card
+ * find its own picture without a second mapping to keep in step.
+ */
+const MODELS = ["classic", "stock-paired", "evergreen"] as const;
+
+/** What the file is called in `brand-source/`, where "stock" is the natural word for it. */
+const MODEL_SOURCES: Record<(typeof MODELS)[number], string> = {
+  classic: "classic.jpg",
+  "stock-paired": "stock.jpg",
+  evergreen: "evergreen.jpg",
+};
+
+/**
+ * 5:2, which is the shape of a 160px band across a card at every breakpoint it has.
+ *
+ * 1200 wide covers the card at its widest — a single column on a phone, about 600 CSS
+ * pixels — on a 2x display. The three-column desktop case is a third of that, so desktop is
+ * over-served rather than under, which is the correct direction for a file this size.
+ */
+const MODEL_ART = { width: 1200, height: 480 } as const;
+
+/**
+ * Enough to keep white type legible over a photograph, and no more.
+ *
+ * The card carries a badge and a large numeral over this, and photographs from a camera have
+ * bright regions wherever they like. Darkening the file rather than stacking a heavy scrim in
+ * CSS keeps it to one layer, and the parts of a photograph that a scrim would flatten are
+ * exactly the parts JPEG spends its bits on.
+ */
+const MODEL_BRIGHTNESS = 0.82;
 /** Kept in step with `--void` in globals.css; the run prints the value to check it against. */
 const VOID = "#362627";
 
@@ -273,11 +308,48 @@ async function openGraph(backgroundPath: string, lockup: Buffer): Promise<void> 
   console.log(`og.jpg      ${OG.width}x${OG.height}`);
 }
 
+/**
+ * A model's card art.
+ *
+ * Cropped from the centre rather than fitted, because a 5500x4000 photograph reduced to fit
+ * a 5:2 band is a photograph with two thirds of it thrown away and the subject the size of a
+ * thumbnail. Cover-cropping keeps the middle at a usable scale, which is what a band across
+ * the top of a card is for.
+ */
+async function modelArt(): Promise<void> {
+  const out = join(APP, "..", "web", "public", "models");
+  mkdirSync(out, { recursive: true });
+
+  for (const id of MODELS) {
+    const path = source(MODEL_SOURCES[id]);
+    if (path === null) {
+      console.log(`${id.padEnd(13)} skipped: no ${MODEL_SOURCES[id]} in brand-source/`);
+      continue;
+    }
+
+    const { width, height } = await sharp(path).metadata();
+    const art = await sharp(path)
+      .rotate()
+      .resize({ ...MODEL_ART, fit: "cover", position: "centre" })
+      .modulate({ brightness: MODEL_BRIGHTNESS })
+      .jpeg({ quality: 78, progressive: true, mozjpeg: true })
+      .toBuffer();
+
+    writeFileSync(join(out, `${id}.jpg`), art);
+    console.log(
+      `${id.padEnd(13)} ${width}x${height} cropped to ${MODEL_ART.width}x${MODEL_ART.height}, ` +
+        `${Math.round(art.byteLength / 1024)} KB`,
+    );
+  }
+}
+
 async function main(): Promise<void> {
   for (const out of OUTS) mkdirSync(out, { recursive: true });
 
   const backgroundPath = source("bg.jpg") ?? source("bg.jpeg") ?? source("background.jpg");
   const logoPath = source("logo.png");
+
+  await modelArt();
 
   if (backgroundPath === null && logoPath === null) {
     console.error(

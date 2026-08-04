@@ -13,11 +13,15 @@ import { describe, expect, it } from "vitest";
 import { shortenAddress, shortenHash } from "./address.js";
 import { formatAmount, formatBps, formatCompact, formatEther, formatFeeRate } from "./amount.js";
 import {
+  amountsForLiquidity,
   formatPrice,
   impliedValueInQuote,
+  lockedReserves,
+  lockedValueInQuote,
   priceChangeBps,
   quotePerToken,
   tokensPerQuote,
+  LAUNCH_RANGE_MIN_SQRT_PRICE_X96,
 } from "./price.js";
 import { formatAge, formatDuration, formatInstant } from "./time.js";
 
@@ -117,6 +121,31 @@ describe("prices", () => {
     expect(formatPrice(4_700_000_000_000_000_000_000_000_000_000_000_000n)).toBe("4.7");
   });
 
+  it("rounds a price only when asked, and carries where rounding carries", () => {
+    // 0.0000000020699…, a ulp below the round number a chart's axis means by it. Left to
+    // truncate, that gridline is labelled as the one beneath it.
+    const nearly = 2_069_999_999_999_999_999_999_999_999n;
+    expect(formatPrice(nearly)).toBe("0.00000000206");
+    expect(formatPrice(nearly, { round: true })).toBe("0.00000000207");
+
+    // A carry that shortens the run of leading zeros: 0.00999… is 0.01, not 0.00100.
+    expect(formatPrice(9_999_000_000_000_000_000_000_000_000_000_000n, { round: true })).toBe(
+      "0.01",
+    );
+
+    // And half a unit rounds up, at the resolution actually being shown.
+    expect(formatPrice(2_065_000_000_000_000_000_000_000_000n, { round: true })).toBe(
+      "0.00000000207",
+    );
+    expect(formatPrice(2_064_999_999_999_999_999_999_999_999n, { round: true })).toBe(
+      "0.00000000206",
+    );
+
+    // A price with fewer digits than were asked for has nothing below its last one, so
+    // rounding it is a no-op rather than a collapse to zero.
+    expect(formatPrice(1n, { round: true })).toBe(formatPrice(1n));
+  });
+
   it("returns zero for an uninitialised pool rather than dividing by it", () => {
     expect(tokensPerQuote(0n, EIGHTEEN)).toBe(0n);
     expect(quotePerToken(0n, EIGHTEEN)).toBe(0n);
@@ -142,6 +171,97 @@ describe("prices", () => {
     expect(priceChangeBps(110n, 100n)).toBe(1_000);
     expect(priceChangeBps(95n, 100n)).toBe(-500);
     expect(priceChangeBps(100n, 0n)).toBeNull();
+  });
+});
+
+/**
+ * What is actually in the pool, as distinct from what the supply would be worth.
+ *
+ * The case that matters is the one the factory asserts on chain: a position minted at the
+ * top of its range needs none of the quote asset, "not approximately zero". If this
+ * arithmetic disagreed with that, a market page would report liquidity on the day it
+ * launched and before anyone had put anything in.
+ */
+describe("pool reserves", () => {
+  const OPENING_SQRT_PRICE = 1_744_244_129_640_337_381_386_292_603_617_838n;
+  const LOWER = LAUNCH_RANGE_MIN_SQRT_PRICE_X96;
+  const Q96 = 2n ** 96n;
+
+  /** Eight hundred million of a billion-token supply, a normal share to lock. */
+  const LOCKED_TOKENS = 800_000_000n * 10n ** 18n;
+
+  /**
+   * The liquidity the factory would mint for that, by its own `getLiquidityForAmount1`.
+   * Deriving it here rather than pasting a number makes the assertions below a
+   * round trip through the inverse of the function under test.
+   */
+  const LIQUIDITY = (LOCKED_TOKENS * Q96) / (OPENING_SQRT_PRICE - LOWER);
+
+  it("holds only the token at the price the pool opened at", () => {
+    const { quote, token } = lockedReserves(LIQUIDITY, OPENING_SQRT_PRICE, OPENING_SQRT_PRICE);
+
+    expect(quote).toBe(0n);
+    // Back to where it started, short only by what integer division discarded — which is
+    // bounded by (upper - lower) / 2^96, some ten thousand wei against 8 × 10^26.
+    expect(LOCKED_TOKENS - token).toBeGreaterThanOrEqual(0n);
+    expect(LOCKED_TOKENS - token).toBeLessThan(10n ** 9n);
+  });
+
+  it("turns into the quote asset as the price is bought down", () => {
+    const halfway = OPENING_SQRT_PRICE / 2n;
+    const { quote, token } = lockedReserves(LIQUIDITY, halfway, OPENING_SQRT_PRICE);
+
+    // Both sides present once the price is inside the range, which is the state every
+    // traded market is in.
+    expect(quote).toBeGreaterThan(0n);
+    expect(token).toBeGreaterThan(0n);
+    expect(token).toBeLessThan(LOCKED_TOKENS);
+  });
+
+  it("is entirely the quote asset at the bottom of the range", () => {
+    const { quote, token } = lockedReserves(LIQUIDITY, LOWER, OPENING_SQRT_PRICE);
+
+    expect(token).toBe(0n);
+    expect(quote).toBeGreaterThan(0n);
+  });
+
+  it("values an untraded pool at the tokens sitting in it", () => {
+    const { token } = lockedReserves(LIQUIDITY, OPENING_SQRT_PRICE, OPENING_SQRT_PRICE);
+    const value = lockedValueInQuote(LIQUIDITY, OPENING_SQRT_PRICE, OPENING_SQRT_PRICE);
+
+    // No quote side yet, so the whole figure is the token side priced at the open.
+    expect(value).toBe(impliedValueInQuote(token, OPENING_SQRT_PRICE));
+
+    // ~800M tokens at ~2.06 × 10^-9 ether each is ~1.65 ether.
+    expect(formatEther(value, 2)).toBe("1.65");
+  });
+
+  it("is worth less than the supply it is a part of", () => {
+    // The locked position holds some of the supply, so whatever it is worth has to be
+    // under what all of the supply would be worth at the same price. A sign error in
+    // either direction of the range breaks this before it breaks anything visible.
+    const halfway = OPENING_SQRT_PRICE / 2n;
+    const pool = lockedValueInQuote(LIQUIDITY, halfway, OPENING_SQRT_PRICE);
+    const supply = impliedValueInQuote(10n ** 27n, halfway);
+
+    expect(pool).toBeLessThan(supply);
+  });
+
+  it("returns nothing for an uninitialised or empty position", () => {
+    expect(amountsForLiquidity(0n, OPENING_SQRT_PRICE, LOWER, OPENING_SQRT_PRICE)).toEqual({
+      amount0: 0n,
+      amount1: 0n,
+    });
+    expect(amountsForLiquidity(LIQUIDITY, 0n, LOWER, OPENING_SQRT_PRICE)).toEqual({
+      amount0: 0n,
+      amount1: 0n,
+    });
+  });
+
+  it("does not care which way round the bounds are given", () => {
+    expect(amountsForLiquidity(LIQUIDITY, OPENING_SQRT_PRICE / 2n, LOWER, OPENING_SQRT_PRICE)).toEqual(
+      amountsForLiquidity(LIQUIDITY, OPENING_SQRT_PRICE / 2n, OPENING_SQRT_PRICE, LOWER),
+    );
   });
 });
 

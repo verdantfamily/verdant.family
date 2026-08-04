@@ -108,5 +108,6 @@ which is there because a heavily blurred photograph is a field of gradual gradie
 that is exactly what an 8-bit display bands. All of the motion stops under
 `prefers-reduced-motion`.
 
-The copy claims nothing that is not true today: the footnote says nothing is deployed. When
-the contracts are, that line comes out and a link to the interface goes in.
+The copy claims nothing that is not true today: the footnote says the hooks are live on
+Robinhood Chain, which they have been since 2026-08-01. A link to the interface goes in
+when the interface is hosted somewhere other than a laptop.

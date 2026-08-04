@@ -56,6 +56,7 @@
 
 import { ROBINHOOD_MAINNET_ID } from "@verdant/config";
 import { markets, pool, schedule } from "@verdant/sdk";
+import { quotePerToken } from "@verdant/ui";
 import { createPublicClient, defineChain, erc20Abi, http, type Address } from "viem";
 
 const API = process.env.VERDANT_API ?? "http://127.0.0.1:42069";
@@ -196,6 +197,7 @@ interface ApiMarket {
     nextTransitionAt: number | null;
     secondsToNextTransition: number | null;
   };
+  pool: { sqrtPriceX96: string; initialSqrtPriceX96: string; tick: number };
   activity: { swapCount: number; volumeQuote: string; volumeToken: string };
 }
 
@@ -207,6 +209,7 @@ interface ApiSwap {
   quoteAmount: string;
   tokenAmount: string;
   feePpm: number;
+  sqrtPriceX96: string;
   timestamp: number;
 }
 
@@ -319,6 +322,158 @@ async function assertStockPaired(indexed: readonly ApiMarket[]): Promise<void> {
     !stock.quote.isNative && fees.claims.some((row) => BigInt(row.quoteAmount) > 0n),
     "every claim on the one market that is not ether-quoted was for zero",
   );
+}
+
+interface ApiCandle {
+  start: number;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volumeQuote: string;
+  volumeToken: string;
+  trades: number;
+}
+
+interface ApiCandles {
+  interval: string;
+  seconds: number;
+  at: number;
+  since: number;
+  anchor: { at: number; price: string };
+  candles: ApiCandle[];
+}
+
+/**
+ * The candle series, held to the trades it is an aggregation of.
+ *
+ * A candle endpoint is unusually easy to get plausibly wrong. Every failure mode
+ * produces a chart that renders: an inverted price gives a line that moves the right
+ * amount in the wrong direction, a bucket boundary off by one interval shifts history
+ * sideways, an open taken from the wrong end of the bucket is only visible on the one
+ * bucket where price reversed inside it. None of it is visible by looking.
+ *
+ * So the series is checked against the swaps it was built from, which this API also
+ * serves and which the loop above has already checked against the chain. Three claims:
+ *
+ *  1. **It conserves.** Summed over the buckets, volume and trade count equal the
+ *     market's own totals. A dropped or double-counted bucket fails this.
+ *  2. **It agrees with itself at two resolutions.** The same window in 1m and in 1h
+ *     buckets must sum to the same volume. A wrong bucket width passes claim 1 and
+ *     fails this.
+ *  3. **Each bucket is a candle.** High is the highest of its own open and close and
+ *     low the lowest — the property that fails when the reciprocal is forgotten,
+ *     because then every wick is on the wrong side of every body.
+ *
+ * And the closing price of the last bucket is the price the pool is at now, computed
+ * from the market's own `sqrtPriceX96` by the same function the interface uses.
+ */
+async function assertCandles(entry: ApiMarket, trades: readonly ApiSwap[]): Promise<void> {
+  const minutes = (await get(
+    `/markets/${entry.poolId}/candles?interval=1m&limit=1000`,
+  )) as ApiCandles;
+
+  check(
+    "the market has candles, because it has trades",
+    minutes.candles.length > 0,
+    "the series is empty for a market that has traded",
+  );
+  if (minutes.candles.length === 0) return;
+
+  equal("the series is the interval that was asked for", minutes.interval, "1m");
+  equal("and reports that interval's width", minutes.seconds, 60);
+
+  // 1. Conservation, against totals this file has already checked against the chain.
+  equal(
+    "every trade the market has made is in exactly one bucket",
+    minutes.candles.reduce((total, candle) => total + candle.trades, 0),
+    entry.activity.swapCount,
+  );
+  equal(
+    "and the buckets' volume sums to the market's own",
+    minutes.candles.reduce((total, candle) => total + BigInt(candle.volumeQuote), 0n).toString(),
+    entry.activity.volumeQuote,
+  );
+  equal(
+    "in the token as well",
+    minutes.candles.reduce((total, candle) => total + BigInt(candle.volumeToken), 0n).toString(),
+    entry.activity.volumeToken,
+  );
+
+  // 2. The same history at a coarser resolution. The rig's markets are seconds old, so
+  // an hour holds all of it either way — what differs is the bucket arithmetic.
+  const hours = (await get(
+    `/markets/${entry.poolId}/candles?interval=1h&limit=1000`,
+  )) as ApiCandles;
+
+  equal(
+    "the hourly series holds the same number of trades as the minute series",
+    hours.candles.reduce((total, candle) => total + candle.trades, 0),
+    minutes.candles.reduce((total, candle) => total + candle.trades, 0),
+  );
+  equal(
+    "and the same volume",
+    hours.candles.reduce((total, candle) => total + BigInt(candle.volumeQuote), 0n).toString(),
+    minutes.candles.reduce((total, candle) => total + BigInt(candle.volumeQuote), 0n).toString(),
+  );
+
+  // 3. Each bucket is a candle, and sits on its own boundary.
+  check(
+    "every bucket starts on an interval boundary",
+    minutes.candles.every((candle) => candle.start % 60 === 0),
+    minutes.candles
+      .filter((candle) => candle.start % 60 !== 0)
+      .map((candle) => String(candle.start))
+      .join(", "),
+  );
+  check(
+    "every bucket's high is at or above its open and close",
+    minutes.candles.every(
+      (candle) =>
+        BigInt(candle.high) >= BigInt(candle.open) && BigInt(candle.high) >= BigInt(candle.close),
+    ),
+    "a high below the body means the price was inverted without inverting the extremes",
+  );
+  check(
+    "and its low at or below them",
+    minutes.candles.every(
+      (candle) =>
+        BigInt(candle.low) <= BigInt(candle.open) && BigInt(candle.low) <= BigInt(candle.close),
+    ),
+    "a low above the body means the same thing from the other side",
+  );
+  check(
+    "buckets are returned oldest first, which is the order a chart plots",
+    minutes.candles.every(
+      (candle, index) => index === 0 || candle.start > minutes.candles[index - 1]!.start,
+    ),
+    "the series is not strictly ascending in time",
+  );
+
+  // The close of the last bucket against the most recent trade, converted by the same
+  // function every other price on the site goes through. Two queries over the same
+  // rows: one aggregated and one not, so a wrong `ORDER BY` inside the aggregate — the
+  // failure that puts a bucket's first price where its last belongs — shows up here.
+  const last = minutes.candles[minutes.candles.length - 1]!;
+  const newest = trades[0];
+  if (newest !== undefined) {
+    equal(
+      "the last bucket closes at the price of the most recent trade",
+      last.close,
+      quotePerToken(BigInt(newest.sqrtPriceX96), entry.quote.decimals).toString(),
+    );
+  }
+  equal(
+    "and at the price the market row carries, which the swap handler maintains separately",
+    last.close,
+    quotePerToken(BigInt(entry.pool.sqrtPriceX96), entry.quote.decimals).toString(),
+  );
+
+  // The one bad request worth making: an interval nobody defined must be refused
+  // rather than defaulted, because a default would draw a chart at a scale the caller
+  // did not ask for and label it with the one they did.
+  const refused = await fetch(`${API}/markets/${entry.poolId}/candles?interval=3m`);
+  equal("an interval that does not exist is refused", refused.status, 400);
 }
 
 async function main(): Promise<void> {
@@ -497,6 +652,9 @@ async function main(): Promise<void> {
         `${entry.fee.secondsToNextTransition} does not match ${entry.fee.nextTransitionAt} minus ${entry.fee.at}`,
       );
     }
+
+    // 4. The price history the chart draws, against those same trades.
+    await assertCandles(entry, trades.swaps);
 
     // Fees collected and claimed, from the settle phase.
     const fees = (await get(`/markets/${entry.poolId}/fees`)) as ApiFees;

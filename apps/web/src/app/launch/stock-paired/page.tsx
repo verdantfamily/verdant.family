@@ -16,7 +16,7 @@ export default function StockPairedLaunchPage() {
 
   return (
     <div className="pb-16">
-      <section className="aurora px-6 pb-10 pt-16">
+      <section className="px-6 pb-10 pt-16">
         <PageHeading
           eyebrow={
             <div className="flex items-center justify-center gap-2">
@@ -35,15 +35,13 @@ export default function StockPairedLaunchPage() {
       </section>
 
       <div className="mx-auto mb-6 max-w-6xl px-6">
-        <Notice tone="caution" title="The contract path for this model is not finished">
+        <Notice title="You need the quote asset before you launch">
           <p>
-            The form below is complete and validates against the same bounds the contracts
-            enforce, but the factory still hardcodes ether as the quote side. Four things are
-            outstanding:
+            The first buy happens inside the launch, and it is funded in the asset the market
+            is quoted in — so hold the equity token first. Nothing here swaps ether into it
+            for you, and a launch that names an asset you do not hold will be refused by the
+            contract rather than half-performed.
           </p>
-          <ul className="mt-2 list-disc space-y-1 pl-5">
-            {model.remaining?.map((item) => <li key={item}>{item}</li>)}
-          </ul>
         </Notice>
       </div>
 

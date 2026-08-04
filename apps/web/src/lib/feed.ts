@@ -17,6 +17,8 @@
  * and the feed proof checks that answer against the hook itself on every commit.
  */
 
+import { candles } from "@verdant/sdk";
+
 /** Where the feed lives. The dev stack prints this; production sets it. */
 const FEED_URL = process.env.VERDANT_FEED_URL ?? "http://127.0.0.1:42069";
 
@@ -95,7 +97,33 @@ interface RawMarket {
   readonly createdTx: string;
 }
 
+interface RawCandles {
+  readonly interval: candles.CandleInterval;
+  readonly seconds: number;
+  readonly at: number;
+  readonly since: number;
+  readonly anchor: { readonly at: number; readonly price: string };
+  readonly candles: readonly {
+    readonly start: number;
+    readonly open: string;
+    readonly high: string;
+    readonly low: string;
+    readonly close: string;
+    readonly volumeQuote: string;
+    readonly volumeToken: string;
+    readonly trades: number;
+  }[];
+}
+
 // --- what the app works with ----------------------------------------------------
+
+export interface CandleSeries {
+  readonly interval: candles.CandleInterval;
+  readonly seconds: number;
+  /** Chain time the series was computed at, and the right-hand edge of the chart. */
+  readonly at: number;
+  readonly candles: readonly candles.Candle[];
+}
 
 export interface Stage {
   readonly startOffset: number;
@@ -195,6 +223,67 @@ export interface Swap {
   readonly sender: `0x${string}`;
   readonly timestamp: number;
   readonly transactionHash: `0x${string}`;
+}
+
+/** Trades, with the chain time they were read at. */
+export interface TradeHistory {
+  readonly at: number;
+  readonly swaps: readonly Swap[];
+  /** Every trade the market has, not the number in `swaps`. What a pager counts with. */
+  readonly total: number;
+  readonly offset: number;
+}
+
+/**
+ * One address holding the token, and how much of it.
+ *
+ * "Holder" is what the transfer log says rather than a judgement about who is a person:
+ * a router caught mid-trade, the splitter sitting on uncollected fees and a vesting
+ * contract all appear here. The address is shown so a reader can make that call
+ * themselves, which is the only place it can honestly be made.
+ */
+export interface Holder {
+  readonly address: `0x${string}`;
+  readonly balance: bigint;
+}
+
+export interface HolderPage {
+  readonly token: `0x${string}`;
+  readonly totalSupply: bigint;
+  readonly decimals: number;
+  /** How many addresses hold any of it, across all pages. */
+  readonly total: number;
+  readonly offset: number;
+  readonly holders: readonly Holder[];
+}
+
+/**
+ * The figures that are aggregates over the trade table rather than columns on the market.
+ *
+ * Separate from `Market` because they cost a scan each and a listing of twenty-five
+ * markets does not want twenty-five of them. A market page asks for these once.
+ */
+export interface MarketStats {
+  /** Chain time the window below was measured back from. */
+  readonly at: number;
+  readonly window: number;
+  readonly day: {
+    readonly since: number;
+    /** Base units of the market's quote asset, like every other volume here. */
+    readonly volumeQuote: bigint;
+    readonly volumeToken: bigint;
+    readonly trades: number;
+  };
+  /**
+   * The extremes over the market's whole life, as quote-per-token at 36 decimals — the
+   * same fixed point `quotePerToken` produces, so `formatPrice` renders them directly.
+   * The launch price counts, so these are never empty.
+   */
+  readonly allTime: {
+    readonly high: bigint;
+    readonly low: bigint;
+  };
+  readonly holders: number;
 }
 
 export interface FeeActivity {
@@ -328,24 +417,172 @@ export async function fetchMarkets(limit = 24): Promise<Listing> {
   return { at: raw.at, markets: raw.markets.map(parseMarket) };
 }
 
+/**
+ * The markets one address launched, newest first.
+ *
+ * `creator` here is whoever sent the launch transaction. It is not necessarily who the
+ * fees belong to — a launch may name a different `feeRecipient`, and only the market's
+ * own splitter knows that address — so a page about earnings reads this for the list and
+ * then asks each splitter who it pays.
+ */
+export async function fetchMarketsBy(creator: string, limit = 50): Promise<Listing> {
+  const raw = await get<{ at: number; markets: RawMarket[] }>(
+    `/markets?creator=${creator.toLowerCase()}&limit=${limit}`,
+  );
+  return { at: raw.at, markets: raw.markets.map(parseMarket) };
+}
+
 /** By pool id or by token address; the indexer accepts either. */
 export async function fetchMarket(id: string): Promise<Market> {
   return parseMarket(await get<RawMarket>(`/markets/${id}`));
 }
 
-export async function fetchSwaps(poolId: string, limit = 25): Promise<readonly Swap[]> {
-  const raw = await get<{ swaps: readonly (Omit<Swap, "quoteAmount" | "tokenAmount" | "sqrtPriceX96"> & {
-    quoteAmount: string;
-    tokenAmount: string;
-    sqrtPriceX96: string;
-  })[] }>(`/markets/${poolId}/swaps?limit=${limit}`);
+/**
+ * A market's trades, newest first, with the chain time they were read at.
+ *
+ * `at` travels with them because every row is rendered as an age, and an age measured
+ * against the reader's own clock is wrong by whatever their machine is off by — on a
+ * chain with sub-second blocks that is easily "in 4 seconds".
+ */
+export async function fetchSwaps(
+  poolId: string,
+  limit = 25,
+  offset = 0,
+): Promise<TradeHistory> {
+  const raw = await get<{
+    at: number;
+    total: number;
+    offset: number;
+    swaps: readonly (Omit<Swap, "quoteAmount" | "tokenAmount" | "sqrtPriceX96"> & {
+      quoteAmount: string;
+      tokenAmount: string;
+      sqrtPriceX96: string;
+    })[];
+  }>(`/markets/${poolId}/swaps?limit=${limit}&offset=${offset}`);
 
-  return raw.swaps.map((swap) => ({
-    ...swap,
-    quoteAmount: BigInt(swap.quoteAmount),
-    tokenAmount: BigInt(swap.tokenAmount),
-    sqrtPriceX96: BigInt(swap.sqrtPriceX96),
+  return {
+    at: raw.at,
+    total: raw.total,
+    offset: raw.offset,
+    swaps: raw.swaps.map((swap) => ({
+      ...swap,
+      quoteAmount: BigInt(swap.quoteAmount),
+      tokenAmount: BigInt(swap.tokenAmount),
+      sqrtPriceX96: BigInt(swap.sqrtPriceX96),
+    })),
+  };
+}
+
+/**
+ * Who holds the token, largest first.
+ *
+ * `totalSupply` rides along so a share can be worked out without also fetching the
+ * market — the page usually has one, but the polling route behind the holders tab does
+ * not, and a percentage computed against a supply from a different request is a
+ * percentage that can exceed a hundred.
+ */
+export async function fetchHolders(
+  id: string,
+  limit = 25,
+  offset = 0,
+): Promise<HolderPage> {
+  const raw = await get<{
+    token: string;
+    totalSupply: string;
+    decimals: number;
+    total: number;
+    offset: number;
+    holders: readonly { address: string; balance: string }[];
+  }>(`/markets/${id}/holders?limit=${limit}&offset=${offset}`);
+
+  return {
+    token: raw.token as `0x${string}`,
+    totalSupply: BigInt(raw.totalSupply),
+    decimals: raw.decimals,
+    total: raw.total,
+    offset: raw.offset,
+    holders: raw.holders.map((holder) => ({
+      address: holder.address as `0x${string}`,
+      balance: BigInt(holder.balance),
+    })),
+  };
+}
+
+/** The rolling window and all-time extremes a market page leads with. */
+export async function fetchMarketStats(id: string): Promise<MarketStats> {
+  const raw = await get<{
+    at: number;
+    window: number;
+    day: {
+      since: number;
+      volumeQuote: string;
+      volumeToken: string;
+      trades: number;
+    };
+    allTime: { high: string; low: string };
+    holders: number;
+  }>(`/markets/${id}/stats`);
+
+  return {
+    at: raw.at,
+    window: raw.window,
+    day: {
+      since: raw.day.since,
+      volumeQuote: BigInt(raw.day.volumeQuote),
+      volumeToken: BigInt(raw.day.volumeToken),
+      trades: raw.day.trades,
+    },
+    allTime: {
+      high: BigInt(raw.allTime.high),
+      low: BigInt(raw.allTime.low),
+    },
+    holders: raw.holders,
+  };
+}
+
+/**
+ * A market's price history, already gapless.
+ *
+ * The indexer returns the buckets it observed and the price entering the window; the
+ * filling happens here, through `candles.fill`, so the series a chart receives has one
+ * point per interval and no holes. See that function for why a flat filled candle is
+ * the truth about a pool rather than an interpolation of it.
+ *
+ * `at` is the indexer's chain timestamp and the series is filled up to it, so the line
+ * reaches the right-hand edge of the chart even when the last trade was hours ago.
+ */
+export async function fetchCandles(
+  poolId: string,
+  interval: candles.CandleInterval,
+  limit = 240,
+): Promise<CandleSeries> {
+  const raw = await get<RawCandles>(
+    `/markets/${poolId}/candles?interval=${interval}&limit=${limit}`,
+  );
+
+  const observed = raw.candles.map((candle) => ({
+    start: candle.start,
+    open: BigInt(candle.open),
+    high: BigInt(candle.high),
+    low: BigInt(candle.low),
+    close: BigInt(candle.close),
+    volumeQuote: BigInt(candle.volumeQuote),
+    volumeToken: BigInt(candle.volumeToken),
+    trades: candle.trades,
+    traded: true,
   }));
+
+  return {
+    interval: raw.interval,
+    seconds: raw.seconds,
+    at: raw.at,
+    candles: candles.fill(observed, {
+      seconds: raw.seconds,
+      since: raw.since,
+      until: raw.at,
+      anchor: { at: raw.anchor.at, price: BigInt(raw.anchor.price) },
+    }),
+  };
 }
 
 export async function fetchFeeActivity(poolId: string): Promise<FeeActivity> {

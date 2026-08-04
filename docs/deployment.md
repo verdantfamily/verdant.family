@@ -110,6 +110,14 @@ stock-paired launch with `QuoteAssetNotAdmitted` while passing every other check
 file. On 4663 the verifier also warns when an admitted address has no code, which is how a
 typo in the reviewed list surfaces before somebody tries to launch against it.
 
+Once step 6 has recorded the addresses, this reads them from there:
+
+```bash
+bash scripts/verify-mainnet.sh
+```
+
+Before that, or to check some other deployment, name them:
+
 ```bash
 FACTORY=0x... \
 ORIGIN=0x... \
@@ -161,6 +169,84 @@ That exercises the whole path — creation, the hook's fee, the locked position,
 the pull — against the live deployment, for the price of a few hundredths of an ETH. The
 fork suite already does exactly this, so a difference here means something about mainnet
 differs from a fork of it, which is worth knowing before a stranger's money is involved.
+
+## 9. The feed, which is a server rather than a contract
+
+Everything above is immutable and finished. The indexer is neither: it is a process that
+holds a Postgres database and follows the chain, and the site is a set of server components
+that ask it questions. Vercel cannot host that — it has no long-running process and no
+database — so the two live in different places, and `railway.toml` in the repository root is
+the whole of the indexer's deployment.
+
+```bash
+railway up --service indexer        # from the repository root, not apps/indexer
+railway logs --service indexer      # the backfill's progress, and its rate limiting
+```
+
+`DATABASE_URL` is the only variable that matters and Railway sets it, by reference to the
+Postgres service in the same project. Ponder reads it and uses Postgres; with it unset it
+falls back to PGlite in `apps/indexer/.ponder`, which is a single-writer file and the reason
+a second indexer on one machine kills the first. Nothing else is configured, because the
+chain, the factory, the hook and the block to start from all come from the deployment record
+in `packages/config` — a feed and a site that disagreed about which Verdant they follow
+would be worse than no feed.
+
+Then Vercel's `VERDANT_FEED_URL` is set to the service's public URL.
+
+### The public RPC cannot carry the feed, and this is measurable
+
+Robinhood's own documentation says the public endpoint is not for indexing. What that means
+in numbers, taken from the deployed service:
+
+- The chain produces **10.25 blocks a second** — it is an Orbit L2 with sub-second blocks.
+- The indexer ingests **11.6 blocks a second** through the public endpoint, most of its
+  requests spent on 429s and backoff.
+
+A margin of 1.3 blocks a second is not a margin. A gap of 200,000 blocks closes in two days
+at that rate, and any dip in throughput below 10.25 means it never closes at all — the feed
+would fall permanently further behind the chain it is following.
+
+There is a second, harder limit. The public node keeps no archive state: an `eth_call` at a
+block more than roughly an hour old returns `metadata is not found, <block>`. The indexing
+functions work around this by reading write-once values at `latest` (see the comment at the
+top of `apps/indexer/src/index.ts`), which is sound because those values cannot change — but
+it is a workaround, and it forecloses anything that genuinely needs history.
+
+So a provider key is not an optimisation here, it is a requirement. Robinhood recommends
+Alchemy, `https://robinhood-mainnet.g.alchemy.com/v2/<key>`, and Dwellir, Alchemy, QuickNode,
+dRPC, Blockdaemon and Validation Cloud all serve chain 4663 with archive access. Set it and
+nothing else changes:
+
+```bash
+railway variable set PONDER_RPC_URL_4663=https://robinhood-mainnet.g.alchemy.com/v2/KEY --service indexer
+```
+
+One provider was tried and rejected: NodeFlare's keyless endpoint answers correctly from a
+laptop, including archive reads, but Cloudflare returns 403 to Railway's egress addresses. An
+RPC that works where you test it and not where it runs is worse than one that is merely slow,
+so check a candidate from the deployment rather than from your machine.
+
+## 10. The site
+
+```bash
+vercel deploy --prod          # from the repository root, with the root linked to the project
+```
+
+Two settings make that work, and both are easy to lose an hour to. The Vercel project's Root
+Directory is `apps/web`, not `.`: the Next builder looks for `next` in the package.json it
+finds there, and pointed at the repository root it finds a workspace with no framework and
+refuses. Deploying from the root anyway is deliberate — the upload has to contain the whole
+workspace, because `apps/web` alone is not installable.
+
+And `apps/web/vercel.json` builds the three workspace packages before Next. They resolve
+through `exports` to a `dist`, so `transpilePackages` does not save them from needing to be
+compiled first; `^...` is pnpm for "this package's dependencies, without this package".
+
+`vercel build && vercel deploy --prebuilt` from `apps/web` does not work, and the error it
+gives is misleading. Next traces its serverless bundles against the workspace root, so the
+output references `node_modules/.pnpm/...` paths that exist above `apps/web` and therefore
+above what a deploy from `apps/web` uploads. It reports the first one as a missing file rather
+than as a missing directory tree.
 
 ## If something is wrong afterwards
 

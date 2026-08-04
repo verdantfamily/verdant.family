@@ -37,6 +37,15 @@ export * as pool from "./markets/pool.js";
 export * as markets from "./markets/read.js";
 
 /**
+ * Price history in intervals: the buckets, and the rule for the gaps between them.
+ *
+ * Shared because the indexer groups swaps by these intervals and the chart draws the
+ * result. Two copies of the bucket arithmetic would put a trade in one bucket on the
+ * server and another in the browser.
+ */
+export * as candles from "./markets/candles.js";
+
+/**
  * The fee schedule, mirroring `ScheduleLib.sol` function for function. The two
  * are held together by `src/models/vectors/schedule.json`, which both test
  * suites read.
@@ -65,3 +74,12 @@ export * as launch from "./launch/index.js";
  * trading a stock-paired market that an ether-quoted market never had.
  */
 export * as trade from "./trade/index.js";
+
+/**
+ * Reading what a market owes its creator, and the two calls that pay it out.
+ *
+ * Separate from `markets` because those are reads of what a market *is* and these
+ * are the third write path: realising fees from the locked position, and taking a
+ * recipient's share out of the splitter. The order matters and the module says why.
+ */
+export * as fees from "./fees/index.js";

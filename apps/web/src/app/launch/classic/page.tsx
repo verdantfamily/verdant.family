@@ -16,7 +16,7 @@ export default function ClassicLaunchPage() {
 
   return (
     <div className="pb-16">
-      <section className="aurora px-6 pb-12 pt-16">
+      <section className="px-6 pb-12 pt-16">
         <PageHeading
           eyebrow={
             <div className="flex items-center justify-center gap-2">

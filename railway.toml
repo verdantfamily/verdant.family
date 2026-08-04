@@ -1,0 +1,64 @@
+# How the indexer is deployed, in the repository rather than in a dashboard.
+#
+# The indexer is the one part of Verdant that cannot be static or serverless: it holds a
+# database, follows the chain continuously and answers questions about what it has seen.
+# Vercel hosts the site; this hosts the feed the site reads.
+#
+# The whole monorepo is the build context, not `apps/indexer`, because the indexer imports
+# three workspace packages and each resolves to a `dist` that has to be compiled first.
+# `^...` is pnpm for "the dependencies of this package, not the package itself", which is
+# what keeps a Next build for the web app out of a deploy that has nothing to do with it.
+#
+# Nothing here configures the chain, the factory or the block to start from. Those come
+# from the deployment record in `packages/config`, so a deploy of this cannot disagree with
+# a deploy of the site about which Verdant it is following. The only variables that matter
+# are the ones Railway sets itself: `DATABASE_URL`, which is how Ponder knows to use
+# Postgres rather than a local PGlite file, and `PORT`.
+
+[build]
+builder = "NIXPACKS"
+buildCommand = "pnpm --filter \"@verdant/indexer^...\" build"
+
+[deploy]
+# Through `exec` rather than the package's own `start` script, so that the flags reach
+# Ponder instead of being read by pnpm.
+#
+# A schema per deployment, which is Ponder's own recommendation for this platform and not a
+# workaround. Ponder identifies an app by a hash of its configuration and code, and refuses
+# to write into a schema some other version of the app wrote — correctly, since mixing two
+# schedules of what to index in one set of tables produces data that answers to neither. A
+# fixed name therefore turns every change to this indexer into "drop the database first",
+# and a deploy that is waiting for a human to remember that is a deploy that hangs.
+#
+# What it costs: each deployment re-indexes from `VERDANT_START_BLOCK`. That part is cheap —
+# the start block is a few thousand blocks back, and the cached RPC results live in
+# `ponder_sync`, which is shared, so a redeploy re-reads the chain from a local cache rather
+# than from the network.
+#
+# What was not cheap, and took the indexer down: the schemas left behind. Every deployment
+# wrote a fresh full copy of the indexed chain and none of them were ever dropped, so the
+# volume filled — 4.7 GB of 5 GB — and Postgres began refusing connections. The symptom was
+# not "the disk is full" but `RetryableError: Failed to connect to database` in a crash loop,
+# and a feed answering 502 to everything.
+#
+# `ponder db prune` drops the tables and schemas of deployments that are no longer active,
+# which is every previous one: `overlapSeconds = 0` below means the old container is already
+# gone before this runs. It is chained ahead of `start` rather than run by hand so that the
+# cleanup cannot be the step somebody forgets — the failure it prevents arrives weeks later
+# and looks like a database problem rather than a deployment one.
+startCommand = "pnpm --filter @verdant/indexer exec ponder db prune && pnpm --filter @verdant/indexer exec ponder start --schema $RAILWAY_DEPLOYMENT_ID --hostname 0.0.0.0"
+
+# `/health` answers as soon as the server is listening; `/ready` waits for the backfill.
+# The first deploy has a third of a million blocks to read, and a health check that waited
+# for that would call a working indexer a failed one and roll it back.
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+
+# The old container goes away before the new one starts, rather than the two overlapping.
+# Ponder takes a lock on its schema and a second instance waits for it, so an overlap is a
+# deadlock rather than a graceful handover: the new process waits for a lock the old one
+# holds, the health check waits for the new process, and nothing moves until one is killed.
+overlapSeconds = 0
+
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

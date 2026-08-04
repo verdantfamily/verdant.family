@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * Brand files, resolved by name at build time.
+ * Brand files, resolved by name from the filesystem.
  *
  * A twin of `apps/landing/src/lib/brand.ts`, deliberately rather than by import: the two
  * apps do not share a module graph, and the thing worth sharing here is the convention —
@@ -22,8 +22,17 @@ import { join } from "node:path";
  * component. The launchpad's header is one — it needs `usePathname` — so the header takes
  * the resolved path as a prop and the root layout, which is a server component, is what
  * reads the disk. That is also the only place it needs to happen: the files do not change
- * between requests, and a module evaluated once per server start is the right amount of
- * filesystem access for a fact that is fixed at deploy time.
+ * between requests, so evaluating this once per server start is enough.
+ *
+ * ## This needs `public/brand` inside the serverless function
+ *
+ * "Once per server start" is once per build for a prerendered route and once per cold start
+ * for a dynamic one, and those two run in different places. A serverless function is not
+ * given `public/` — the CDN serves it — so in production every check here returned `null`
+ * on the dynamic routes while the prerendered ones, resolved on the build machine, were
+ * fine. The home page lost its photograph, its mark and its favicon; `/launch` kept all
+ * three. `outputFileTracingIncludes` in `next.config.ts` is what puts the directory in the
+ * function bundle, and it is load-bearing rather than an optimisation.
  */
 
 const PUBLIC_DIR = join(process.cwd(), "public");
@@ -49,9 +58,18 @@ export interface Brand {
   readonly mark: string | null;
   /** Mark and wordmark together. Used only when there is no separate mark. */
   readonly lockup: string | null;
-  /** A full-bleed photograph, laid under a scrim that keeps the type readable. */
+  /** A full-bleed photograph, shown unmodified. Type stays readable because the surfaces
+   *  laid over it are translucent above a backdrop blur rather than transparent. */
   readonly background: string | null;
   readonly favicon: string | null;
+  /**
+   * The card a link to this app unfurls into, at 1200 by 630.
+   *
+   * The default only. A market draws its own, with the token's ticker and market cap on
+   * it, because a link to one token and a link to another should not look identical in a
+   * timeline — see `market/[id]/opengraph-image.tsx`.
+   */
+  readonly og: string | null;
 }
 
 export const BRAND: Brand = {
@@ -59,4 +77,5 @@ export const BRAND: Brand = {
   lockup: resolve(["brand/logo", "brand/wordmark", "brand/lockup"]),
   background: resolve(["brand/bg", "brand/background"], PHOTO_EXTENSIONS),
   favicon: resolve(["brand/favicon", "brand/icon"], ["ico", "png", "svg"]),
+  og: resolve(["brand/og", "brand/social"], PHOTO_EXTENSIONS),
 };

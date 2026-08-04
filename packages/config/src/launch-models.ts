@@ -17,16 +17,16 @@ import type { MarketModel } from "./bounds.js";
  * readiness, because a form that accepts input for a contract that cannot execute it is
  * worse than a form that is absent:
  *
- *  - `ready`    — contracts written, tested and verified against the chain, awaiting
- *                 deployment. The form is complete and the arguments it produces are the
- *                 arguments the contract takes.
+ *  - `ready`    — the contracts are deployed on Robinhood Chain and verified against it,
+ *                 and the arguments the form produces are the arguments they take.
  *  - `building` — the interface exists and is specified, the contract path does not yet.
  *  - `design`   — an idea with a written mechanism and no contracts at all.
  */
 export type LaunchModelStatus = "ready" | "building" | "design";
 
 export const LAUNCH_MODEL_STATUS_LABELS: Record<LaunchModelStatus, string> = {
-  ready: "Ready to deploy",
+  // Not "ready to deploy", which was true only until it was deployed.
+  ready: "Live",
   building: "In progress",
   design: "Design",
 };
@@ -88,7 +88,7 @@ export const LAUNCH_MODELS: Record<LaunchModelId, LaunchModelDefinition> = {
   "stock-paired": {
     id: "stock-paired",
     label: "Stock-Paired",
-    status: "building",
+    status: "ready",
     summary:
       "The same market, quoted in a tokenized equity instead of ether — pair your token against NVIDIA, Apple, the S&P 500 or silver.",
     pair: "A reviewed tokenized equity",
@@ -110,12 +110,7 @@ export const LAUNCH_MODELS: Record<LaunchModelId, LaunchModelDefinition> = {
       "The quote asset remains subject to its issuer's terms, including any transfer or redemption controls, which Verdant does not control and cannot override.",
       "A quote asset that becomes illiquid makes the market it prices hard to exit, independently of the market's own liquidity.",
       "Equity tokens track a market that closes. Prices can gap across a weekend while the pool trades continuously.",
-    ],
-    remaining: [
-      "The factory currently hardcodes ether as the quote side; it needs to accept a reviewed asset and order the pair by address.",
-      "The hook's pool-key assertions need to admit a non-native quote currency.",
-      "An on-chain registry of admitted assets, so the allowlist is enforced by a contract rather than by the interface.",
-      "A routing path so a creator can fund the initial buy with ether rather than holding the quote asset first.",
+      "The initial buy is funded in the quote asset, so a creator has to hold the equity token before launching. Nothing routes ether into it for them.",
     ],
   },
 

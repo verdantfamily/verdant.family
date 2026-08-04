@@ -207,10 +207,21 @@ export const swap = onchainTable(
 
     timestamp: t.integer().notNull(),
     blockNumber: t.bigint().notNull(),
+    /**
+     * Where in the block this swap sat.
+     *
+     * Kept because block number alone does not order two swaps in one block, and a
+     * candle's open and close are exactly that question asked of the first and last
+     * block of a bucket. The primary key contains it, but as text — `"…-10"` sorts
+     * below `"…-2"` — so it cannot be ordered by.
+     */
+    logIndex: t.integer().notNull(),
     transactionHash: t.hex().notNull(),
   }),
   (table) => ({
     poolIdx: index().on(table.poolId, table.timestamp),
+    // The order a candle is built in: within one pool, by position in the chain.
+    sequenceIdx: index().on(table.poolId, table.blockNumber, table.logIndex),
   }),
 );
 

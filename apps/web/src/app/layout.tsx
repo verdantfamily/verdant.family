@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter_Tight } from "next/font/google";
 import type { ReactNode } from "react";
 
+import { BottomNav } from "../components/site/bottom-nav";
 import { Providers } from "../components/providers";
 import { Footer } from "../components/site/footer";
 import { Header } from "../components/site/header";
@@ -30,26 +31,82 @@ const display = Inter_Tight({
   variable: "--font-display",
 });
 
+const TITLE = "Verdant — launch a token on Robinhood Chain";
+const DESCRIPTION =
+  "Fixed-supply tokens on Uniswap v4, paired with ether or a tokenized equity. The fee is written into the pool at creation and the launch position is locked by a contract.";
+
 export const metadata: Metadata = {
-  title: {
-    default: "Verdant — launch a token on Robinhood Chain",
-    template: "%s — Verdant",
-  },
-  description:
-    "Fixed-supply tokens on Uniswap v4, paired with ether or a tokenized equity. The fee is written into the pool at creation and the launch position is locked by a contract.",
+  /*
+   * Where a relative image in any page's metadata resolves from.
+   *
+   * Required rather than optional: without it Next resolves `/brand/og.jpg` against
+   * `localhost:3000` and every card this app produces points at a machine nobody else can
+   * reach. It is read from the environment because the answer differs per deployment and
+   * the app cannot know its own public name — `VERCEL_PROJECT_PRODUCTION_URL` is the
+   * production domain even when a preview build is what is running, which is the one that
+   * should appear in a shared link.
+   */
+  metadataBase: new URL(siteUrl()),
+  title: { default: TITLE, template: "%s — Verdant" },
+  description: DESCRIPTION,
   applicationName: "Verdant",
+
+  /*
+   * The card a link to this app unfurls into, anywhere it is pasted.
+   *
+   * This is the default and the market pages override it with one drawn per token. It
+   * matters more than it looks: a launch is somebody posting a link, and a link with no
+   * card is a grey rectangle with a domain in it. The image is the photograph the teaser
+   * uses, already in `public/brand/`, so this costs nothing to serve.
+   */
+  openGraph: {
+    type: "website",
+    siteName: "Verdant",
+    title: TITLE,
+    description: DESCRIPTION,
+    ...(BRAND.og === null ? {} : { images: [{ url: BRAND.og, width: 1200, height: 630 }] }),
+  },
+  twitter: {
+    // The large card, not the thumbnail. A token's market cap set small beside a
+    // paragraph of description is not worth drawing.
+    card: "summary_large_image",
+    title: TITLE,
+    description: DESCRIPTION,
+    ...(BRAND.og === null ? {} : { images: [BRAND.og] }),
+  },
+
   /* Declared only once the file is in `public/brand/`. A `<link rel="icon">` pointing at a
      404 is worse than none: the browser asks for it on every navigation and some of them
      cache the failure against the origin. */
   ...(BRAND.favicon === null ? {} : { icons: { icon: BRAND.favicon } }),
 };
 
+/**
+ * This deployment's public address.
+ *
+ * `NEXT_PUBLIC_SITE_URL` first, for the domain the app is actually served on once one is
+ * pointed at it. Vercel's own production hostname is the fallback, which is right for
+ * every deployment before that happens and for previews. The last resort is localhost,
+ * which is wrong in production and only reachable when neither variable is set — a local
+ * `next build`.
+ */
+function siteUrl(): string {
+  const explicit = process.env["NEXT_PUBLIC_SITE_URL"];
+  if (explicit !== undefined && explicit.trim() !== "") return explicit.trim();
+
+  const vercel = process.env["VERCEL_PROJECT_PRODUCTION_URL"];
+  if (vercel !== undefined && vercel.trim() !== "") return `https://${vercel.trim()}`;
+
+  return "http://localhost:3000";
+}
+
 export const viewport: Viewport = {
-  /* `--color-canvas` in hex, so the browser chrome on a phone continues the page rather
-     than framing it. This is the tone the composited background averages to once the scrim
-     has done its work, which is a good deal darker than the photograph's own mean — the
-     value the teaser uses. */
-  themeColor: "#1d1514",
+  /* The photograph's own mean, so the browser chrome on a phone continues the page rather
+     than framing it. It used to be `--color-canvas`, a good deal darker, because a scrim
+     sat over the picture and that was the tone the composite averaged to. With the scrim
+     gone the page reads at the photograph's exposure, and this is the value the teaser —
+     which has always shown it unmodified — uses. */
+  themeColor: "#362627",
   colorScheme: "dark",
 };
 
@@ -61,23 +118,17 @@ export default function RootLayout({ children }: { readonly children: ReactNode 
       {/* The wallet providers wrap everything because the header carries the connect
           control on every page. They render their children through, so a page that
           asks for no account is still rendered on the server. */}
-      <body className="flex min-h-screen flex-col">
-        {/* The four layers, mounted once for every route. They are fixed and negatively
-            stacked, so they take part in no layout and nothing below has to know they are
-            there — but every translucent surface in the app is translucent over these, and
-            that is why each one carries a backdrop blur. */}
+      {/* Bottom padding on phones reserves the height of the fixed BottomNav (plus the home
+          indicator), so the footer and the last of a page's content never hide behind it.
+          Removed at `md`, where the bottom bar is gone and the header carries navigation. */}
+      <body className="flex min-h-screen flex-col pb-[calc(4.25rem+env(safe-area-inset-bottom))] md:pb-0">
+        {/* The photograph, mounted once for every route and nothing laid over it. Fixed and
+            negatively stacked, so it takes part in no layout and nothing below has to know
+            it is there — but every translucent surface in the app is translucent over it,
+            and that is why each one carries a backdrop blur. */}
         {photo === null ? null : (
           <div className="photo" style={{ backgroundImage: `url(${photo})` }} aria-hidden="true" />
         )}
-
-        <div className="scrim" aria-hidden="true" />
-
-        <div className={photo === null ? "glow bare" : "glow"} aria-hidden="true">
-          <span className="glow-a" />
-          <span className="glow-b" />
-        </div>
-
-        <div className="grain" aria-hidden="true" />
 
         <Providers>
           {/* The mark is resolved here rather than in the header, because the header is a
@@ -86,6 +137,7 @@ export default function RootLayout({ children }: { readonly children: ReactNode 
           <Header mark={BRAND.mark} lockup={BRAND.lockup} />
           <main className="flex-1">{children}</main>
           <Footer />
+          <BottomNav />
         </Providers>
       </body>
     </html>

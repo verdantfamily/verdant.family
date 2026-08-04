@@ -33,9 +33,12 @@ export {
 } from "./bounds.js";
 
 export {
+  ADDONS,
   DEPLOYMENTS,
+  addonsFor,
   deploymentFor,
   isDeployed,
+  type VerdantAddons,
   type VerdantDeployment,
 } from "./deployments.js";
 

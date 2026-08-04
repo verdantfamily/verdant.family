@@ -2,6 +2,9 @@ import { MARKET_MODELS, MODELS } from "@verdant/config";
 import { shortenAddress, shortenHash } from "@verdant/ui";
 import type { ReactNode } from "react";
 
+import { CopyButton } from "./copy-button";
+import { TokenImage } from "./token-image";
+
 import { EXPLORER_URL } from "../lib/chain";
 
 /**
@@ -38,24 +41,49 @@ export function Panel({
   children,
   padded = true,
   className = "",
+  fill = false,
 }: {
   readonly title?: string;
   readonly aside?: ReactNode;
   readonly children: ReactNode;
   readonly padded?: boolean;
   readonly className?: string;
+  /**
+   * Take the full height of whatever this is placed in, and let the body have what the
+   * header does not.
+   *
+   * For a panel sitting in a row beside others that must end level with it. Without this a
+   * panel is as tall as its contents, so a row of three is three different heights — which
+   * is fine when each is read on its own and wrong when they are read as one band across
+   * the page. The body becomes a flex column so a child can claim the slack: a chart
+   * stretches into it, a list scrolls inside it.
+   */
+  readonly fill?: boolean;
 }) {
   return (
     <section
-      className={`overflow-hidden rounded-card border border-border bg-surface shadow-card backdrop-blur-xl ${className}`}
+      className={`overflow-hidden rounded-card border border-border bg-surface shadow-card backdrop-blur-xl ${
+        fill ? "flex h-full flex-col" : ""
+      } ${className}`}
     >
       {title === undefined ? null : (
-        <div className="flex items-center justify-between gap-4 border-b border-border px-6 py-4">
+        <div
+          className={`flex items-center justify-between gap-4 border-b border-border px-6 py-4 ${
+            fill ? "shrink-0" : ""
+          }`}
+        >
           <h2 className="text-[0.95rem] font-semibold tracking-tight text-ink">{title}</h2>
           {aside}
         </div>
       )}
-      <div className={padded ? "p-6" : ""}>{children}</div>
+      {/* `min-h-0` because a flex child's floor is its content, not zero: without it a long
+          list refuses to shrink and pushes the panel past the height it was given instead
+          of scrolling inside it. */}
+      <div
+        className={`${padded ? "p-6" : ""} ${fill ? "flex min-h-0 flex-1 flex-col" : ""}`}
+      >
+        {children}
+      </div>
     </section>
   );
 }
@@ -144,32 +172,45 @@ export function AddressLink({
   address,
   label,
   className,
+  copyable = false,
 }: {
   readonly address: string;
   readonly label?: string | undefined;
   readonly className?: string | undefined;
+  /**
+   * Offer a one-click copy of the full address beside the link. Off by default, because
+   * the shortened form is enough where an address is only being recognised; on where it
+   * is a contract someone will want to paste into a wallet or an explorer.
+   */
+  readonly copyable?: boolean;
 }) {
   const text = label ?? shortenAddress(address);
   const classes = `numeric text-ink-muted underline decoration-border-strong decoration-dotted underline-offset-4 transition-colors hover:text-ink ${className ?? ""}`;
 
-  if (EXPLORER_URL === undefined) {
-    return (
+  const link =
+    EXPLORER_URL === undefined ? (
       <span className={classes} title={address}>
         {text}
       </span>
+    ) : (
+      <a
+        href={`${EXPLORER_URL}/address/${address}`}
+        title={address}
+        target="_blank"
+        rel="noreferrer"
+        className={classes}
+      >
+        {text}
+      </a>
     );
-  }
+
+  if (!copyable) return link;
 
   return (
-    <a
-      href={`${EXPLORER_URL}/address/${address}`}
-      title={address}
-      target="_blank"
-      rel="noreferrer"
-      className={classes}
-    >
-      {text}
-    </a>
+    <span className="inline-flex items-center gap-1 align-middle">
+      {link}
+      <CopyButton value={address} label="Copy address" />
+    </span>
   );
 }
 
@@ -230,25 +271,61 @@ export function ModelBadge({ model }: { readonly model: number }) {
 export function TokenAvatar({
   symbol,
   size = "default",
+  uri,
 }: {
   readonly symbol: string;
-  readonly size?: "small" | "default" | "large";
+  readonly size?: AvatarSize;
+  /**
+   * The token's `metadataURI`, if it has one. A picture when it resolves to one, and the
+   * plate below whenever it does not — which covers an empty URI, a document with no
+   * image in it, and a link that has stopped answering. A token's face is not something
+   * a page can insist on.
+   */
+  readonly uri?: string | undefined;
+}) {
+  const plate = <TokenPlate symbol={symbol} size={size} />;
+  if (uri === undefined || uri.trim() === "") return plate;
+  return (
+    <TokenImage uri={uri.trim()} size={size}>
+      {plate}
+    </TokenImage>
+  );
+}
+
+export type AvatarSize = "small" | "default" | "large" | "card";
+
+export const AVATAR_SIZING: Record<AvatarSize, string> = {
+  small: "size-8 text-[0.65rem] rounded-[0.6rem]",
+  default: "size-11 text-xs rounded-[0.85rem]",
+  large: "size-16 text-lg rounded-[1.1rem]",
+  // Fills a listing tile edge to edge; the card's own rounding + overflow clips it, so the
+  // avatar itself carries none.
+  card: "size-full text-3xl rounded-none",
+};
+
+export function TokenPlate({
+  symbol,
+  size = "default",
+}: {
+  readonly symbol: string;
+  readonly size?: AvatarSize;
 }) {
   let hash = 0;
   for (const character of symbol) hash = (hash * 31 + character.charCodeAt(0)) % 360;
   const from = hash;
   const to = (hash + 48) % 360;
 
-  const sizing = {
-    small: "size-8 text-[0.65rem] rounded-[0.6rem]",
-    default: "size-11 text-xs rounded-[0.85rem]",
-    large: "size-16 text-lg rounded-[1.1rem]",
-  }[size];
-
   return (
+    // Sized only by `AVATAR_SIZING`. It used to also carry `size-full`, so that the plate
+    // would fill `TokenImage` when it is the fallback behind a logo — but `size-full` and
+    // `size-8` are both width/height rules, and which one wins is decided by their order
+    // in the generated stylesheet rather than in this string. Standalone, on a token with
+    // no logo, `size-full` was winning and stretching the plate across whatever flex row
+    // it sat in. The map already answers this: `card` is `size-full`, every other size is
+    // a fixed square, and inside `TokenImage` the wrapper has the identical class.
     <span
       aria-hidden="true"
-      className={`grid shrink-0 place-items-center font-semibold text-ink shadow-card ${sizing}`}
+      className={`grid shrink-0 place-items-center font-semibold text-ink shadow-card ${AVATAR_SIZING[size]}`}
       style={{
         backgroundImage: `linear-gradient(140deg, hsl(${from} 52% 38%), hsl(${to} 58% 28%))`,
       }}

@@ -14,8 +14,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FeedUnavailableError,
   MarketNotFoundError,
+  fetchCandles,
   fetchFeeActivity,
+  fetchHolders,
   fetchMarket,
+  fetchMarketStats,
   fetchMarkets,
   fetchSwaps,
 } from "./feed";
@@ -170,6 +173,9 @@ describe("parsing", () => {
 
   it("parses swap amounts, including the signed deltas", async () => {
     respondWith({
+      at: 1785587290,
+      total: 412,
+      offset: 30,
       swaps: [
         {
           id: "0xabc-3",
@@ -186,10 +192,126 @@ describe("parsing", () => {
       ],
     });
 
-    const swaps = await fetchSwaps(RAW_MARKET.poolId);
-    expect(swaps[0]!.quoteAmount).toBe(50_000_000_000_000_000n);
-    expect(swaps[0]!.tokenAmount).toBe(22_500_000_000_000_000_000_000_000n);
-    expect(swaps[0]!.buy).toBe(true);
+    const history = await fetchSwaps(RAW_MARKET.poolId);
+    expect(history.swaps[0]!.quoteAmount).toBe(50_000_000_000_000_000n);
+    expect(history.swaps[0]!.tokenAmount).toBe(22_500_000_000_000_000_000_000_000n);
+    expect(history.swaps[0]!.buy).toBe(true);
+    // The chain's clock travels with the rows, because every one is rendered as an age.
+    expect(history.at).toBe(1785587290);
+    // And the count of every trade, which is what a pager draws itself from — one page
+    // of rows says nothing about how many pages there are.
+    expect(history.total).toBe(412);
+    expect(history.offset).toBe(30);
+  });
+
+  it("parses holder balances and the supply they are a share of", async () => {
+    respondWith({
+      token: RAW_MARKET.token,
+      totalSupply: "1000000000000000000000000000",
+      decimals: 18,
+      total: 3,
+      offset: 0,
+      holders: [
+        { address: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266", balance: "250000000000000000000000000" },
+        { address: "0x8272e0336e46b147437f06a7b6b85812571f89a1", balance: "1" },
+      ],
+    });
+
+    const page = await fetchHolders(RAW_MARKET.poolId);
+    expect(page.holders[0]!.balance).toBe(250_000_000_000_000_000_000_000_000n);
+    // A single wei is a real balance and has to survive the crossing: rounded to a
+    // number it would be indistinguishable from a quarter of the supply's last digit.
+    expect(page.holders[1]!.balance).toBe(1n);
+    expect(page.totalSupply).toBe(10n ** 27n);
+    expect(page.total).toBe(3);
+  });
+
+  it("parses the rolling window and the all-time extremes", async () => {
+    respondWith({
+      at: 1785587290,
+      window: 86_400,
+      day: {
+        since: 1785500890,
+        volumeQuote: "50000000000000000",
+        volumeToken: "22500000000000000000000000",
+        trades: 7,
+      },
+      // Quote per token at 36 decimals, the fixed point `quotePerToken` produces.
+      allTime: { high: "2100000000000000000000000000", low: "1900000000000000000000000000" },
+      holders: 12,
+    });
+
+    const stats = await fetchMarketStats(RAW_MARKET.poolId);
+    expect(stats.day.volumeQuote).toBe(50_000_000_000_000_000n);
+    expect(stats.day.trades).toBe(7);
+    // The high is the larger price, whatever the square root it came from was doing.
+    expect(stats.allTime.high).toBeGreaterThan(stats.allTime.low);
+    expect(stats.holders).toBe(12);
+  });
+
+  it("fills the quiet buckets of a candle series, flat and unmarked as traded", async () => {
+    // Two trades twenty minutes apart, at one-minute resolution. The indexer reports the
+    // two buckets it saw; what reaches a chart has to be every minute between them, at
+    // the price the pool actually held — which is the previous close, because nothing
+    // moved it. The alternative, a line sloping between two trades, is a price nobody
+    // could have traded at.
+    respondWith({
+      interval: "1m",
+      seconds: 60,
+      at: 1_785_587_400,
+      since: 1_785_586_200,
+      anchor: { at: 1_785_583_620, price: "1000000000000000000000000000" },
+      candles: [
+        {
+          start: 1_785_586_200,
+          open: "1000000000000000000000000000",
+          high: "1100000000000000000000000000",
+          low: "1000000000000000000000000000",
+          close: "1100000000000000000000000000",
+          volumeQuote: "50000000000000000",
+          volumeToken: "22500000000000000000000000",
+          trades: 1,
+        },
+      ],
+    });
+
+    const series = await fetchCandles(RAW_MARKET.poolId, "1m");
+
+    // 1 785 586 200 through 1 785 587 400 inclusive, every minute.
+    expect(series.candles).toHaveLength(21);
+    expect(series.candles[0]!.traded).toBe(true);
+    expect(series.candles[0]!.close).toBe(1_100_000_000_000_000_000_000_000_000n);
+
+    const quiet = series.candles[1]!;
+    expect(quiet.traded).toBe(false);
+    expect(quiet.open).toBe(quiet.close);
+    expect(quiet.close).toBe(1_100_000_000_000_000_000_000_000_000n);
+    expect(quiet.volumeQuote).toBe(0n);
+
+    // And it reaches the right-hand edge, which is chain time rather than this machine's.
+    expect(series.candles[series.candles.length - 1]!.start).toBe(1_785_587_400);
+    expect(series.at).toBe(1_785_587_400);
+  });
+
+  it("draws a market that has never traded at the price it launched at", async () => {
+    respondWith({
+      interval: "5m",
+      seconds: 300,
+      at: 1_785_584_520,
+      since: 1_785_583_500,
+      anchor: { at: 1_785_583_620, price: "2000000000000000000000000000" },
+      candles: [],
+    });
+
+    const series = await fetchCandles(RAW_MARKET.poolId, "5m");
+
+    expect(series.candles.length).toBeGreaterThan(0);
+    expect(series.candles.every((candle) => !candle.traded)).toBe(true);
+    expect(series.candles.every((candle) => candle.close === 2n * 10n ** 27n)).toBe(true);
+    // The series starts at the bucket the pool was initialised *in* — 1 785 583 620 falls
+    // inside the five minutes from 1 785 583 500 — and not at any bucket that had already
+    // ended by then, where a flat line would be a price that did not exist yet.
+    expect(series.candles[0]!.start).toBe(1_785_583_500);
   });
 
   it("parses a claim's two sides, neither of which is necessarily ether", async () => {

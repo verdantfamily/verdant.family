@@ -1,8 +1,9 @@
 import Link from "next/link";
 
 import { Explore } from "../components/explore";
-import { Badge, Notice } from "../components/primitives";
+import { Notice } from "../components/primitives";
 import { FeedUnavailableError, fetchMarkets, type Listing } from "../lib/feed";
+import { fetchUsdPerEth } from "../lib/usd";
 
 /**
  * ## Why this renders per request rather than being cached as HTML
@@ -20,6 +21,10 @@ import { FeedUnavailableError, fetchMarkets, type Listing } from "../lib/feed";
 export const dynamic = "force-dynamic";
 
 export default async function ExplorePage() {
+  // Started before the feed so the two requests overlap. It resolves to `null` rather than
+  // rejecting, so a price feed having a bad minute cannot take the listing down with it.
+  const usdPromise = fetchUsdPerEth();
+
   let listing: Listing | null = null;
   let unavailable = false;
 
@@ -33,42 +38,27 @@ export default async function ExplorePage() {
     else throw error;
   }
 
+  const usdPerEth = await usdPromise;
+
   return (
     <div className="pb-10">
-      <section className="aurora px-6 pb-16 pt-20">
+      {/* The first screen is the photograph and one sentence. No badge, no buttons: the
+          header already carries "Launch token", and a hero that says one thing lets the
+          background be the thing you notice. */}
+      <section className="px-4 pb-24 pt-16 sm:px-6 sm:pb-40 sm:pt-28">
         <div className="mx-auto max-w-3xl text-center">
-          <Badge tone="accent">Uniswap v4 · Robinhood Chain</Badge>
-
-          <h1 className="display mt-6 text-[2.75rem] text-ink sm:text-[4rem]">
-            Launch a token that
-            <br />
-            keeps its promises.
+          <h1 className="display text-[2.4rem] leading-[1.06] text-ink sm:text-[3.75rem]">
+            Create markets that evolve
           </h1>
 
-          <p className="mx-auto mt-6 max-w-xl text-[1.05rem] leading-relaxed text-ink-muted">
-            Fixed supply, minted once. The swap fee written into the pool at creation and
-            editable by nobody, including us. The launch position handed to a contract with
-            no early-release path. Pair against ether or a tokenized equity.
+          <p className="mx-auto mt-5 max-w-2xl text-[0.95rem] leading-relaxed text-ink-muted sm:mt-6 sm:text-[1.1rem]">
+            Create fixed-fee, stock paired, and evolving markets powered by Uniswap&apos;s v4
+            hooks
           </p>
-
-          <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
-            <Link
-              href="/launch"
-              className="inline-flex h-12 items-center rounded-full bg-ink px-7 text-[0.95rem] font-medium text-ink-inverse shadow-card transition hover:bg-ink/90 active:scale-[0.985]"
-            >
-              Launch a token
-            </Link>
-            <Link
-              href="/docs"
-              className="inline-flex h-12 items-center rounded-full border border-border bg-surface px-7 text-[0.95rem] font-medium text-ink shadow-card transition hover:border-border-strong hover:shadow-lift backdrop-blur-xl"
-            >
-              How it works
-            </Link>
-          </div>
         </div>
       </section>
 
-      <div className="mx-auto max-w-6xl px-6">
+      <div className="mx-auto max-w-6xl px-4 sm:px-6">
         {unavailable ? (
           <Notice tone="caution" title="The market feed is not answering.">
             This is a problem with our indexer, not with the chain. Markets are unaffected —
@@ -90,7 +80,7 @@ export default async function ExplorePage() {
             </Link>
           </div>
         ) : listing !== null ? (
-          <Explore markets={listing.markets} at={listing.at} />
+          <Explore markets={listing.markets} at={listing.at} usdPerEth={usdPerEth} />
         ) : null}
       </div>
     </div>

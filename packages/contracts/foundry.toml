@@ -20,7 +20,7 @@ evm_version = "cancun"
 # test` and `forge coverage` have to work without one. CI runs them as their own
 # job under FOUNDRY_PROFILE=fork, allowed to fail, because they assert facts about
 # somebody else's chain.
-no_match_path = "test/fork/*"
+no_match_path = "*/fork/*"
 
 ffi = false
 ast = true
@@ -55,11 +55,11 @@ fail_on_revert = false
 # The fork suite, against the bytecode deployed on 4663 rather than this repo's
 # build of it. See test/fork/Launch.fork.t.sol for why that difference matters.
 [profile.fork]
-match_path = "test/fork/*"
+match_path = "*/fork/*"
 # Profiles inherit from `default`, so the exclusion above would apply here too and
 # this profile would match nothing at all. Overridden to a directory that holds
 # libraries rather than tests. Do not "simplify" this away.
-no_match_path = "test/utils/*"
+no_match_path = "*/utils/*"
 
 # Fast profile for iteration; the gates always run under the default profile.
 [profile.quick.fuzz]

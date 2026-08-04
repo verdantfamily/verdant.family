@@ -1,103 +1,82 @@
-import { formatCompact, formatFeeRate, formatPrice, quotePerToken } from "@verdant/ui";
+import { impliedValueInQuote, shortenAddress } from "@verdant/ui";
 import Link from "next/link";
 
 import type { Market } from "../lib/feed";
 import { describeQuote, formatQuoteAmount } from "../lib/quote";
-import { Countdown } from "./countdown";
-import { ModelBadge, TokenAvatar } from "./primitives";
+import { formatUsd, usdValueOf } from "../lib/usd";
+import { TokenAvatar } from "./primitives";
+import { TimeAgo } from "./time-ago";
 
 /**
- * One market in the listing.
+ * One market as a listing tile: the token's face first, then who it is and what the pool
+ * implies it is worth.
  *
- * What a card has to answer, in order: what is it, what does it cost to trade, and is
- * that about to change. The fee is given the same visual weight as the price because on
- * this protocol it is the distinguishing fact — every market here has a schedule, and
- * which stage it is on is the thing a trader is deciding against.
+ * The logo leads because on a listing that is how a token is recognised at a glance. Below
+ * it, the name and ticker say what it is, the market cap says how far it has run, the
+ * address is there for a reader who wants to copy it into a wallet or a bot, and the age
+ * ticks so a fresh launch reads as fresh.
  *
- * There is no percentage-change figure. It would need a price from a fixed time ago, and
- * the honest options are the launch price (which makes every card a story about launch
- * day forever) or a rolling window (which needs a candle table the indexer does not
- * keep). A number that looks like 24-hour change but is not would be worse than its
- * absence.
+ * The figure labelled "MC" is the pool's price times supply — the launchpad convention's
+ * market cap. It is shown in dollars, converted from ether at a spot price fetched off
+ * chain, because that is the unit people read a market cap in. Two things stay true of it:
+ * the rate comes from a third party rather than from 4663, and it is an *implied* value —
+ * the pool's price times supply, not what that supply would fetch if it were sold. A
+ * market quoted in a tokenized equity has no rate to convert through, so it keeps its own
+ * unit rather than being run through a price this app does not have.
  */
-export function MarketCard({ market, at }: { readonly market: Market; readonly at: number }) {
+export function MarketCard({
+  market,
+  at,
+  usdPerEth,
+}: {
+  readonly market: Market;
+  readonly at: number;
+  /** Dollars per ether, or `null` when no price could be had. */
+  readonly usdPerEth: number | null;
+}) {
   const quote = describeQuote(market.quote);
-  const price = quotePerToken(market.sqrtPriceX96, quote.decimals);
-  const transition = market.fee.nextTransitionAt;
+  const marketCap = impliedValueInQuote(market.totalSupply, market.sqrtPriceX96);
+  const usd = usdValueOf(marketCap, quote, usdPerEth);
 
   return (
     <Link
       href={`/market/${market.poolId}`}
-      className="group flex flex-col justify-between rounded-card border border-border bg-surface p-5 shadow-card backdrop-blur-xl transition duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:shadow-lift"
+      className="group flex flex-col overflow-hidden rounded-card border border-border bg-surface shadow-card backdrop-blur-xl transition duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:shadow-lift"
     >
-      <div className="flex items-start gap-3">
-        <TokenAvatar symbol={market.symbol} />
-
-        <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-2">
-            <span className="numeric truncate text-[1rem] font-semibold text-ink">
-              {market.symbol}
-            </span>
-            <ModelBadge model={market.model} />
-          </div>
-          <div className="mt-0.5 truncate text-[0.82rem] text-ink-muted">{market.name}</div>
-          {/* The pair, because a price is meaningless without it: 0.42 of an ether and
-              0.42 of a share of NVIDIA are different claims, and the two markets sit
-              side by side in this grid. */}
-          <div className="numeric mt-1 truncate text-[0.7rem] text-ink-muted">
-            {market.symbol} / {quote.symbol}
-          </div>
-        </div>
-
-        <div className="shrink-0 text-right">
-          <div className="numeric text-[1rem] font-semibold text-accent">
-            {formatFeeRate(market.fee.ppm)}
-          </div>
-          <div className="text-[0.7rem] text-ink-muted">fee now</div>
-        </div>
+      <div className="aspect-square w-full overflow-hidden">
+        <TokenAvatar symbol={market.symbol} uri={market.metadataURI} size="card" />
       </div>
 
-      <dl className="mt-5 grid grid-cols-3 gap-3">
-        <div>
-          <dt className="text-[0.7rem] text-ink-muted">Price</dt>
-          <dd className="numeric mt-0.5 text-[0.85rem] text-ink" title={`${quote.symbol} per ${market.symbol}`}>
-            {formatPrice(price)}
-          </dd>
+      <div className="flex flex-1 flex-col p-3.5">
+        <div className="flex items-start justify-between gap-2.5">
+          <div className="min-w-0">
+            <p className="truncate text-[0.95rem] font-semibold leading-tight text-ink">
+              {market.name}
+            </p>
+            <p className="numeric mt-0.5 truncate text-[0.8rem] text-ink-muted">
+              ${market.symbol}
+            </p>
+          </div>
+          <div className="shrink-0 text-right">
+            <p className="numeric text-[0.95rem] font-semibold text-ink">
+              {usd === null ? formatQuoteAmount(marketCap, quote, 2) : formatUsd(usd)}
+            </p>
+            <p className="text-[0.6rem] font-medium uppercase tracking-wider text-ink-muted">
+              MC
+            </p>
+          </div>
         </div>
-        <div>
-          <dt className="text-[0.7rem] text-ink-muted">Volume</dt>
-          <dd className="numeric mt-0.5 text-[0.85rem] text-ink">
-            {formatQuoteAmount(market.volumeQuote, quote, 3)}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-[0.7rem] text-ink-muted">Supply</dt>
-          <dd className="numeric mt-0.5 text-[0.85rem] text-ink">
-            {formatCompact(market.totalSupply)}
-          </dd>
-        </div>
-      </dl>
 
-      <div className="mt-4 flex items-center justify-between border-t border-border pt-3 text-[0.75rem]">
-        <span className="text-ink-muted">
-          {market.swapCount} {market.swapCount === 1 ? "trade" : "trades"}
-        </span>
-
-        {/* "Never changes" and "will not change again" are different claims, and only
-            the first is true of a single-stage market. A laddered market that has run
-            through its last stage has a fee that is now fixed, but it was not always —
-            saying otherwise misdescribes what its creator committed to. */}
-        {transition === null ? (
-          <span className="text-ink-muted">
-            {market.fee.stageCount === 1 ? "fee never changes" : "final stage"}
+        <div className="mt-3.5 flex items-center justify-between gap-2 border-t border-border pt-2.5 text-[0.72rem]">
+          <span className="numeric truncate text-ink-muted" title={market.token}>
+            {shortenAddress(market.token)}
           </span>
-        ) : (
-          <span className="text-ink-muted">
-            next{" "}
-            {formatFeeRate(market.stages[market.fee.stageIndex + 1]?.feePpm ?? market.fee.ppm)} in{" "}
-            <Countdown anchorAt={at} targetAt={transition} className="text-accent" />
-          </span>
-        )}
+          <TimeAgo
+            anchorAt={at}
+            createdAt={market.createdAt}
+            className="numeric shrink-0 text-accent"
+          />
+        </div>
       </div>
     </Link>
   );

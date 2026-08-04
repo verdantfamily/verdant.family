@@ -23,9 +23,12 @@ import {
   blockingIssues,
   derive,
   emptyDraft,
+  isDurableUri,
   issueFor,
   launchParams,
   metadataDocument,
+  metadataUriOf,
+  noteFor,
   percentToPpm,
   readableParams,
   tokenIdentity,
@@ -124,7 +127,16 @@ describe("validation", () => {
 
   it("reports separate directions as a warning, not as a blocker", () => {
     const issues = validate(named({ directional: true }));
-    expect(issueFor(issues, "directional")).toBeDefined();
+    expect(noteFor(issues, "directional")).toBeDefined();
+    expect(blockingIssues(issues)).toEqual([]);
+  });
+
+  it("keeps a remark out of the channel that means the value is wrong", () => {
+    // The two are read in different colours, and a form that outlines a field in red for a
+    // value the chain accepts is a form telling people to fix what is not broken.
+    const issues = validate(named({ symbol: "F-L-O-W-E-R" }));
+    expect(noteFor(issues, "symbol")).toBeDefined();
+    expect(issueFor(issues, "symbol")).toBeUndefined();
     expect(blockingIssues(issues)).toEqual([]);
   });
 
@@ -137,16 +149,58 @@ describe("validation", () => {
     expect(issueFor(validate(named({ metadataUrl: "not a url" })), "metadataUrl")).toBeDefined();
   });
 
-  it("warns, but does not block, a token that will never point anywhere", () => {
-    // An empty URI is legal on chain and is what most launches will carry. Frozen and
-    // empty together is the combination worth naming, because it cannot be undone.
-    const issues = validate(named({ metadataUrl: "", metadataMutable: false }));
-    expect(issueFor(issues, "metadataUrl")).toBeDefined();
-    expect(blockingIssues(issues)).toEqual([]);
+  it("refuses an address only this machine can answer", () => {
+    // The development image store answers on this origin and nowhere else. Uploading to it
+    // is fine and using it is fine; recording it in a token is a picture that was never
+    // going to load, and the token cannot be edited afterwards.
+    for (const uri of [
+      "/api/image/0123456789abcdef0123456789abcdef.webp",
+      "http://localhost:3040/api/image/a.webp",
+      "http://127.0.0.1:3040/a.png",
+      "http://my-laptop.local/a.png",
+    ]) {
+      expect(isDurableUri(uri)).toBe(false);
+      expect(issueFor(validate(named({ imageUrl: uri })), "imageUrl")).toBeDefined();
+    }
 
-    expect(
-      issueFor(validate(named({ metadataUrl: "", metadataMutable: true })), "metadataUrl"),
-    ).toBeUndefined();
+    for (const uri of [
+      "",
+      "https://example.com/a.png",
+      "https://6no5.public.blob.vercel-storage.com/tokens/a.webp",
+      "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+    ]) {
+      expect(isDurableUri(uri)).toBe(true);
+      expect(issueFor(validate(named({ imageUrl: uri })), "imageUrl")).toBeUndefined();
+    }
+  });
+
+  it("records the image when no document was given", () => {
+    // The chain keeps one string, and a creator with a picture and no document would
+    // otherwise launch a token pointing nowhere while the form held a usable link.
+    const image = "https://example.com/flower.png";
+    expect(metadataUriOf(named({ imageUrl: image, metadataUrl: "" }))).toBe(image);
+
+    const document = "https://example.com/token.json";
+    expect(metadataUriOf(named({ imageUrl: image, metadataUrl: document }))).toBe(document);
+    expect(metadataUriOf(named({ imageUrl: "", metadataUrl: "" }))).toBe("");
+  });
+
+  it("says nothing at all about an empty metadata link", () => {
+    // Legal on chain, and what a launch with no picture carries. It was a warning once,
+    // which put a red field in front of every creator who did not host a JSON document.
+    const issues = validate(named({ metadataUrl: "", metadataMutable: false }));
+    expect(issueFor(issues, "metadataUrl")).toBeUndefined();
+    expect(noteFor(issues, "metadataUrl")).toBeUndefined();
+    expect(blockingIssues(issues)).toEqual([]);
+  });
+
+  it("measures the byte limit against whichever link will be recorded", () => {
+    // The bound belongs to the string the token stores, so an image long enough to
+    // overflow it has to be caught on the image field rather than on the empty one.
+    const overflows = `https://example.com/${"a".repeat(400)}.png`;
+    const issues = validate(named({ imageUrl: overflows, metadataUrl: "" }));
+    expect(issueFor(issues, "imageUrl")).toBeDefined();
+    expect(blockingIssues(issues).length).toBeGreaterThan(0);
   });
 
   it("refuses a fee split the registry cannot record", () => {
@@ -339,6 +393,7 @@ describe("what a launch submits", () => {
         .feeRecipient,
     ).toBe(elsewhere);
   });
+
 
   it("has nothing to submit until the draft can produce a price and a supply", () => {
     const derived = derive(named({ initialTick: "" }));

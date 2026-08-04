@@ -18,8 +18,8 @@ source, exported to plain files so it can be public before anything is deployed.
 | Route | What it is |
 |---|---|
 | `/` | Explore: every market, searchable by name, ticker, token or pool id, sortable by age, implied value, volume or fee, filterable by fixed against scheduled |
-| `/market/[id]` | One market: price history, the live fee, the whole fee ladder, trades, where the fees go, every contract behind it, and the model's own disclosure |
-| `/launch` | The model chooser: Classic, Stock-Paired, Evergreen, each with what it fixes and what is still missing |
+| `/market/[id]` | One market: a price chart at seven intervals, buying and selling, live trades, the live fee, the whole fee ladder, where the fees go, every contract behind it, and the model's own disclosure |
+| `/launch` | The model chooser: Classic, Stock-Paired, Evergreen, each with what it quotes against, what it fixes at creation and whether it is live |
 | `/launch/classic` | The launch form, quoted in ether |
 | `/launch/stock-paired` | The same form, quoted in a reviewed equity token |
 | `/profile` | What a creator will see about their own markets. Described rather than stubbed, because claiming is a transaction and the write path is not built |
@@ -80,14 +80,19 @@ mechanism: each maps onto the models the registry already knows about.
 
 | Model | On chain | Status |
 |---|---|---|
-| Classic | `fixed` for one fee, `progressive` for a schedule, quoted in ether | Ready — the contracts do exactly this |
-| Stock-Paired | The same, with a tokenized equity as `currency0` | Ready — the factory takes a quote asset, `ModelRegistry` admits it, and the splitter pays out in it. See ADR-008. The first buy is funded in the equity itself; nothing routes ether into it for you |
+| Classic | `fixed` for one fee, `progressive` for a schedule, quoted in ether | Live — deployed on Robinhood Chain and launchable from the form |
+| Stock-Paired | The same, with a tokenized equity as `currency0` | Live — the factory takes a quote asset, the deployed `ModelRegistry` admits the reviewed ones, and the splitter pays out in whichever was chosen. See ADR-008. The first buy is funded in the equity itself; nothing routes ether into it for you |
 | Evergreen | `evergreen` — a reserve share of fees, convertible into locked liquidity by anyone | Designed. The reserve share and the reinforce path exist in the contracts; the model is disabled in the registry and has no acceptance record |
 
-`packages/config/src/launch-models.ts` holds the copy for all three, including what each
-one fixes and what remains, and both the chooser and the forms read it. A model whose
-contract work is unfinished says so on its own page, in the words from that file — the
-alternative is an interface that offers a launch it cannot perform.
+`packages/config/src/launch-models.ts` holds the copy for all three, and both the chooser
+and the forms read it. `status` there describes contract readiness rather than interface
+readiness, because a form that takes input for a contract that cannot execute it is worse
+than no form: it is what decides whether a card offers a launch or a design to read.
+
+What a model still needs is not on its chooser card. Three cards a screen tall are harder
+to compare than three short ones, and the only model with anything left is the one whose
+badge already says `Design` and whose button already goes to the design. The list itself
+lives with the rest of the model's documentation, on `/docs/models`.
 
 ## The launch form
 
@@ -134,7 +139,7 @@ digit.
 
 ### What the form cannot do yet
 
-Three things are disclosed on the form itself rather than hidden:
+Two things are disclosed on the form itself rather than hidden:
 
 Separate buy and sell fees are selectable and warned about. The hook can enforce a
 direction-dependent fee without holding value, by reading `zeroForOne` in `beforeSwap`,
@@ -143,7 +148,55 @@ but that is not what is deployed; a market created today charges one fee both wa
 Splitting the creator's share across several addresses is selectable and warned about. One
 address receives the creator share today; it may be a splitter the creator runs.
 
-Nothing submits. `ConnectButton` is a placeholder until the SDK's write path exists.
+The initial buy is no longer among them: the factory is payable and performs it inside the
+same call that creates the token, the pool and the locked position, so there is no window
+between creation and the creator's purchase for anyone to trade in. See ADR-009.
+
+## Trading
+
+`src/components/trade-panel.tsx` buys and sells one market. Every number in it comes from
+Uniswap's `V4Quoter`, simulated against the real pool, because a Verdant pool's stored
+`slot0.lpFee` is written once at initialisation and never updated — the fee is a
+`beforeSwap` override, so anything deriving a price from stored state would quote the
+opening stage's fee forever and would do it silently. The quoter executes the hook.
+
+The balance beside the amount field is read from the chain rather than from the feed, and
+`Max` on an ether balance holds back the current gas price times an allowance for one swap:
+spending the last wei of the asset that pays for the transaction is a Max button whose
+transaction always fails. An amount above the balance stops at the button, before the
+approvals, since approving a token you do not hold enough of buys nothing.
+
+Approvals are explicit steps rather than a bundle. Ether needs none — v4 holds it directly
+and the input is the transaction's `value` — but everything else is pulled by the Universal
+Router through Permit2, which is two approvals that are not interchangeable, and a missing
+one reverts inside `SETTLE_ALL` where it reads as a broken market. Note that a **sell needs
+them whatever the market is quoted in**: the input is then the launch token.
+
+## Price history
+
+The chart is `lightweight-charts` drawing the closes of the candles the indexer buckets, at
+1m, 5m, 15m, 1h, 4h, 1D or 1W. Three things about it are decisions rather than defaults.
+
+A bucket nobody traded in still has a price, so the series arrives gapless. A
+constant-function pool quotes whatever the last trade left it at until somebody moves it,
+which is why `candles.fill` in the SDK forward-fills the holes and marks what it invented
+— and why the chart does no filling of its own. A client that invented points would be
+inventing prices.
+
+Prices cross every boundary as integers scaled by 10^36 and are formatted from those
+integers. Only the canvas sees a float, because a token here can be worth 10^-14 of an
+ether and a double loses the tail of that. The axis is labelled by the same `formatPrice`
+as the heading above it, with the digit count derived from the gridline spacing so that no
+two lines carry the same label — there is no exponential notation anywhere, since `2.3e-9`
+beside a heading reading `0.00000000234` is two notations for one number.
+
+The colours are the theme's, read from the cascade at mount and converted through a
+one-pixel canvas: the stylesheet is authored in `oklch`, the library parses colours itself
+and its parser predates that function, and handing it one throws hard enough to take the
+whole chart down. Converting is what keeps a single palette in `globals.css`.
+
+The chart and the trades table both poll — a tenth of the bucket for the chart, five
+seconds for the table — so a page left open follows the market without a reload.
 
 ## Quote assets
 
@@ -187,7 +240,7 @@ VERDANT_FEED_URL=http://127.0.0.1:42069 pnpm --filter @verdant/web dev
 ```
 
 ```bash
-pnpm --filter @verdant/web test        # feed parsing, launch validation and derivation
+pnpm --filter @verdant/web test        # feed parsing, launch validation, candles and the axis
 pnpm --filter @verdant/ui test         # formatting and tick maths
 pnpm --filter @verdant/web lint
 pnpm --filter @verdant/web exec tsc --noEmit

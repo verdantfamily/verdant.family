@@ -139,7 +139,12 @@ broadcast=$(cat "$log")
 # the address book is what a human reads and what step 6 of the runbook records. If the
 # two ever disagreed, this would be verifying the wrong thing loudly rather than the
 # right thing silently.
-address_of() { grep -m1 "^$1" <<<"$broadcast" | grep -o '0x[0-9a-fA-F]\{40\}'; }
+#
+# The leading whitespace in the pattern is not decoration: forge indents everything a
+# script logs by two spaces, so anchoring this to the start of the line found nothing
+# and the run refused a deployment that had in fact succeeded. Being refused after the
+# broadcast is the safe direction to be wrong in, but it is still wrong.
+address_of() { grep -m1 "^ *$1 " <<<"$broadcast" | grep -o '0x[0-9a-fA-F]\{40\}'; }
 factory=$(address_of "VerdantFactory")
 origin=$(address_of "FactoryOrigin")
 [ -n "$factory" ] && [ -n "$origin" ] || fail "the broadcast output had no address book, so the deployment could not be verified. Do not announce these addresses until Verify.s.sol has passed against them."
@@ -167,8 +172,8 @@ cat <<RECORD
   4663: {
     origin: "$origin",
     factory: "$factory",
-$(grep -E "^(ModelRegistry|MarketRegistry|VerdantDeployer|VerdantHook)" <<<"$broadcast" |
-  sed -E 's/^ModelRegistry +/    modelRegistry: "/; s/^MarketRegistry +/    marketRegistry: "/; s/^VerdantDeployer +/    deployer: "/; s/^VerdantHook +/    hook: "/; s/$/",/')
+$(grep -E "^ *(ModelRegistry|MarketRegistry|VerdantDeployer|VerdantHook) " <<<"$broadcast" |
+  sed -E 's/^ *ModelRegistry +/    modelRegistry: "/; s/^ *MarketRegistry +/    marketRegistry: "/; s/^ *VerdantDeployer +/    deployer: "/; s/^ *VerdantHook +/    hook: "/; s/ *$/",/')
   },
 
 Commit that with the transaction hashes in the message. It is the only durable record of

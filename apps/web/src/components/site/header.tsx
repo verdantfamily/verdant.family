@@ -41,19 +41,24 @@ export function Header({
     return href === "/" ? pathname === "/" : pathname.startsWith(href);
   }
 
+  /*
+   * Floating rather than a bar. The header carries no background of its own, so the
+   * photograph runs unbroken behind it and the controls read as glass pills laid on top —
+   * each one carries its own blur, which is what keeps their labels legible over a picture.
+   */
   return (
-    <header className="sticky top-0 z-40 border-b border-border/70 bg-canvas/75 shadow-sticky backdrop-blur-xl">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-6">
+    <header className="sticky top-0 z-40">
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
         <Link href="/" className="group flex items-center gap-2.5">
           <Mark mark={mark} lockup={lockup} />
-          <span className="text-[1.05rem] font-semibold tracking-tight text-ink">
-            Verdant
+          <span className="text-[1.02rem] font-medium tracking-tight text-ink">
+            verdant.family
           </span>
         </Link>
 
         {/* A well with a white pill in it, which is what a segmented control looks like on
             a dark surface: the track is pressed into the page rather than raised off it. */}
-        <nav className="hidden items-center rounded-full border border-border bg-surface-sunken p-1 md:flex">
+        <nav className="hidden items-center rounded-full border border-border bg-surface-sunken/80 p-1 backdrop-blur-xl md:flex">
           {NAV.map((item) => {
             const current = isCurrent(item.href);
             return (
@@ -76,33 +81,13 @@ export function Header({
         <div className="flex items-center gap-2">
           <Link
             href="/launch"
-            className="hidden h-9 items-center rounded-full border border-border bg-surface px-4 text-sm font-medium text-ink transition hover:border-border-strong hover:bg-surface-raised sm:inline-flex"
+            className="hidden h-9 items-center rounded-full border border-border bg-surface/80 px-4 text-sm font-medium text-ink backdrop-blur-xl transition hover:border-border-strong hover:bg-surface-raised md:inline-flex"
           >
-            Launch a token
+            Launch token
           </Link>
-          <ConnectButton />
+          <ConnectButton label="Connect Wallet" />
         </div>
       </div>
-
-      {/* On a phone the segmented control does not fit beside the wordmark, so it moves
-          to its own scrollable row rather than collapsing into a menu nobody opens. */}
-      <nav className="flex items-center gap-1 overflow-x-auto border-t border-border/70 px-4 pb-2 pt-1.5 md:hidden">
-        {NAV.map((item) => {
-          const current = isCurrent(item.href);
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              aria-current={current ? "page" : undefined}
-              className={`shrink-0 rounded-full px-3.5 py-1.5 text-sm transition ${
-                current ? "bg-ink text-ink-inverse" : "text-ink-muted"
-              }`}
-            >
-              {item.label}
-            </Link>
-          );
-        })}
-      </nav>
     </header>
   );
 }

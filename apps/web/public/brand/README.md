@@ -22,10 +22,10 @@ from and why.
 |---|---|
 | `mark.png` | The mark in the header, beside the wordmark. Absent, the header draws a sprout instead |
 | `logo.png` | The lockup, used only if there is no separate mark |
-| `bg.jpg` | The full-bleed photograph under every page, scrimmed hard enough to read tables over |
+| `bg.jpg` | The full-bleed photograph under every page, shown unmodified — tables stay readable because the surfaces over it are translucent above a backdrop blur |
 | `favicon.png` | The tab icon |
 | `og.jpg` | Generated for the teaser's link card; the launchpad does not reference it yet |
 
 `src/lib/brand.ts` resolves these by name and returns `null` for anything missing, so a
-clone that has never run the generator renders a drawn mark on a moving background rather
+clone that has never run the generator renders a drawn mark on the canvas colour rather
 than a page of broken images.

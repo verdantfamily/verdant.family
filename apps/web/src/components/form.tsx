@@ -66,6 +66,7 @@ export function Field({
   label,
   hint,
   error,
+  note,
   htmlFor,
   children,
   counter,
@@ -73,6 +74,14 @@ export function Field({
   readonly label: string;
   readonly hint?: ReactNode | undefined;
   readonly error?: string | undefined;
+  /**
+   * Something true about the value that is not a fault in it.
+   *
+   * Kept apart from `error` so that the form has a way of remarking without accusing. A
+   * single style for both taught people to read anything under a field as a fault, which
+   * is how a field can end up outlined in red for a value the chain accepts.
+   */
+  readonly note?: string | undefined;
   readonly htmlFor?: string | undefined;
   readonly children: ReactNode;
   /** e.g. `12 / 32`, right-aligned against the label. */
@@ -91,6 +100,11 @@ export function Field({
       {children}
       {error !== undefined ? (
         <p className="mt-1.5 text-[0.75rem] text-fall">{error}</p>
+      ) : note !== undefined ? (
+        <p className="mt-1.5 flex gap-1.5 text-[0.75rem] leading-relaxed text-ink-muted">
+          <span aria-hidden="true" className="mt-1.5 size-1 shrink-0 rounded-full bg-ink-faint" />
+          {note}
+        </p>
       ) : hint === undefined ? null : (
         <p className="mt-1.5 text-[0.75rem] leading-relaxed text-ink-muted">{hint}</p>
       )}
@@ -265,11 +279,27 @@ export function Segmented<T extends string>({
   onChange,
   options,
   size = "default",
+  wrap = true,
+  full = false,
 }: {
   readonly value: T;
   readonly onChange: (value: T) => void;
   readonly options: readonly { readonly value: T; readonly label: string }[];
   readonly size?: "default" | "small";
+  /**
+   * Whether the pills may reflow onto a second line. Off for a control that lives in a
+   * horizontal-scroll strip on a phone — there it must stay one line and let the strip
+   * scroll, rather than wrap into a tall block.
+   */
+  readonly wrap?: boolean;
+  /**
+   * Stretch to the width of the container, splitting it evenly between the options.
+   *
+   * For a control that is the top of a card rather than something sitting in a row with
+   * other things — the trade panel's Buy/Sell. There the segments are the widest target on
+   * the card and shrinking them to fit two short words would waste that.
+   */
+  readonly full?: boolean;
 }) {
   const padding = size === "small" ? "px-3 py-1 text-[0.78rem]" : "px-4 py-2 text-[0.85rem]";
 
@@ -279,7 +309,9 @@ export function Segmented<T extends string>({
       /* Blurred as well as sunken: this control is used both inside a card and straight on
          the page, and in the second case it is the only thing between its labels and the
          photograph. */
-      className="inline-flex flex-wrap gap-1 rounded-full border border-border bg-surface-sunken p-1 backdrop-blur-xl"
+      className={`gap-1 rounded-full border border-border bg-surface-sunken p-1 backdrop-blur-xl ${
+        full ? "flex w-full" : "inline-flex"
+      } ${wrap ? "flex-wrap" : "shrink-0 flex-nowrap"}`}
     >
       {options.map((option) => {
         const selected = option.value === value;
@@ -293,7 +325,9 @@ export function Segmented<T extends string>({
             /* The chosen segment is `surface-raised` rather than `surface`: the track it
                sits in is a well, and 5.5% white inside 18% black is a difference you have
                to look for. The inner light edge in `shadow-card` does the rest. */
-            className={`rounded-full font-medium transition ${padding} ${
+            className={`whitespace-nowrap rounded-full font-medium transition ${padding} ${
+              full ? "flex-1" : ""
+            } ${
               selected
                 ? "bg-surface-raised text-ink shadow-card"
                 : "text-ink-muted hover:text-ink"

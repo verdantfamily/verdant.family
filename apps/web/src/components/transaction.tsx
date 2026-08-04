@@ -65,7 +65,8 @@ export interface TransactionRun {
  * to fail" and offers to send it anyway — and if the reader accepts, they pay for a
  * revert whose reason is four bytes in a trace. So the call is made against the node
  * first, from the reader's own address, and a revert there is decoded and named before
- * a wallet is ever opened. It costs one `eth_call`.
+ * a wallet is ever opened. The same round trip yields the gas limit the wallet is then
+ * handed, for the reason `send` gives where it asks for it.
  */
 interface RunState {
   readonly phase: TransactionPhase;
@@ -112,11 +113,30 @@ export function useTransaction(): TransactionRun {
           value: call.value,
         });
 
+        // A limit, found here rather than left to the wallet.
+        //
+        // A launch is 3.5 million gas and Robinhood Chain is new enough that wallets
+        // support it unevenly: one that cannot estimate on it fails at the moment of
+        // signing, with no reason to show, on a transaction the chain would have
+        // accepted. Estimating from the reader's own address costs one call and turns
+        // that into a signature. The buffer is for the drift between this block and
+        // the one that includes it; unused gas is not charged.
+        const gas = await client
+          .estimateGas({
+            ...(address === undefined ? {} : { account: address }),
+            to: call.to,
+            data: call.data,
+            value: call.value,
+          })
+          .then((estimate) => (estimate * 125n) / 100n)
+          .catch(() => undefined);
+
         const hash = await sendTransactionAsync({
           to: call.to,
           data: call.data,
           value: call.value,
           chainId: CHAIN_ID,
+          ...(gas === undefined ? {} : { gas }),
         });
         setState({ phase: "pending", hash });
 

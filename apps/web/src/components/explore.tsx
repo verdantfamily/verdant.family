@@ -66,9 +66,12 @@ function compare(ordering: Ordering, a: Market, b: Market): number {
 export function Explore({
   markets,
   at,
+  usdPerEth,
 }: {
   readonly markets: readonly Market[];
   readonly at: number;
+  /** Dollars per ether, or `null` when no price could be had. Display only. */
+  readonly usdPerEth: number | null;
 }) {
   const [query, setQuery] = useState("");
   const [ordering, setOrdering] = useState<Ordering>("newest");
@@ -122,9 +125,14 @@ export function Explore({
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        {/* On a phone the two controls do not fit on one line, so rather than wrap into a
+            tall block they become a single edge-to-edge strip that scrolls sideways —
+            `-mx-4 px-4` bleeds it to the screen edges the page's own padding leaves. On a
+            wider screen they wrap normally and the strip behaviour is switched off. */}
+        <div className="-mx-4 flex items-center gap-2.5 overflow-x-auto px-4 pb-1 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:gap-3 sm:overflow-visible sm:px-0 sm:pb-0 [&::-webkit-scrollbar]:hidden">
           <Segmented
             size="small"
+            wrap={false}
             value={model}
             onChange={setModel}
             options={[
@@ -133,7 +141,13 @@ export function Explore({
               { value: "progressive", label: "Scheduled" },
             ]}
           />
-          <Segmented size="small" value={ordering} onChange={setOrdering} options={ORDERINGS} />
+          <Segmented
+            size="small"
+            wrap={false}
+            value={ordering}
+            onChange={setOrdering}
+            options={ORDERINGS}
+          />
         </div>
       </div>
 
@@ -152,9 +166,9 @@ export function Explore({
           </p>
         </div>
       ) : (
-        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
           {shown.map((market) => (
-            <MarketCard key={market.poolId} market={market} at={at} />
+            <MarketCard key={market.poolId} market={market} at={at} usdPerEth={usdPerEth} />
           ))}
         </div>
       )}

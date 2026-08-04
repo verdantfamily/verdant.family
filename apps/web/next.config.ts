@@ -13,6 +13,15 @@ const nextConfig: NextConfig = {
   // Pin the trace root to this repo. Without it Next walks up looking for a
   // lockfile and can settle on one outside the workspace entirely.
   outputFileTracingRoot: resolve(here, "../.."),
+  // `src/lib/brand.ts` decides whether a logo or the background photograph exists by asking
+  // the filesystem for it, and a serverless function does not get `public/` — the CDN serves
+  // that. So on a prerendered route the check ran on the build machine and found the files,
+  // while on a dynamic one it ran in the function and found nothing: the home page shipped
+  // with no photograph, the drawn sprout instead of the mark, and no favicon, while `/launch`
+  // looked correct. Tracing the directory in puts those files where the check already looks.
+  outputFileTracingIncludes: {
+    "/**": ["./public/brand/**"],
+  },
   // The workspace packages ship TypeScript sources; Next compiles them itself
   // rather than depending on a prior build step.
   transpilePackages: ["@verdant/config", "@verdant/sdk", "@verdant/ui"],

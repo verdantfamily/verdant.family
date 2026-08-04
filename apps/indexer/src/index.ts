@@ -24,6 +24,28 @@
  * Reading is not a weaker source than an event here: it is the contract's own
  * account of its state at a block that is already settled by the time it is indexed.
  * It costs a handful of calls once per market, which is a rare event.
+ *
+ * Every one of those reads passes `cache: "immutable"`, which asks Ponder for the value
+ * at the latest block rather than at the block the event arrived in, and to remember it
+ * forever. Two reasons, and either alone would be enough.
+ *
+ * The values cannot change. A supply that is minted once with no mint function, a fee
+ * schedule the hook writes at initialisation and refuses to edit, a registry entry that
+ * reverts with `MarketAlreadyRegistered` on a second write, an ERC-20's decimals: for all
+ * of these, "at that block" and "now" are the same answer, so asking for the settled one
+ * buys nothing.
+ *
+ * And asking for the settled one does not work. Robinhood's public RPC keeps no archive
+ * state: an `eth_call` at a block more than about an hour old comes back
+ * `metadata is not found, <block>`, and the handler that made it fails permanently rather
+ * than transiently. An indexer that reads at event blocks can therefore never *backfill*
+ * this chain from the public endpoint — it can only keep up with the tip it is already at.
+ * That is not a rate limit to be waited out; it is the shape of the node.
+ *
+ * The one value here that is genuinely mutable is `metadataURI`, and only for a token whose
+ * creator chose `metadataMutable`. Reading the current one is right anyway: every change to
+ * it arrives as `MetadataURIUpdated` and is applied by the handler at the bottom of this
+ * file, so the column holds the newest URI either way.
  */
 
 import { ponder } from "ponder:registry";
@@ -116,6 +138,7 @@ ponder.on("VerdantFactory:MarketCreated", async ({ event, context }) => {
     abi: abi.verdantFactoryAbi,
     address: event.log.address,
     functionName: "marketRegistry",
+    cache: "immutable",
   });
 
   // What the quote asset calls itself. Started here rather than awaited here, so
@@ -129,12 +152,23 @@ ponder.on("VerdantFactory:MarketCreated", async ({ event, context }) => {
     quoteAsset === ZERO_ADDRESS
       ? Promise.resolve(ETHER)
       : Promise.all([
-          context.client.readContract({ abi: erc20Abi, address: quoteAsset, functionName: "name" }),
-          context.client.readContract({ abi: erc20Abi, address: quoteAsset, functionName: "symbol" }),
+          context.client.readContract({
+            abi: erc20Abi,
+            address: quoteAsset,
+            functionName: "name",
+            cache: "immutable",
+          }),
+          context.client.readContract({
+            abi: erc20Abi,
+            address: quoteAsset,
+            functionName: "symbol",
+            cache: "immutable",
+          }),
           context.client.readContract({
             abi: erc20Abi,
             address: quoteAsset,
             functionName: "decimals",
+            cache: "immutable",
           }),
         ]);
 
@@ -145,30 +179,50 @@ ponder.on("VerdantFactory:MarketCreated", async ({ event, context }) => {
         address: registry,
         functionName: "marketOf",
         args: [poolId],
+        cache: "immutable",
       }),
       context.client.readContract({
         abi: abi.verdantHookAbi,
         address: context.contracts.VerdantHook.address,
         functionName: "configOf",
         args: [poolId],
+        cache: "immutable",
       }),
-      context.client.readContract({ abi: abi.verdantTokenAbi, address: token, functionName: "name" }),
-      context.client.readContract({ abi: abi.verdantTokenAbi, address: token, functionName: "symbol" }),
-      context.client.readContract({ abi: abi.verdantTokenAbi, address: token, functionName: "decimals" }),
+      context.client.readContract({
+        abi: abi.verdantTokenAbi,
+        address: token,
+        functionName: "name",
+        cache: "immutable",
+      }),
+      context.client.readContract({
+        abi: abi.verdantTokenAbi,
+        address: token,
+        functionName: "symbol",
+        cache: "immutable",
+      }),
+      context.client.readContract({
+        abi: abi.verdantTokenAbi,
+        address: token,
+        functionName: "decimals",
+        cache: "immutable",
+      }),
       context.client.readContract({
         abi: abi.verdantTokenAbi,
         address: token,
         functionName: "totalSupply",
+        cache: "immutable",
       }),
       context.client.readContract({
         abi: abi.verdantTokenAbi,
         address: token,
         functionName: "metadataURI",
+        cache: "immutable",
       }),
       context.client.readContract({
         abi: abi.verdantTokenAbi,
         address: token,
         functionName: "metadataMutable",
+        cache: "immutable",
       }),
     ]);
 
@@ -283,6 +337,7 @@ ponder.on("PoolManager:Swap", async ({ event, context }) => {
     feePpm: event.args.fee,
     timestamp: Number(event.block.timestamp),
     blockNumber: event.block.number,
+    logIndex: event.log.logIndex,
     transactionHash: event.transaction.hash,
   });
 

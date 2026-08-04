@@ -38,7 +38,7 @@
  * Usage: pnpm abis:emit  (from the repository root)
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -61,6 +61,8 @@ const OWN: readonly { readonly contract: string; readonly binding: string }[] = 
   { contract: "VerdantToken", binding: "verdantTokenAbi" },
   { contract: "FeeSplitter", binding: "feeSplitterAbi" },
   { contract: "PositionLocker", binding: "positionLockerAbi" },
+  { contract: "FeeForwarder", binding: "feeForwarderAbi" },
+  { contract: "FeeForwarderFactory", binding: "feeForwarderFactoryAbi" },
   { contract: "TokenVesting", binding: "tokenVestingAbi" },
   { contract: "FactoryOrigin", binding: "factoryOriginAbi" },
 ];
@@ -104,16 +106,45 @@ const UPSTREAM: readonly {
   },
 ];
 
+/**
+ * Where Foundry put a contract's artefact.
+ *
+ * Usually `out/<Contract>.sol/<Contract>.json`, because a file here holds the
+ * contract it is named after. That is a convention rather than a rule, and Solidity
+ * does not care: a factory that needs `type(Thing).creationCode` may reasonably sit
+ * beside `Thing`, and then its artefact is under the *file's* name. So the
+ * conventional path is tried and the output directory is searched if it is not
+ * there, which turns "no artefact" back into what it should mean — the contract was
+ * not compiled — rather than "it is not where the name suggested".
+ */
+function artefactPath(contract: string): string | null {
+  const conventional = `${ARTIFACTS}/${contract}.sol/${contract}.json`;
+  if (existsSync(conventional)) return conventional;
+
+  for (const entry of readdirSync(ARTIFACTS, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const candidate = `${ARTIFACTS}/${entry.name}/${contract}.json`;
+    if (existsSync(candidate)) return candidate;
+  }
+
+  return null;
+}
+
 function abiOf(contract: string): readonly AbiEntry[] {
-  const path = `${ARTIFACTS}/${contract}.sol/${contract}.json`;
+  const path = artefactPath(contract);
+  if (path === null) {
+    throw new Error(
+      `no artefact for ${contract} anywhere under ${ARTIFACTS}. Run \`forge build\` in ` +
+        `packages/contracts first; this script reads the compiler's output rather than ` +
+        `the source.`,
+    );
+  }
+
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
   } catch {
-    throw new Error(
-      `no artefact at ${path}. Run \`forge build\` in packages/contracts first; ` +
-        `this script reads the compiler's output rather than the source.`,
-    );
+    throw new Error(`could not read ${path}`);
   }
 
   const artifact: unknown = JSON.parse(raw);

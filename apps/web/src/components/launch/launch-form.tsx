@@ -32,12 +32,15 @@ import {
   issueFor,
   launchParams,
   metadataDocument,
+  metadataUriOf,
+  noteFor,
   readableParams,
   type Custody,
   type LaunchDraft,
   type RewardMode,
 } from "../../lib/launch";
 import { validate } from "../../lib/launch";
+import { ImageUpload } from "./image-upload";
 import { LaunchSubmit, useMinedLaunch } from "./launch-submit";
 import { QuotePicker } from "./quote-picker";
 import { ScheduleEditor } from "./schedule-editor";
@@ -98,6 +101,134 @@ export function LaunchForm({ modelId }: { readonly modelId: LaunchModelId }) {
       ? null
       : launchParams(draft, derived, { creator: address, salt: mined.salt });
 
+  // The choices most launches never touch. Every one has a default that produces a valid
+  // launch on its own — a billion supply, a mid-range opening price, one flat fee, no
+  // allocation, the image as the on-chain URI, frozen — so this is where control lives
+  // for the creator who wants it, not a set of blanks the rest have to fill in. Collapsed
+  // for Classic (below), shown inline for Stock-Paired, whose creators are already past
+  // the simple case by choosing it.
+  const advancedSections = (
+    <>
+      {/* ------------------------------------------------ metadata and permanence */}
+      <FormSection
+        title="Metadata &amp; permanence"
+        description="Where the token's details live, and whether that pointer can ever change. Left alone, the image you uploaded is what goes on chain, frozen forever."
+      >
+        <OnChainUri uri={metadataUriOf(draft)} />
+
+        <Field
+          label="Metadata document"
+          htmlFor="metadataUrl"
+          error={issueFor(issues, "metadataUrl")}
+          counter={`${byteLength(draft.metadataUrl)} / ${BOUNDS.token.metadataUriLength.max}`}
+          hint="Optional, and only if you host one. Leave it empty and the image you uploaded is what goes on chain."
+        >
+          <TextInput
+            id="metadataUrl"
+            value={draft.metadataUrl}
+            onChange={(value) => set("metadataUrl", value)}
+            placeholder="https://…/token.json"
+            invalid={issueFor(issues, "metadataUrl") !== undefined}
+          />
+        </Field>
+
+        <Field
+          label="Can that link be changed later?"
+          hint="A frozen token points at that one address forever, including for you. A mutable one says on chain that it is mutable, so a reader can weigh it."
+        >
+          <Segmented
+            value={draft.metadataMutable ? "mutable" : "frozen"}
+            onChange={(value) => set("metadataMutable", value === "mutable")}
+            options={[
+              { value: "frozen", label: "Frozen forever" },
+              { value: "mutable", label: "Editable by me" },
+            ]}
+          />
+        </Field>
+      </FormSection>
+
+      {/* ------------------------------------------------------- supply and price */}
+      <FormSection
+        title="Supply and opening price"
+        description="The whole supply is minted once and placed into the pool as one-sided liquidity. The opening tick sets what the first buyer pays. Defaults to one billion at a mid-range price."
+      >
+        <div className="grid gap-5 sm:grid-cols-2">
+          <Field
+            label="Total supply"
+            htmlFor="supply"
+            error={issueFor(issues, "supplyTokens")}
+            hint={
+              derived.supplyTokens === null
+                ? undefined
+                : `${formatCompact(derived.supplyTokens, 0)} tokens, minted once`
+            }
+          >
+            <AmountInput
+              id="supply"
+              value={draft.supplyTokens}
+              onChange={(value) => set("supplyTokens", value)}
+              unit="tokens"
+              invalid={issueFor(issues, "supplyTokens") !== undefined}
+            />
+          </Field>
+
+          <Field
+            label="Opening tick"
+            htmlFor="tick"
+            error={issueFor(issues, "initialTick")}
+            hint={`A multiple of ${BOUNDS.liquidity.tickSpacing}. Higher means more tokens per ${derived.quoteLabel}, so a cheaper token.`}
+          >
+            <AmountInput
+              id="tick"
+              value={draft.initialTick}
+              onChange={(value) => set("initialTick", value)}
+              invalid={issueFor(issues, "initialTick") !== undefined}
+            />
+          </Field>
+        </div>
+
+        <div className="rounded-xl border border-border bg-surface-sunken px-5 py-4">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <p className="text-[0.7rem] uppercase tracking-wider text-ink-muted">
+                Opening price
+              </p>
+              <p className="numeric mt-1 text-[0.95rem] text-ink">
+                {price === null ? "—" : `${formatPrice(price)} ${derived.quoteLabel}`}
+              </p>
+            </div>
+            <div>
+              <p className="text-[0.7rem] uppercase tracking-wider text-ink-muted">
+                Per {derived.quoteLabel}
+              </p>
+              <p className="numeric mt-1 text-[0.95rem] text-ink">
+                {derived.openingPrice === null
+                  ? "—"
+                  : `${formatCompact(derived.openingPrice)} ${symbol}`}
+              </p>
+            </div>
+            <div>
+              <p className="text-[0.7rem] uppercase tracking-wider text-ink-muted">
+                Supply implies
+              </p>
+              <p className="numeric mt-1 text-[0.95rem] text-ink">
+                {derived.impliedValueQuote === null
+                  ? "—"
+                  : `${formatAmount(derived.impliedValueQuote, { decimals: derived.quoteDecimals, places: 4 })} ${derived.quoteLabel}`}
+              </p>
+            </div>
+          </div>
+          <p className="mt-3 text-[0.72rem] leading-relaxed text-ink-muted">
+            What the supply implies at the opening price is not a valuation and is not what
+            it would fetch if sold. The pool is created with no {derived.quoteLabel} in it;
+            the first buy brings the first of it, and that buy is yours if you set one below.
+          </p>
+        </div>
+      </FormSection>
+
+    </>
+  );
+
   return (
     <div className="mx-auto grid max-w-6xl gap-6 px-6 lg:grid-cols-[1fr_22rem] lg:items-start">
       <div className="space-y-6">
@@ -126,6 +257,7 @@ export function LaunchForm({ modelId }: { readonly modelId: LaunchModelId }) {
               label="Ticker"
               htmlFor="symbol"
               error={issueFor(issues, "symbol")}
+              note={noteFor(issues, "symbol")}
               counter={`${byteLength(draft.symbol.replace(/^\$/, ""))} / ${BOUNDS.token.symbolLength.max}`}
             >
               <TextInput
@@ -154,22 +286,11 @@ export function LaunchForm({ modelId }: { readonly modelId: LaunchModelId }) {
             />
           </Field>
 
-          <div className="grid gap-5 sm:grid-cols-2">
-            <Field
-              label="Image"
-              htmlFor="image"
-              error={issueFor(issues, "imageUrl")}
-              hint="A square image, linked over https or ipfs."
-            >
-              <TextInput
-                id="image"
-                value={draft.imageUrl}
-                onChange={(value) => set("imageUrl", value)}
-                placeholder="https://…/token.png"
-                invalid={issueFor(issues, "imageUrl") !== undefined}
-              />
-            </Field>
+          <Field label="Image" error={issueFor(issues, "imageUrl")}>
+            <ImageUpload value={draft.imageUrl} onChange={(uri) => set("imageUrl", uri)} />
+          </Field>
 
+          <div className="grid gap-5 sm:grid-cols-2">
             <Field label="Website" htmlFor="website" error={issueFor(issues, "website")}>
               <TextInput
                 id="website"
@@ -199,45 +320,6 @@ export function LaunchForm({ modelId }: { readonly modelId: LaunchModelId }) {
             </Field>
           </div>
 
-          <Field
-            label="Metadata address"
-            htmlFor="metadataUrl"
-            error={issueFor(issues, "metadataUrl")}
-            counter={`${byteLength(draft.metadataUrl)} / ${BOUNDS.token.metadataUriLength.max}`}
-            hint="An image, or a JSON document like the one at the foot of this page. Leave it empty to launch with a name and a ticker alone."
-          >
-            <TextInput
-              id="metadataUrl"
-              value={draft.metadataUrl}
-              onChange={(value) => set("metadataUrl", value)}
-              placeholder="https://…/token.json"
-              invalid={issueFor(issues, "metadataUrl") !== undefined}
-            />
-          </Field>
-
-          <Notice title="Verdant does not host this for you">
-            The token stores one string of at most{" "}
-            {BOUNDS.token.metadataUriLength.max} bytes, which is room for an address and
-            not for a document — so what goes on chain is the address you give above,
-            exactly as typed. Nothing is uploaded or pinned on your behalf: this
-            repository runs no such service, and one added quietly would be a dependency
-            you did not choose and could not replace. Host the document anywhere you
-            control.
-          </Notice>
-
-          <Field
-            label="Can that address be changed later?"
-            hint="A frozen token can never point anywhere else — including by you. A mutable one discloses on chain that it is mutable, so a reader can weigh it. This is the choice that decides whether you can move to a richer document afterwards."
-          >
-            <Segmented
-              value={draft.metadataMutable ? "mutable" : "frozen"}
-              onChange={(value) => set("metadataMutable", value === "mutable")}
-              options={[
-                { value: "frozen", label: "Frozen forever" },
-                { value: "mutable", label: "Editable by me" },
-              ]}
-            />
-          </Field>
         </FormSection>
 
         {/* ------------------------------------------------------------------- pair */}
@@ -264,85 +346,6 @@ export function LaunchForm({ modelId }: { readonly modelId: LaunchModelId }) {
           </FormSection>
         ) : null}
 
-        {/* ------------------------------------------------------- supply and price */}
-        <FormSection
-          title="Supply and opening price"
-          description="The whole supply is minted once and placed into the pool as one-sided liquidity. The opening tick sets what the first buyer pays."
-        >
-          <div className="grid gap-5 sm:grid-cols-2">
-            <Field
-              label="Total supply"
-              htmlFor="supply"
-              error={issueFor(issues, "supplyTokens")}
-              hint={
-                derived.supplyTokens === null
-                  ? undefined
-                  : `${formatCompact(derived.supplyTokens, 0)} tokens, minted once`
-              }
-            >
-              <AmountInput
-                id="supply"
-                value={draft.supplyTokens}
-                onChange={(value) => set("supplyTokens", value)}
-                unit="tokens"
-                invalid={issueFor(issues, "supplyTokens") !== undefined}
-              />
-            </Field>
-
-            <Field
-              label="Opening tick"
-              htmlFor="tick"
-              error={issueFor(issues, "initialTick")}
-              hint={`A multiple of ${BOUNDS.liquidity.tickSpacing}. Higher means more tokens per ${derived.quoteLabel}, so a cheaper token.`}
-            >
-              <AmountInput
-                id="tick"
-                value={draft.initialTick}
-                onChange={(value) => set("initialTick", value)}
-                invalid={issueFor(issues, "initialTick") !== undefined}
-              />
-            </Field>
-          </div>
-
-          <div className="rounded-xl border border-border bg-surface-sunken px-5 py-4">
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div>
-                <p className="text-[0.7rem] uppercase tracking-wider text-ink-muted">
-                  Opening price
-                </p>
-                <p className="numeric mt-1 text-[0.95rem] text-ink">
-                  {price === null ? "—" : `${formatPrice(price)} ${derived.quoteLabel}`}
-                </p>
-              </div>
-              <div>
-                <p className="text-[0.7rem] uppercase tracking-wider text-ink-muted">
-                  Per {derived.quoteLabel}
-                </p>
-                <p className="numeric mt-1 text-[0.95rem] text-ink">
-                  {derived.openingPrice === null
-                    ? "—"
-                    : `${formatCompact(derived.openingPrice)} ${symbol}`}
-                </p>
-              </div>
-              <div>
-                <p className="text-[0.7rem] uppercase tracking-wider text-ink-muted">
-                  Supply implies
-                </p>
-                <p className="numeric mt-1 text-[0.95rem] text-ink">
-                  {derived.impliedValueQuote === null
-                    ? "—"
-                    : `${formatAmount(derived.impliedValueQuote, { decimals: derived.quoteDecimals, places: 4 })} ${derived.quoteLabel}`}
-                </p>
-              </div>
-            </div>
-            <p className="mt-3 text-[0.72rem] leading-relaxed text-ink-muted">
-              What the supply implies at the opening price is not a valuation and is not what
-              it would fetch if sold. The pool is created with no {derived.quoteLabel} in it;
-              the first buy brings the first of it, and that buy is yours if you set one below.
-            </p>
-          </div>
-        </FormSection>
-
         {/* -------------------------------------------------------------------- fees */}
         <FormSection
           title="Swap fee"
@@ -360,47 +363,17 @@ export function LaunchForm({ modelId }: { readonly modelId: LaunchModelId }) {
           </Field>
 
           {draft.feeShape === "flat" ? (
-            <>
-              <Field label="Direction">
-                <Segmented
-                  value={draft.directional ? "split" : "same"}
-                  onChange={(value) => set("directional", value === "split")}
-                  options={[
-                    { value: "same", label: "Same both ways" },
-                    { value: "split", label: "Separate buy and sell" },
-                  ]}
-                />
-              </Field>
-
-              <div className="grid gap-5 sm:grid-cols-2">
-                <Field
-                  label={draft.directional ? "Buy fee" : "Fee"}
-                  error={issueFor(issues, "buyFeePercent")}
-                >
-                  <FeeInput
-                    value={draft.buyFeePercent}
-                    onChange={(value) => set("buyFeePercent", value)}
-                    invalid={issueFor(issues, "buyFeePercent") !== undefined}
-                  />
-                </Field>
-
-                {draft.directional ? (
-                  <Field label="Sell fee" error={issueFor(issues, "sellFeePercent")}>
-                    <FeeInput
-                      value={draft.sellFeePercent}
-                      onChange={(value) => set("sellFeePercent", value)}
-                      invalid={issueFor(issues, "sellFeePercent") !== undefined}
-                    />
-                  </Field>
-                ) : null}
-              </div>
-
-              {issueFor(issues, "directional") === undefined ? null : (
-                <Notice title="Separate directions are not deployed yet">
-                  {issueFor(issues, "directional")}
-                </Notice>
-              )}
-            </>
+            <Field
+              label="Fee"
+              error={issueFor(issues, "buyFeePercent")}
+              hint="Charged on every swap, buys and sells alike. Separate buy and sell fees are not live on chain yet."
+            >
+              <FeeInput
+                value={draft.buyFeePercent}
+                onChange={(value) => set("buyFeePercent", value)}
+                invalid={issueFor(issues, "buyFeePercent") !== undefined}
+              />
+            </Field>
           ) : (
             <ScheduleEditor
               stages={draft.stages}
@@ -431,9 +404,12 @@ export function LaunchForm({ modelId }: { readonly modelId: LaunchModelId }) {
           title="Where the fees go"
           description="One address receives your share of every fee this market ever collects. It is fixed at creation, so nobody — including us — can redirect it later."
         >
-          <Field label="Recipient">
+          <Field
+            label="Recipient"
+            hint="On chain the market records one recipient. To split fees across several wallets, point this at a splitter or multisig you control."
+          >
             <CardChoice
-              columns={3}
+              columns={2}
               value={draft.rewardMode}
               onChange={(value) => set("rewardMode", value as RewardMode)}
               options={[
@@ -446,11 +422,6 @@ export function LaunchForm({ modelId }: { readonly modelId: LaunchModelId }) {
                   value: "another-wallet",
                   label: "Another address",
                   description: "A multisig, a treasury, or a splitter you already run.",
-                },
-                {
-                  value: "split",
-                  label: "Split it",
-                  description: "Share it across several addresses by percentage.",
                 },
               ]}
             />
@@ -473,14 +444,12 @@ export function LaunchForm({ modelId }: { readonly modelId: LaunchModelId }) {
               />
             </Field>
           ) : null}
-
-          {draft.rewardMode === "split" ? <SplitEditor draft={draft} set={set} issues={issues} /> : null}
         </FormSection>
 
         {/* -------------------------------------------------------------- allocation */}
         <FormSection
           title="Your allocation"
-          description="A share of supply held back from the pool for you. The rest becomes the launch liquidity."
+          description="A share of supply held back from the pool for you. Left at zero, the whole supply becomes launch liquidity — the initial buy below is delivered to you immediately either way."
         >
           <div className="grid gap-5 sm:grid-cols-2">
             <Field
@@ -506,8 +475,8 @@ export function LaunchForm({ modelId }: { readonly modelId: LaunchModelId }) {
           {derived.allocationBps > 0 ? (
             <>
               <Field
-                label="When you can access it"
-                hint="Enforced by a vesting contract, not by a promise. A schedule cannot be shortened afterwards."
+                label="Token access"
+                hint="When this reserved allocation unlocks. Enforced by a vesting contract, not by a promise — a schedule cannot be shortened afterwards."
               >
                 <CardChoice
                   columns={2}
@@ -612,13 +581,42 @@ export function LaunchForm({ modelId }: { readonly modelId: LaunchModelId }) {
             rather than to you.
           </Notice>
         </FormSection>
+
+        {/* --------------------------------------------------------------- advanced */}
+        {paired ? (
+          advancedSections
+        ) : (
+          <details className="group">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-4 rounded-panel border border-border bg-surface px-6 py-4 text-[0.95rem] font-semibold text-ink shadow-card backdrop-blur-xl transition hover:border-border-strong [&::-webkit-details-marker]:hidden">
+              <span>
+                Advanced options
+                <span className="ml-2 text-[0.8rem] font-normal text-ink-muted">
+                  supply, opening price, and on-chain metadata
+                </span>
+              </span>
+              <svg
+                viewBox="0 0 16 16"
+                aria-hidden="true"
+                className="size-4 shrink-0 text-ink-muted transition-transform group-open:rotate-180"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M4 6.5 8 10.5l4-4" />
+              </svg>
+            </summary>
+            <div className="mt-6 space-y-6">{advancedSections}</div>
+          </details>
+        )}
       </div>
 
       {/* ------------------------------------------------------------------ summary */}
       <aside className="lg:sticky lg:top-24">
         <div className="rounded-panel border border-border bg-surface p-6 shadow-card backdrop-blur-xl">
           <div className="flex items-center gap-3">
-            <TokenAvatar symbol={symbol} />
+            <TokenAvatar symbol={symbol} uri={metadataUriOf(draft)} />
             <div className="min-w-0">
               <p className="numeric truncate text-[1rem] font-semibold text-ink">{symbol}</p>
               <p className="truncate text-[0.8rem] text-ink-muted">
@@ -790,6 +788,33 @@ export function LaunchForm({ modelId }: { readonly modelId: LaunchModelId }) {
 }
 
 /**
+ * The one string the token will record, resolved from the two fields that can fill it.
+ *
+ * Shown rather than explained because the rule is trivial and the consequence is not: this
+ * is the only piece of the identity the chain keeps, every interface reads it, and a token
+ * launched with it empty has no picture anywhere and no way to acquire one if the link was
+ * frozen. Saying so once, next to the value, beats a paragraph nobody finishes.
+ */
+function OnChainUri({ uri }: { readonly uri: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-surface-sunken px-4 py-3">
+      <p className="text-[0.7rem] uppercase tracking-wide text-ink-faint">
+        Recorded on chain
+      </p>
+      {uri === "" ? (
+        <p className="mt-1 text-[0.8rem] leading-relaxed text-ink-muted">
+          Nothing. The token will carry its name and ticker and no picture. Add an image
+          above if you want one — nothing is uploaded on your behalf, so the link has to be
+          somewhere you host.
+        </p>
+      ) : (
+        <p className="mono mt-1 break-all text-[0.78rem] leading-relaxed text-ink">{uri}</p>
+      )}
+    </div>
+  );
+}
+
+/**
  * A fee, with the four values most markets pick one click away.
  *
  * The contracts allow anything from 0.01% to 10%, so a dropdown of ten whole percentages
@@ -824,103 +849,6 @@ function FeeInput({
           </button>
         ))}
       </div>
-    </div>
-  );
-}
-
-/** Percentage splits across two to five addresses, with a running total. */
-function SplitEditor({
-  draft,
-  set,
-  issues,
-}: {
-  readonly draft: LaunchDraft;
-  readonly set: <K extends keyof LaunchDraft>(key: K, value: LaunchDraft[K]) => void;
-  readonly issues: readonly ReturnType<typeof validate>[number][];
-}) {
-  const total = draft.splits.reduce((sum, split) => {
-    const parsed = Number(split.sharePercent);
-    return sum + (Number.isFinite(parsed) ? parsed : 0);
-  }, 0);
-
-  function update(index: number, patch: Partial<{ address: string; sharePercent: string }>) {
-    set(
-      "splits",
-      draft.splits.map((split, at) => (at === index ? { ...split, ...patch } : split)),
-    );
-  }
-
-  return (
-    <div>
-      <div className="space-y-3">
-        {draft.splits.map((split, index) => (
-          <div key={index} className="flex flex-wrap items-start gap-3 sm:flex-nowrap">
-            <div className="min-w-0 flex-1">
-              <Field label={`Address ${index + 1}`} error={issueFor(issues, `splits.${index}.address`)}>
-                <TextInput
-                  mono
-                  value={split.address}
-                  onChange={(value) => update(index, { address: value })}
-                  placeholder="0x…"
-                  invalid={issueFor(issues, `splits.${index}.address`) !== undefined}
-                />
-              </Field>
-            </div>
-            <div className="w-28">
-              <Field label="Share" error={issueFor(issues, `splits.${index}.share`)}>
-                <AmountInput
-                  value={split.sharePercent}
-                  onChange={(value) => update(index, { sharePercent: value })}
-                  unit="%"
-                  invalid={issueFor(issues, `splits.${index}.share`) !== undefined}
-                />
-              </Field>
-            </div>
-            {draft.splits.length > 2 ? (
-              <button
-                type="button"
-                onClick={() =>
-                  set("splits", draft.splits.filter((_, at) => at !== index))
-                }
-                aria-label={`Remove address ${index + 1}`}
-                className="mt-7 rounded-lg border border-border bg-surface px-2.5 py-2 text-ink-muted transition hover:border-fall/50 hover:bg-surface-raised hover:text-fall"
-              >
-                <svg
-                  viewBox="0 0 16 16"
-                  aria-hidden="true"
-                  className="size-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                >
-                  <path d="M4 4l8 8M12 4l-8 8" />
-                </svg>
-              </button>
-            ) : null}
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-        <button
-          type="button"
-          disabled={draft.splits.length >= 5}
-          onClick={() => set("splits", [...draft.splits, { address: "", sharePercent: "0" }])}
-          className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border bg-surface px-4 text-[0.82rem] font-medium text-ink transition hover:border-border-strong hover:bg-surface-raised disabled:cursor-not-allowed disabled:text-ink-faint"
-        >
-          <span aria-hidden="true">+</span> Add an address
-        </button>
-        <p
-          className={`numeric text-[0.8rem] ${total === 100 ? "text-accent" : "text-ink-muted"}`}
-        >
-          Total {total.toFixed(2)}%
-        </p>
-      </div>
-
-      {issueFor(issues, "splits") === undefined ? null : (
-        <p className="mt-2 text-[0.75rem] text-fall">{issueFor(issues, "splits")}</p>
-      )}
     </div>
   );
 }

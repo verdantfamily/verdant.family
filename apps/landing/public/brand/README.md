@@ -15,6 +15,21 @@ pnpm --filter @verdant/landing brand
 | `og.jpg` | both | The image X, iMessage and Slack show when the link is pasted |
 | `favicon.png` | the mark, on a filled plate | The tab icon |
 
+The same run also writes the launch models' card art, which only the launchpad serves, so it
+lands in `apps/web/public/models/` rather than here:
+
+| Generated | From | What it becomes |
+|---|---|---|
+| `classic.jpg` | `classic.jpg` | The band across the head of the Classic card |
+| `stock-paired.jpg` | `stock.jpg` | The same, on Stock-Paired |
+| `evergreen.jpg` | `evergreen.jpg` | The same, on Evergreen |
+
+Each is centre-cropped to 1200 × 480 — the shape of the band at every breakpoint — darkened
+enough that white type stays legible over it, and lands between 35 and 80 KB from originals of
+15 to 26 MB. The gradient that used to be the whole of that band is still behind the
+photograph, so the card is painted in roughly the right hue before the JPEG decodes and still
+looks deliberate if a picture is ever missing.
+
 ## What the script does, and why it is not manual
 
 Originals are the wrong shape for the web in ways that are easy to miss until someone opens
@@ -36,8 +51,10 @@ paints before the photograph loads.
 ## Replacing something
 
 Names in `brand-source/` that the script looks for: `bg.jpg` (or `.jpeg`, or
-`background.jpg`) and `logo.png`. A logo that is only a mark, with no wordmark, works too —
-the script finds no gap wide enough to split at, says so, and the page uses the whole thing.
+`background.jpg`), `logo.png`, and `classic.jpg`, `stock.jpg` and `evergreen.jpg` for the
+model cards. A logo that is only a mark, with no wordmark, works too — the script finds no gap
+wide enough to split at, says so, and the page uses the whole thing. A model image that is
+absent is reported and skipped, and that card keeps its gradient.
 
 Anything else in `brand-source/` is ignored, which is deliberate: a build that guesses which
 of five images is the logo will eventually guess wrong.

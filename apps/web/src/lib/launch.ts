@@ -227,26 +227,32 @@ export function validate(draft: LaunchDraft): readonly Issue[] {
   else if (!/^[A-Za-z0-9]+$/.test(symbol))
     warning("symbol", "Letters and digits only travel well across every interface.");
 
-  if (draft.imageUrl !== "" && !isHttpUrl(draft.imageUrl))
+  // An upload that landed in the development store gets an address that resolves only
+  // here. It is worth uploading anyway — the control has to be usable in a fresh clone —
+  // but the token records this address permanently, so the launch stops here rather than
+  // producing a market whose picture never loads for anybody.
+  if (draft.imageUrl !== "" && !isDurableUri(draft.imageUrl))
+    blocker(
+      "imageUrl",
+      "This image is stored only on this machine, and a token would record that address forever. The deployment needs an image store configured before launching.",
+    );
+  else if (draft.imageUrl !== "" && !isHttpUrl(draft.imageUrl))
     blocker("imageUrl", "This should be a full https:// or ipfs:// address.");
   if (draft.website !== "" && !isHttpUrl(draft.website))
     blocker("website", "This should be a full https:// address.");
 
   // The one string the chain keeps. Its limit is bytes rather than characters, and a
   // URL long enough to exceed it is not rejected by the form until it is measured the
-  // way the contract measures it.
-  const metadataBytes = byteLength(draft.metadataUrl.trim());
+  // way the contract measures it. Measured on the effective URI rather than on the field,
+  // because the image link is what goes on chain when the document field is empty.
+  const metadataUri = metadataUriOf(draft);
+  const metadataBytes = byteLength(metadataUri);
   if (draft.metadataUrl.trim() !== "" && !isHttpUrl(draft.metadataUrl))
     blocker("metadataUrl", "This should be a full https:// or ipfs:// address.");
   else if (metadataBytes > BOUNDS.token.metadataUriLength.max)
     blocker(
-      "metadataUrl",
+      draft.metadataUrl.trim() === "" ? "imageUrl" : "metadataUrl",
       `The token stores ${BOUNDS.token.metadataUriLength.max} bytes; this is ${metadataBytes}.`,
-    );
-  else if (draft.metadataUrl.trim() === "" && !draft.metadataMutable)
-    warning(
-      "metadataUrl",
-      "With no address and frozen metadata, this token can never point anywhere. Interfaces will show it by name and ticker alone, permanently.",
     );
 
   // --- supply
@@ -415,8 +421,37 @@ export function blockingIssues(issues: readonly Issue[]): readonly Issue[] {
 }
 
 /** The first message for a field, so a control can render its own error. */
+/**
+ * The blocking issue on a field, if it has one.
+ *
+ * Blocking only, because the caller renders this in the colour that means "this is
+ * wrong". Advisories went through here once, which put a red ring around a field whose
+ * value the chain would have accepted — the form telling people to fix something that
+ * was not broken. Those come out of `noteFor` instead.
+ */
 export function issueFor(issues: readonly Issue[], field: string): string | undefined {
-  return issues.find((issue) => issue.field === field)?.message;
+  return issues.find((issue) => issue.field === field && issue.blocking)?.message;
+}
+
+/** The non-blocking remark on a field: worth reading, not worth stopping for. */
+export function noteFor(issues: readonly Issue[], field: string): string | undefined {
+  return issues.find((issue) => issue.field === field && !issue.blocking)?.message;
+}
+
+/**
+ * The one string the token records, which is the document if there is one and the image
+ * otherwise.
+ *
+ * The chain keeps 256 bytes and no more, so a creator with a picture and nothing else
+ * would otherwise launch a token that points nowhere while holding a perfectly good
+ * image link in the form. Interfaces reading the URI have to sniff what they were given
+ * either way — a JSON document and an image are both common — so putting the image there
+ * costs nothing and means one field is enough to launch a token that looks like
+ * something.
+ */
+export function metadataUriOf(draft: LaunchDraft): string {
+  const document = draft.metadataUrl.trim();
+  return document !== "" ? document : draft.imageUrl.trim();
 }
 
 // --- derivation -----------------------------------------------------------------
@@ -648,7 +683,7 @@ export function tokenIdentity(
     name: draft.name.trim(),
     symbol: draft.symbol.replace(/^\$/, "").trim(),
     supplyTokens: derived.supplyTokens,
-    metadataURI: draft.metadataUrl.trim(),
+    metadataURI: metadataUriOf(draft),
     metadataMutable: draft.metadataMutable,
     creator,
   };
@@ -659,10 +694,16 @@ export function tokenIdentity(
  *
  * `MarketRegistry` records exactly one address. "This wallet" is the account signing
  * the launch, and "another address" is whatever was typed — a multisig, a treasury, or
- * a splitter of the creator's own. The third mode the form offers cannot be expressed
- * on chain and `validate` blocks on it, so it never reaches here; it falls through to
- * the launching wallet rather than to one of the addresses it listed, because paying
- * one participant of a split everything would be the worse mistake.
+ * a splitter of the creator's own.
+ *
+ * Whichever it is, the address named here claims for itself: `FeeSplitter.claim()` pays
+ * `msg.sender` and takes no argument for whom to pay, so nobody can collect a creator's
+ * fees on their behalf and nobody can redirect them.
+ *
+ * The split mode cannot be expressed on chain and `validate` blocks on it, so it never
+ * reaches here; it falls through to the launching wallet rather than to one of the
+ * addresses it listed, because paying one participant of a split everything would be the
+ * worse mistake.
  */
 function feeRecipientOf(draft: LaunchDraft, creator: Address): Address {
   return draft.rewardMode === "another-wallet"
@@ -694,7 +735,7 @@ export function launchParams(
   return {
     name: draft.name.trim(),
     symbol: draft.symbol.replace(/^\$/, "").trim(),
-    metadataURI: draft.metadataUrl.trim(),
+    metadataURI: metadataUriOf(draft),
     metadataMutable: draft.metadataMutable,
     supplyTokens: derived.supplyTokens,
     model: derived.model,
@@ -747,6 +788,34 @@ export function byteLength(value: string): number {
 
 function isHttpUrl(value: string): boolean {
   return /^(https?|ipfs):\/\/\S+$/i.test(value.trim());
+}
+
+/**
+ * Whether an address will still resolve for a stranger tomorrow.
+ *
+ * Exported because the answer is a property of the address and nothing else, which is what
+ * makes it checkable at all: the interface does not have to be told that an upload went to
+ * the development store, it can see it. Catches a pasted `localhost` link by the same rule,
+ * which is the same mistake arriving by another route.
+ */
+export function isDurableUri(value: string): boolean {
+  const uri = value.trim();
+  if (uri === "") return true;
+
+  // The development store answers at a path on this origin, so it has no scheme at all.
+  if (uri.startsWith("/")) return false;
+
+  const host = /^https?:\/\/([^/:?#]+)/i.exec(uri)?.[1]?.toLowerCase();
+  if (host === undefined) return true;
+
+  return !(
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "0.0.0.0" ||
+    host === "[::1]" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local")
+  );
 }
 
 function parseWholeNumberBig(input: string): bigint | null {

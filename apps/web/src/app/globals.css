@@ -6,8 +6,8 @@
  * Dark, and not switchable, because the launchpad now stands on the same photograph the
  * teaser does and that photograph is dark. A theme toggle was already a bad trade — it
  * doubles the number of colour pairs every future surface has to be checked against — and
- * it is a worse one now, since a light variant would need a second background image, a
- * second scrim and a second set of contrast measurements to go with it.
+ * it is a worse one now, since a light variant would need a second background image and a
+ * second set of contrast measurements to go with it.
  *
  * Every colour below is derived from `#362627`, the photograph's own mean, which is what
  * `--void` is on the teaser. `--color-canvas` is that tone deepened until white body type
@@ -61,6 +61,18 @@
    * way a one-line error under an input clears 4.5 to 1 on a card.
    */
   --color-fall: oklch(0.83 0.16 25);
+
+  /*
+   * The same two directions, thinned for the area beneath a price line.
+   *
+   * Tokens rather than literals inside the chart, because a chart paints onto a canvas
+   * and a canvas cannot read a custom property — it has to be handed a colour string.
+   * The component reads these at mount and passes them through, which keeps every colour
+   * in the interface declared in this file. The alpha is where the gradient starts,
+   * directly under the line; it fades to nothing at the axis.
+   */
+  --color-rise-soft: oklch(0.82 0.16 158 / 0.26);
+  --color-fall-soft: oklch(0.83 0.16 25 / 0.26);
 
   /* A warning is a different thing from a loss, so it gets its own hue. The wash is
      thinner than the accent's because the wrong-network control paints `--color-caution`
@@ -129,9 +141,8 @@ body {
 
 /* --- the background ---------------------------------------------------------------------
  *
- * The same four fixed layers the teaser has, painted in this order under the content: the
- * photograph, a scrim that darkens it, light that moves across it, and grain. They are
- * mounted by the root layout so that every route gets them without asking.
+ * One fixed layer under the content: the photograph the teaser uses, and nothing over it.
+ * It is mounted by the root layout so that every route gets it without asking.
  *
  * The photograph is blurred before it is shipped rather than with `filter: blur()` here.
  * That is the difference between the browser convolving a viewport-sized layer on every
@@ -139,17 +150,26 @@ body {
  * file is 20 KB instead of 13 MB. See `apps/landing/scripts/prepare-brand.ts`, which
  * writes it into both apps.
  *
- * ## Why this is dimmer here than on the teaser
+ * ## By default the picture is shown as it is
  *
- * The teaser has one sentence over that photograph, set large, with a shadow under it.
- * This app has price tables, fee ladders, address rows and forms — small type, a lot of
- * it, and much of it numbers that are read rather than glanced at. So the scrim's weakest
- * point is raised from 0.2 to 0.76 and the drifting light is cut to roughly a third of its
- * strength there. Measured against the brightest patch of the photograph with the light at
- * the top of its cycle, that puts body copy at `--color-ink-muted` at 6.1 to 1 directly on
- * the background and 5.5 to 1 inside a card, where the teaser's own settings would give
- * 2.6 and 2.4. What is left of the picture is tone and grain: something you notice once
- * and then never fight.
+ * No scrim, no drifting light, no grain over it. What carries legibility is each
+ * surface's own backdrop blur: every card, panel and control in this app is translucent
+ * over a blur, so the type inside one is read against an evened-out field rather than
+ * against whatever the photograph happens to be doing. Type set directly on the
+ * background — a page heading, the footer — depends on the image staying dark, which is a
+ * property of the file rather than of this stylesheet.
+ *
+ * ## Except where a page is mostly small numbers
+ *
+ * That holds for a page whose job is to look like something. It does not hold for the
+ * market page, which is price tables, fee ladders, address rows and a chart — small type,
+ * a lot of it, and much of it figures that are read rather than glanced at. There the
+ * photograph competes with the content instead of sitting behind it.
+ *
+ * So the layers below still exist and are opted into per page by `<Backdrop damped />`
+ * rather than mounted for every route. See `components/site/backdrop.tsx`. They are the
+ * same three the teaser has, in this order under the content: a scrim that darkens, light
+ * that moves across it, and grain.
  */
 
 .photo {
@@ -185,9 +205,13 @@ body {
  * the image can be replaced without re-exporting it at the right exposure.
  *
  * The three stops of the wash are not decorative either. Its thinnest point is the middle
- * of the linear gradient, and the vignette is transparent there too, so that one number —
- * 0.76 — is what every contrast figure in this file was measured against. Raising the
- * others without raising that one would darken the page and improve nothing.
+ * of the linear gradient, and the vignette is transparent there too, so that one number is
+ * what every contrast figure here was measured against. Raising the others without raising
+ * that one would darken the page and improve nothing.
+ *
+ * Measured against the brightest patch of the photograph with the light at the top of its
+ * cycle, this puts body copy at `--color-ink-muted` at about 6 to 1 directly on the
+ * background and 5.5 to 1 inside a card.
  */
 .scrim {
   position: fixed;
@@ -195,12 +219,12 @@ body {
   z-index: -3;
   pointer-events: none;
   background:
-    radial-gradient(118% 96% at 50% 42%, transparent 26%, oklch(0.14 0.014 20 / 0.5) 100%),
+    radial-gradient(118% 96% at 50% 42%, transparent 26%, oklch(0.14 0.014 20 / 0.55) 100%),
     linear-gradient(
       to bottom,
-      oklch(0.14 0.014 20 / 0.82) 0%,
-      oklch(0.14 0.014 20 / 0.76) 42%,
-      oklch(0.14 0.014 20 / 0.86) 100%
+      oklch(0.14 0.014 20 / 0.74) 0%,
+      oklch(0.14 0.014 20 / 0.68) 42%,
+      oklch(0.14 0.014 20 / 0.8) 100%
     );
 }
 
@@ -212,7 +236,7 @@ body {
  *
  * A third of the teaser's opacity. At full strength the warm lobe lifts the top-left
  * corner of the page by enough to cost a table header its contrast, and the top-left
- * corner of this app is the header and the first row of the market list.
+ * corner of a market page is the trade panel and the first row of the stat strip.
  */
 .glow {
   position: fixed;
@@ -346,38 +370,6 @@ body {
   letter-spacing: -0.04em;
   line-height: 1.05;
   font-weight: 600;
-}
-
-/**
- * The wash behind the top of a page.
- *
- * Two soft colour blooms, no image, fading out completely before the content starts, so it
- * gives the region behind a headline some warmth and never competes with a table further
- * down. Rendered as an absolute pseudo-element inside its own stacking context so
- * scrolling does not drag it.
- *
- * It is a small fraction of the strength it had as a light-mode bloom, and it lost a
- * colour. There is a photograph and a slowly moving light behind this now; a third wash at
- * pastel strength would be one more thing in the same place, and on a dark page a pale
- * wash does not read as depth but as a smudge. What is left is a green lift under the
- * heading, at an alpha low enough that the lede over it still measures above 4.5 to 1.
- */
-.aurora {
-  position: relative;
-  isolation: isolate;
-}
-
-.aurora::before {
-  content: "";
-  position: absolute;
-  inset: -10rem 0 auto;
-  height: 40rem;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(44rem 24rem at 50% 22%, oklch(0.74 0.11 158 / 0.11), transparent 72%),
-    radial-gradient(32rem 20rem at 84% 8%, oklch(0.72 0.09 24 / 0.08), transparent 74%);
-  mask-image: linear-gradient(to bottom, black 26%, transparent 100%);
 }
 
 /** A hairline that reads as a fold rather than a border. */

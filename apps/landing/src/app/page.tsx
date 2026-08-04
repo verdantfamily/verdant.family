@@ -52,7 +52,7 @@ export default function Landing() {
         {/* Small and quiet, because it is the one claim on the page and it should be
             findable without competing with the sentence above it. */}
         <footer className="foot">
-          <p>Uniswap v4 hooks, coming to Robinhood Chain. Nothing is deployed yet.</p>
+          <p>Uniswap v4 hooks, live on Robinhood Chain.</p>
         </footer>
       </div>
     </>

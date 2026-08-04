@@ -8,7 +8,7 @@
     "start": "ponder start",
     "codegen": "ponder codegen",
     "build": "echo \"@verdant/indexer has no build step; ponder-env.d.ts is committed\" && exit 0",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "ponder codegen && tsc -p tsconfig.json --noEmit",
     "test": "echo \"the indexer is tested end to end by 'pnpm proof:feed', which needs anvil\" && exit 0",
     "proof": "bash ../../scripts/indexer-proof.sh"
   },

@@ -71,7 +71,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned rather than `stable`. Gas accounting can move between forge
+      # releases, and a committed snapshot checked against a moving toolchain
+      # fails for reasons that are not changes to the protocol's cost.
       - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: "1.7.1"
 
       # Invoked directly rather than through pnpm so this job needs no Node
       # toolchain at all.

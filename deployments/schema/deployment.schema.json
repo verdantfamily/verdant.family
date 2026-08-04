@@ -100,6 +100,13 @@
       "additionalProperties": true,
       "properties": {
         "blockscout": { "enum": ["verified", "partial", "not-verified"] },
+        "match": {
+          "enum": ["full", "partial"],
+          "description": "A full match means the metadata hash agrees too, so the verified source is byte-for-byte what was compiled. A partial match means the code agrees but the source may differ in ways the compiler does not encode, such as comments."
+        },
+        "verifiedAt": { "type": "string", "format": "date" },
+        "scope": { "type": "string" },
+        "method": { "type": "string" },
         "note": { "type": "string" },
         "reproduce": { "type": "string" }
       }

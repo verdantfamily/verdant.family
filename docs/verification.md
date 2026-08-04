@@ -21,7 +21,7 @@ sent. Re-run the chain probes with `pnpm chain:probe`.
 | V5 | Third-party routers vs hooked dynamic-fee pools | **OPEN — test written, awaiting its first run** | Whether `VerdantRouter` needs to exist at all |
 | V6 | ArbOS version and `block.timestamp` drift bound | **OPEN (partial)** | 300 s minimum stage gap margin |
 | V7 | `block.number` is the L1 block number | **RESOLVED — confirmed** | Ban on `block.number` |
-| V8 | Blockscout programmatic verification | **OPEN (encouraging)** | Automated verify in deploy script |
+| V8 | Blockscout programmatic verification | **RESOLVED** | All seven contracts fully verified |
 | V9 | Atomic creation gas ceiling | **RESOLVED — 3.2M of a 32M per-tx limit** | One transaction, confirmed |
 | V10 | Ponder on 4663 | **OPEN — RPC log cap now known** | Ponder vs Envio; range splitting |
 | V11 | `sender` in `beforeAddLiquidity` | **RESOLVED — PositionManager; implemented, ADR-006** | Liquidity-restriction mechanism |
@@ -223,12 +223,27 @@ the `ScheduleLib` comment so the reason survives.
 
 ## V8 — Does Blockscout support programmatic standard-JSON verification here?
 
-**OPEN, encouraging.** Both deployed v4 contracts are fully verified on Blockscout with
-complete multi-file source bundles (45 files for PoolManager, 71 for PositionManager), solc
-`v0.8.26+commit.8a97fa7a`, which is strong evidence the verifier handles standard-JSON
-multi-contract input. `forge verify-contract --verifier blockscout` has not itself been run.
+**RESOLVED: yes.** All seven of Verdant's deployed contracts are now fully verified on
+Blockscout — a full match, not partial — submitted as standard JSON over the v2 API by
+[`scripts/verify-blockscout.ts`](../scripts/verify-blockscout.ts) on 2026-08-04. Source
+bundles ranged from one file (`FactoryOrigin`) to 76 (`VerdantFactory`), solc
+`v0.8.26+commit.8a97fa7a`, licence recorded as MIT.
 
-**Method to close.** Run `forge verify-contract` against a real testnet deployment. Phase P6.
+`forge verify-contract` was still never run. It could not be: a contract's metadata hash
+covers its source bytes, so an exact match requires the source as it was at deployment, and
+by the time verification was attempted the working tree had moved on — one added comment in
+`VerdantFactory.sol` is enough to change the hash and turn an exact match into a partial one.
+
+**What made it work anyway.** Foundry keeps the complete compiler input for every build in
+`out/build-info`, and each deployed contract names its own source set and settings in the
+metadata blob at the end of its runtime bytecode. Matching the blob on chain against the
+compiled artefacts identifies which historical build produced the deployed code
+([`scripts/match-buildinfo.ts`](../scripts/match-buildinfo.ts)); the metadata's source list
+then selects exactly those files out of that build's input. That reconstructs the standard
+JSON solc was originally given, rather than compiling the tree as it stands today.
+
+Worth recording as a general point: a deployment's verifiability does not expire when its
+source is edited, as long as the build artefacts survive. It expires when they are deleted.
 
 ## V9 — Does atomic create-token + init-pool + mint-position fit under the gas ceiling?
 

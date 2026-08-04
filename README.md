@@ -45,6 +45,7 @@ clean clone with no install step.
 | The claim | What checks it |
 | --- | --- |
 | The published addresses are the code actually deployed | `pnpm verify:deployment` — compares every runtime code hash against the chain's own `codeHash` from the state trie |
+| The deployed code is the source in this repository | all seven contracts are [fully verified on Blockscout](https://robinhoodchain.blockscout.com/address/0x661A5B2A8d7DC0EaEd98B335e070478b40B92Dd9?tab=contract) — a full match, not partial |
 | The hook cannot take custody during a swap | the same command, from the hook's address alone; and [`Remappings.t.sol`](packages/contracts/test/Remappings.t.sol) against Uniswap's own flag constants |
 | The launch position can never be withdrawn | [`PositionLocker.t.sol`](packages/contracts/test/PositionLocker.t.sol) |
 | A fee schedule cannot be edited after creation | [`VerdantHook.t.sol`](packages/contracts/test/VerdantHook.t.sol) |
@@ -124,9 +125,6 @@ the old one, and the markets created under the old one keep trading.
 
 ## What is not done
 
-- **The contracts are not verified on Blockscout.** The source is here and the
-  build settings reproduce it, but an explorer shows bytecode until they are
-  submitted. `pnpm verify:deployment` is the check that does not depend on it.
 - **There has been no independent audit** and no public security contest.
 - **Owner and treasury are one externally owned account**, not a multisig. What
   that key can and cannot do is enumerated in

@@ -116,6 +116,7 @@ Verdant uses `block.timestamp` everywhere; the measurement is recorded as V7 in
 | End-to-end proof | A real chain, Uniswap, six launches, an indexer, and the assertion that contract state and indexed data agree | `pnpm proof` |
 | Fork tests | The suite against live 4663 state | `pnpm proof:fork` |
 | Deployment evidence | Every published address, code hash and size against the chain | `pnpm verify:deployment` |
+| Source verification | All seven contracts fully verified on Blockscout, so an explorer shows this repository's source rather than bytecode | `pnpm verify:blockscout` |
 | Static analysis | Slither on every push, with every suppression argued for in [`docs/security/slither.md`](docs/security/slither.md) | `.github/workflows/security.yml` |
 
 ## Open gaps
@@ -123,11 +124,6 @@ Verdant uses `block.timestamp` everywhere; the measurement is recorded as V7 in
 Tracked here rather than in an issue tracker, because a security page that omits
 them is not a security page.
 
-- **The contracts are not verified on Blockscout.** The source is here and the
-  build settings in [`deployments/robinhood.json`](deployments/robinhood.json)
-  reproduce it, but an explorer shows bytecode. Until that is done, verifying
-  the deployment means compiling this repository and comparing hashes yourself,
-  which `pnpm verify:deployment` does against the chain's own `codeHash`.
 - **No independent audit.** Stated above; repeated here because it belongs in
   the gap list.
 - **Owner and treasury are one EOA.** A multisig would reduce the blast radius

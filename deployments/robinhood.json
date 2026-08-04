@@ -92,9 +92,12 @@
     ]
   },
   "sourceVerification": {
-    "blockscout": "not-verified",
-    "note": "The source is in this repository and the build settings above reproduce it, but an explorer will show bytecode until the contracts are submitted. Tracked as an open gap in SECURITY.md.",
+    "blockscout": "verified",
+    "match": "full",
+    "verifiedAt": "2026-08-04",
+    "scope": "All seven contracts below, submitted as standard JSON over the Blockscout v2 API. A full match in every case, not partial, with the licence recorded as MIT.",
+    "method": "scripts/verify-blockscout.ts, which reconstructs the compiler input each contract's own metadata blob names out of the Foundry build artefacts that produced it, rather than recompiling the current working tree.",
     "reproduce": "pnpm contracts:deps && pnpm contracts:build"
   },
-  "checkedAt": "2026-08-04T19:08:20Z"
+  "checkedAt": "2026-08-04T20:01:52Z"
 }

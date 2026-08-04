@@ -18,6 +18,7 @@
     "verify:models": "node scripts/verify-models.ts",
     "verify:deployment": "node scripts/verify-deployment.ts",
     "verify:docs": "node scripts/verify-docs.ts",
+    "verify:blockscout": "node --max-old-space-size=8192 scripts/verify-blockscout.ts",
     "contracts:deps": "bash scripts/vendor-contracts-deps.sh",
     "contracts:build": "pnpm --filter @verdant/contracts build",
     "contracts:test": "pnpm --filter @verdant/contracts test",

@@ -33,9 +33,16 @@ apps/landing/brand-source/
 apps/indexer/.ponder/
 apps/indexer/ponder-env.d.ts
 
-# A second Next build directory, so a preview build and the dev server can run at the
-# same time without fighting over .next/. See NEXT_DIST_DIR in apps/web/next.config.ts.
-apps/web/.next-preview/
+# Further Next build directories, so a preview build, a dev server pointed at mainnet and
+# an ordinary dev server can run at once without fighting over .next/. See NEXT_DIST_DIR in
+# apps/web/next.config.ts. Wildcarded rather than listed, because the next one of these
+# invented at a terminal would otherwise arrive as 300 MB of untracked build output.
+apps/web/.next-*/
+
+# Token images uploaded to the development store, which exists so the upload control works
+# in a clone with nothing configured. The launch path refuses these addresses, so nothing
+# here has ever reached a token.
+apps/web/.uploads/
 
 # The rig's logs and the notes taken while reading other people's contracts. Neither is
 # source and the first is rewritten on every run.
@@ -44,6 +51,14 @@ apps/web/.next-preview/
 
 # os
 .DS_Store
+
+# A local shim that swallows `os.networkInterfaces()` failing, which some sandboxed
+# environments make Next's dev server do on startup. Loaded with NODE_OPTIONS when it is
+# needed and irrelevant everywhere else, so it is not source.
+dev-os-shim.cjs
+
+# Railway's config-as-code scratch directory, written by `railway config pull`.
+.railway-config-pull-*/
 
 # local probe output
 scripts/*.local.json

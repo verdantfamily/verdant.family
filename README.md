@@ -6,16 +6,35 @@ behaviour is chosen from a small set of verified models, its parameters are
 bounded by contracts rather than by an interface, and its liquidity is locked by
 a contract that cannot be persuaded otherwise.
 
-**Status: no contract is deployed.** The contracts are complete and tested — including
-markets quoted in a tokenized equity rather than in ether (ADR-008) — the deployment
-is scripted and its verifier written, and the interface now connects a wallet, submits
-a launch and sends a swap rather than describing one. The landing page is the only
-thing that is public: [verdant-landing-mauve.vercel.app](https://verdant-landing-mauve.vercel.app),
-which has no data source and cannot break when the rest does.
+**Status: deployed and trading on Robinhood Chain (4663).** The protocol was broadcast on
+2026-08-01 in blocks 25 393 021 to 25 393 023, markets have been created through the
+interface, and fees have been earned and claimed by a creator. Every address is recorded
+in [`packages/config/src/deployments.ts`](packages/config/src/deployments.ts), which is the
+only durable record of which deployment is the live one:
 
-What stands between here and a public launch is the two Safes the deployment needs,
-the deployment itself, and one fork run to exercise the Universal Router leg of a swap
-against the router that is actually on Robinhood.
+| Contract | Address |
+|---|---|
+| VerdantFactory | `0x661A5B2A8d7DC0EaEd98B335e070478b40B92Dd9` |
+| VerdantHook | `0xf998c32CDdFA6354bd80Aab470C6ECF4d83Bb880` |
+| ModelRegistry | `0xfC54c8fb2F5B9da90ca8227866b48a429568EA03` |
+| MarketRegistry | `0x03f002FD5A8070D73f4f1627586968D446512A27` |
+| VerdantDeployer | `0x0B94311A18d2F3E0f38b670cF0a4927ed65420F3` |
+
+There is no upgrade path and there is not meant to be one. The hook's address encodes its
+permissions, and the factory, both registries and the deployer name each other in
+immutables — so replacing the protocol means a new record beside the old one, and the
+markets created under the old one keep trading.
+
+### What is not done
+
+- **The contracts are not verified on Blockscout.** Their source is here and reproducible,
+  but an explorer will show bytecode until step 7 of the runbook is carried out.
+- **Evergreen is a design, not a market.** `ModelRegistry` carries it; the factory will not
+  create one. Its card says so rather than offering a button.
+- **`FeeForwarderFactory`** is deployed at `0x266DEbCE6d33a4b84C140541bC142c7C8b46ae63` and
+  deliberately not wired up. It would let a creator's fees be delivered by anyone instead of
+  claimed by them; the switch is one line of config, and it is off. No market has ever named
+  a forwarder as its fee recipient.
 
 ## Read these first
 
@@ -188,3 +207,17 @@ diverged. See `packages/contracts/README.md`.
 Arbitrum Orbit (Nitro), settling to Ethereum with blob DA. Gas is ETH. Uniswap v4
 is deployed at identical addresses on both chains despite 46630 being absent from
 Uniswap's published deployments page.
+
+## Licence
+
+MIT, for all of it — the contracts as much as the interface. See [`LICENSE`](LICENSE).
+
+That is a deliberate choice rather than a default. Most protocols put BUSL-1.1 on their
+contracts so that nobody can redeploy them as a competitor for a few years, and these
+contracts carried exactly that until this repository was made public. Under MIT anyone may
+take the factory, the hook and the schedule library and run their own launchpad with them,
+and that is allowed.
+
+The Solidity dependencies are not distributed here. `packages/contracts/vendor/` is fetched
+at pinned commits by `pnpm contracts:deps` and each of those projects carries its own
+licence.

@@ -53,6 +53,7 @@ clean clone with no install step.
 | The models advertised here are the models the product will build | `pnpm verify:models` — [`models/`](models/) is generated from the interface's own config |
 | The preview equals the transaction | shared vectors, with expected values from a third naive implementation so a shared misconception cannot pass |
 | The displayed market data equals the chain | `pnpm proof` — a real chain, six launches, an indexer, and the assertion that they agree |
+| Static analysis is clean, and every suppression is argued for | [`docs/security/slither.md`](docs/security/slither.md) |
 | All of the above, and 422 other things | `pnpm contracts:test` — plus 333 TypeScript tests under `pnpm test` |
 
 Two of those run daily against the live chain, so if Robinhood moves something or

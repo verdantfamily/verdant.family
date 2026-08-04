@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.26;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -904,6 +904,15 @@ contract VerdantFactory is IUnlockCallback, ReentrancyGuard {
             // receive costs more than 2 300 gas, and a stipend that was a safety
             // measure in 2018 is a liveness bug now. The same reasoning as
             // `FeeSplitter.claim`.
+            //
+            // Slither reads a `.call{value:}` to a non-constant address as sending
+            // ether to an arbitrary destination. Here the destination is the caller:
+            // `creator` reaches this function only from `market.creator`, which is
+            // assigned `msg.sender` and never anything else, and the amount is the
+            // part of that same caller's `msg.value` the pool did not take. The
+            // factory has no `receive` and no `fallback`, so it holds no balance
+            // between calls for a stranger to aim this at. See docs/security/slither.md.
+            // slither-disable-next-line arbitrary-send-eth
             (bool ok,) = creator.call{value: amount}("");
             if (!ok) revert NativeRefundFailed(creator, amount);
         } else {

@@ -116,7 +116,7 @@ Verdant uses `block.timestamp` everywhere; the measurement is recorded as V7 in
 | End-to-end proof | A real chain, Uniswap, six launches, an indexer, and the assertion that contract state and indexed data agree | `pnpm proof` |
 | Fork tests | The suite against live 4663 state | `pnpm proof:fork` |
 | Deployment evidence | Every published address, code hash and size against the chain | `pnpm verify:deployment` |
-| Static analysis | Slither, on every push | `.github/workflows/security.yml` |
+| Static analysis | Slither on every push, with every suppression argued for in [`docs/security/slither.md`](docs/security/slither.md) | `.github/workflows/security.yml` |
 
 ## Open gaps
 

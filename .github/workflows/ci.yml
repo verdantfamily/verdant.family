@@ -20,9 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No version pin here on purpose: the version lives in the `packageManager`
+      # field of package.json, and specifying it in both places is an error.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@v4
         with:
@@ -72,7 +72,12 @@ jobs:
 
       - name: forge build
         working-directory: packages/contracts
-        run: forge build --sizes
+        run: forge build
+
+      # Scoped to src/, because `--sizes` alone measures the vendored Uniswap
+      # tree too and fails on contracts we do not deploy.
+      - name: contract sizes within EIP-170
+        run: bash scripts/check-sizes.sh
 
       - name: forge fmt
         working-directory: packages/contracts

@@ -18,13 +18,13 @@ jobs:
   typescript:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # No version pin here on purpose: the version lives in the `packageManager`
       # field of package.json, and specifying it in both places is an error.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -69,7 +69,7 @@ jobs:
   contracts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Pinned rather than `stable`. Gas accounting can move between forge
       # releases, and a committed snapshot checked against a moving toolchain
@@ -119,9 +119,9 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 

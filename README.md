@@ -220,4 +220,4 @@ and that is allowed.
 
 The Solidity dependencies are not distributed here. `packages/contracts/vendor/` is fetched
 at pinned commits by `pnpm contracts:deps` and each of those projects carries its own
-licence.
+licence; [`NOTICE`](NOTICE) records what is somebody else's.

@@ -19,16 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-
---------------------------------------------------------------------------------
-Third-party code
---------------------------------------------------------------------------------
-
-The Solidity dependencies this repository builds against are not distributed
-here. `packages/contracts/vendor/` is fetched at pinned commits by
-`pnpm contracts:deps` and is gitignored; each of those projects carries its own
-licence, and nothing above applies to them.
-
-`packages/contracts/test/utils/HookMiner.sol` is Uniswap's, under its own MIT
-licence, and is vendored into the test tree rather than fetched.

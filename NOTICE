@@ -1,0 +1,19 @@
+Third-party code
+================
+
+Verdant is MIT licensed; see LICENSE. This file records the code in or around
+this repository that is somebody else's, so that the licence above is not read
+as covering it.
+
+The Solidity dependencies are not distributed here. `packages/contracts/vendor/`
+holds Uniswap's v4-core, v4-periphery, OpenZeppelin, Solmate and forge-std,
+fetched at pinned commits by `scripts/vendor-contracts-deps.sh` and gitignored —
+39 MB that never enters version control. Each of those projects carries its own
+licence, which travels with it.
+
+`packages/contracts/test/utils/HookMiner.sol` is Uniswap's, under its own MIT
+licence, and is the one third-party file committed here rather than fetched. Its
+original header is intact.
+
+The typeface is Inter Tight, served from this origin by `next/font` and licensed
+under the SIL Open Font License.

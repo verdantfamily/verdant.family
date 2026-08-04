@@ -14,14 +14,23 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     groups:
-      # One pull request per ecosystem rather than per package. Fifteen separate
-      # patch bumps is fifteen CI runs and one review nobody does carefully.
+      # One pull request per group rather than per package. Fifteen separate
+      # bumps is fifteen CI runs and one review nobody does carefully.
+      #
+      # Development dependencies are grouped including majors. A major bump of a
+      # linter or a test runner either builds or does not, and CI answers that in
+      # one run — whereas four separate major PRs is four runs answering the same
+      # question about the same lockfile.
       development:
         dependency-type: development
-        update-types: [minor, patch]
+        update-types: [major, minor, patch]
+
+      # Runtime dependencies are grouped only up to minor. A major here can change
+      # behaviour that reaches a transaction, and that is worth its own pull
+      # request and its own argument rather than a line in a batch.
       production:
         dependency-type: production
-        update-types: [patch]
+        update-types: [minor, patch]
 
   - package-ecosystem: github-actions
     directory: /

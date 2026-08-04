@@ -40,6 +40,18 @@ jobs:
       - name: test
         run: pnpm test
 
+      # models/ is generated from packages/config/src/launch-models.ts, so this
+      # asserts that the published model library is the one the interface
+      # renders. It also resolves every evidence path those manifests cite, which
+      # makes a renamed test a build failure rather than a dead link in the
+      # public record.
+      - name: published model library matches the interface
+        run: pnpm verify:models
+
+      # A link to a renamed test reads like evidence and is not.
+      - name: documentation links resolve
+        run: pnpm verify:docs
+
       # Last rather than first, deliberately: a type error or a failing test is a more
       # useful thing to be told about than a lint finding, and a job that stops at its
       # first failure should stop at the most informative one.

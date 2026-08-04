@@ -1,0 +1,94 @@
+{
+  "$schema": "../schema/model.schema.json",
+  "schemaVersion": 1,
+  "id": "evergreen",
+  "name": "Evergreen",
+  "status": "design",
+  "statusLabel": "Design",
+  "statusMeans": "A written mechanism and no contracts. Cannot be created.",
+  "creatable": false,
+  "summary": "A share of every fee is set aside and can be added back to the locked position as liquidity by anyone, forever.",
+  "quotedIn": "Ether",
+  "rewardCurrency": "Ether on buys, your token on sells",
+  "feeModels": [
+    {
+      "id": "fixed",
+      "name": "Fixed",
+      "thesis": "One fee, unchanged for the life of the market.",
+      "mechanism": "A single fee stage. The LP fee is constant and is set at creation. Fee revenue accrues to the locked liquidity position and is split between the creator and the protocol when anyone calls collect().",
+      "creatorChooses": [
+        "initialFeePpm"
+      ],
+      "traits": [
+        {
+          "id": "static",
+          "means": "The fee never changes. The market has exactly one fee stage."
+        }
+      ],
+      "risks": [
+        "A fixed fee does not adapt to changing liquidity or volume.",
+        "Fee revenue depends entirely on trading activity, which Verdant does not and cannot guarantee."
+      ]
+    },
+    {
+      "id": "progressive",
+      "name": "Progressive",
+      "thesis": "A fee schedule fixed at creation, advancing on a timetable.",
+      "mechanism": "Two to eight stages. Stage n activates at the pool's initialization time plus that stage's offset in seconds. The active fee is the fee of the latest stage whose offset has elapsed. The schedule is immutable and derives only from block.timestamp — there is no discretion, no oracle, and no off-chain trigger.",
+      "creatorChooses": [
+        "stages"
+      ],
+      "traits": [
+        {
+          "id": "staged",
+          "means": "The fee changes on a timetable fixed at creation."
+        },
+        {
+          "id": "decaying",
+          "means": "Every stage transition lowers the fee."
+        },
+        {
+          "id": "rising",
+          "means": "Every stage transition raises the fee."
+        }
+      ],
+      "risks": [
+        "A fee schedule is not a price guarantee and says nothing about outcomes.",
+        "Stage transitions land on L2 timestamps, so a transition may occur slightly before or after the countdown shown in the interface.",
+        "A swap submitted close to a transition may execute under either fee."
+      ]
+    }
+  ],
+  "highlights": [
+    "A reserve share of fees, unclaimable by anyone",
+    "Anyone can convert the reserve into locked liquidity",
+    "Liquidity that grows with volume rather than with a promise"
+  ],
+  "fixedAtCreation": [
+    "The reserve share is fixed at creation.",
+    "Reserve balances can never be withdrawn by the creator or by the protocol."
+  ],
+  "risks": [
+    "Reinforcement is not automatic. It needs someone to call it, which anyone may do and nobody is obliged to do.",
+    "Deeper liquidity is not the same as a better market and implies nothing about price."
+  ],
+  "remaining": [
+    "The reserve share and the reinforce path exist in the contracts, but the model is disabled in the registry and has no acceptance record."
+  ],
+  "evidence": {
+    "contracts": [
+      "packages/contracts/src/VerdantHook.sol"
+    ],
+    "tests": [
+      "packages/contracts/test/VerdantHook.t.sol"
+    ],
+    "decisions": [
+      "docs/decisions/002-reinforce-liquidity-delta.md"
+    ],
+    "deployment": null
+  },
+  "generatedFrom": [
+    "packages/config/src/launch-models.ts",
+    "packages/config/src/models.ts"
+  ]
+}

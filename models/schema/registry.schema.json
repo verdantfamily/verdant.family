@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://verdant.family/schema/registry.schema.json",
+  "title": "Verdant model registry",
+  "description": "The index of launch models and their lifecycle state. Generated from packages/config/src/launch-models.ts by scripts/verify-models.ts, which also fails CI when this file and that one disagree.",
+  "type": "object",
+  "required": ["schemaVersion", "lifecycle", "generatedFrom", "models"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "lifecycle": {
+      "description": "What each status is a promise of. A model is only creatable at `ready`.",
+      "type": "object",
+      "required": ["design", "building", "ready"],
+      "additionalProperties": false,
+      "properties": {
+        "design": { "type": "string" },
+        "building": { "type": "string" },
+        "ready": { "type": "string" }
+      }
+    },
+    "generatedFrom": { "type": "string" },
+    "generatedBy": { "type": "string" },
+    "models": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "creatable",
+          "summary",
+          "manifest",
+          "documentation"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "name": { "type": "string" },
+          "status": { "enum": ["design", "building", "ready"] },
+          "creatable": {
+            "type": "boolean",
+            "description": "Whether the deployed factory will actually build this model. False for anything short of `ready`."
+          },
+          "summary": { "type": "string" },
+          "manifest": { "type": "string" },
+          "documentation": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "$schema": "../schema/model.schema.json",
+  "schemaVersion": 1,
+  "id": "classic",
+  "name": "Classic",
+  "status": "ready",
+  "statusLabel": "Live",
+  "statusMeans": "Deployed on Robinhood Chain, verified against it, and creatable through the interface.",
+  "creatable": true,
+  "summary": "A fixed-supply token quoted in ether, with the swap fee written into the pool at creation and the launch position locked by a contract.",
+  "quotedIn": "Ether",
+  "rewardCurrency": "Ether on buys, your token on sells",
+  "feeModels": [
+    {
+      "id": "fixed",
+      "name": "Fixed",
+      "thesis": "One fee, unchanged for the life of the market.",
+      "mechanism": "A single fee stage. The LP fee is constant and is set at creation. Fee revenue accrues to the locked liquidity position and is split between the creator and the protocol when anyone calls collect().",
+      "creatorChooses": [
+        "initialFeePpm"
+      ],
+      "traits": [
+        {
+          "id": "static",
+          "means": "The fee never changes. The market has exactly one fee stage."
+        }
+      ],
+      "risks": [
+        "A fixed fee does not adapt to changing liquidity or volume.",
+        "Fee revenue depends entirely on trading activity, which Verdant does not and cannot guarantee."
+      ]
+    },
+    {
+      "id": "progressive",
+      "name": "Progressive",
+      "thesis": "A fee schedule fixed at creation, advancing on a timetable.",
+      "mechanism": "Two to eight stages. Stage n activates at the pool's initialization time plus that stage's offset in seconds. The active fee is the fee of the latest stage whose offset has elapsed. The schedule is immutable and derives only from block.timestamp — there is no discretion, no oracle, and no off-chain trigger.",
+      "creatorChooses": [
+        "stages"
+      ],
+      "traits": [
+        {
+          "id": "staged",
+          "means": "The fee changes on a timetable fixed at creation."
+        },
+        {
+          "id": "decaying",
+          "means": "Every stage transition lowers the fee."
+        },
+        {
+          "id": "rising",
+          "means": "Every stage transition raises the fee."
+        }
+      ],
+      "risks": [
+        "A fee schedule is not a price guarantee and says nothing about outcomes.",
+        "Stage transitions land on L2 timestamps, so a transition may occur slightly before or after the countdown shown in the interface.",
+        "A swap submitted close to a transition may execute under either fee."
+      ]
+    }
+  ],
+  "highlights": [
+    "Separate buy and sell fees, or one fee for both",
+    "Optionally a fee schedule that steps on a timetable",
+    "Whole supply into the pool in a single transaction",
+    "Launch position locked, with no early release path"
+  ],
+  "fixedAtCreation": [
+    "Supply is minted once at creation. There is no mint function and no owner.",
+    "The fee schedule is written into the hook at creation and cannot be edited by anyone, including Verdant.",
+    "The launch position is transferred to a locker with no operator and no early-release path.",
+    "The token has no transfer tax and no blocklist.",
+    "Fee revenue is split between the creator and the protocol in shares fixed at creation."
+  ],
+  "risks": [
+    "A locked position keeps liquidity in the pool. It says nothing about a price.",
+    "Fee revenue depends entirely on trading, which Verdant does not and cannot guarantee.",
+    "Because the fee is charged by Uniswap rather than skimmed by the hook, a creator's share arrives in ether from buys and in their own token from sells.",
+    "A swap submitted close to a scheduled fee transition may execute under either fee."
+  ],
+  "evidence": {
+    "contracts": [
+      "packages/contracts/src/VerdantFactory.sol",
+      "packages/contracts/src/VerdantHook.sol",
+      "packages/contracts/src/VerdantToken.sol",
+      "packages/contracts/src/PositionLocker.sol",
+      "packages/contracts/src/FeeSplitter.sol",
+      "packages/contracts/src/libraries/ScheduleLib.sol"
+    ],
+    "tests": [
+      "packages/contracts/test/VerdantLaunch.t.sol",
+      "packages/contracts/test/VerdantHook.t.sol",
+      "packages/contracts/test/ScheduleLib.t.sol",
+      "packages/contracts/test/PositionLocker.t.sol",
+      "packages/contracts/test/FeeSplitter.t.sol"
+    ],
+    "decisions": [
+      "docs/decisions/001-tick-spacing.md",
+      "docs/decisions/005-splits-belong-to-the-splitter.md",
+      "docs/decisions/009-the-first-buy-is-part-of-the-launch.md"
+    ],
+    "deployment": "deployments/robinhood.json"
+  },
+  "generatedFrom": [
+    "packages/config/src/launch-models.ts",
+    "packages/config/src/models.ts"
+  ]
+}

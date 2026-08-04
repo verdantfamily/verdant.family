@@ -1,0 +1,100 @@
+{
+  "$schema": "../schema/model.schema.json",
+  "schemaVersion": 1,
+  "id": "stock-paired",
+  "name": "Stock-Paired",
+  "status": "ready",
+  "statusLabel": "Live",
+  "statusMeans": "Deployed on Robinhood Chain, verified against it, and creatable through the interface.",
+  "creatable": true,
+  "summary": "The same market, quoted in a tokenized equity instead of ether — pair your token against NVIDIA, Apple, the S&P 500 or silver.",
+  "quotedIn": "A reviewed tokenized equity",
+  "rewardCurrency": "The quote asset on buys, your token on sells",
+  "feeModels": [
+    {
+      "id": "fixed",
+      "name": "Fixed",
+      "thesis": "One fee, unchanged for the life of the market.",
+      "mechanism": "A single fee stage. The LP fee is constant and is set at creation. Fee revenue accrues to the locked liquidity position and is split between the creator and the protocol when anyone calls collect().",
+      "creatorChooses": [
+        "initialFeePpm"
+      ],
+      "traits": [
+        {
+          "id": "static",
+          "means": "The fee never changes. The market has exactly one fee stage."
+        }
+      ],
+      "risks": [
+        "A fixed fee does not adapt to changing liquidity or volume.",
+        "Fee revenue depends entirely on trading activity, which Verdant does not and cannot guarantee."
+      ]
+    },
+    {
+      "id": "progressive",
+      "name": "Progressive",
+      "thesis": "A fee schedule fixed at creation, advancing on a timetable.",
+      "mechanism": "Two to eight stages. Stage n activates at the pool's initialization time plus that stage's offset in seconds. The active fee is the fee of the latest stage whose offset has elapsed. The schedule is immutable and derives only from block.timestamp — there is no discretion, no oracle, and no off-chain trigger.",
+      "creatorChooses": [
+        "stages"
+      ],
+      "traits": [
+        {
+          "id": "staged",
+          "means": "The fee changes on a timetable fixed at creation."
+        },
+        {
+          "id": "decaying",
+          "means": "Every stage transition lowers the fee."
+        },
+        {
+          "id": "rising",
+          "means": "Every stage transition raises the fee."
+        }
+      ],
+      "risks": [
+        "A fee schedule is not a price guarantee and says nothing about outcomes.",
+        "Stage transitions land on L2 timestamps, so a transition may occur slightly before or after the countdown shown in the interface.",
+        "A swap submitted close to a transition may execute under either fee."
+      ]
+    }
+  ],
+  "highlights": [
+    "Priced against a first-party Robinhood equity token",
+    "A reviewed allowlist, not any ERC-20 on the chain",
+    "Fee revenue accrues in the quote asset",
+    "Same locked position and immutable schedule as Classic"
+  ],
+  "fixedAtCreation": [
+    "The quote asset is chosen once, at creation, and is part of the pool's identity forever.",
+    "Only assets on the reviewed allowlist can be used as a quote side.",
+    "Everything Classic fixes at creation is fixed here too."
+  ],
+  "risks": [
+    "The launched token is not a share. It is not redeemable for the quote asset and carries no rights in the underlying company, fund or security.",
+    "The quote asset remains subject to its issuer's terms, including any transfer or redemption controls, which Verdant does not control and cannot override.",
+    "A quote asset that becomes illiquid makes the market it prices hard to exit, independently of the market's own liquidity.",
+    "Equity tokens track a market that closes. Prices can gap across a weekend while the pool trades continuously.",
+    "The initial buy is funded in the quote asset, so a creator has to hold the equity token before launching. Nothing routes ether into it for them."
+  ],
+  "evidence": {
+    "contracts": [
+      "packages/contracts/src/VerdantFactory.sol",
+      "packages/contracts/src/VerdantHook.sol",
+      "packages/contracts/src/ModelRegistry.sol"
+    ],
+    "tests": [
+      "packages/contracts/test/VerdantLaunch.t.sol",
+      "packages/contracts/test/ModelRegistry.t.sol",
+      "packages/contracts/test/PoolId.vectors.t.sol"
+    ],
+    "decisions": [
+      "docs/decisions/008-the-quote-asset-is-a-parameter.md"
+    ],
+    "deployment": "deployments/robinhood.json"
+  },
+  "generatedFrom": [
+    "packages/config/src/launch-models.ts",
+    "packages/config/src/models.ts"
+  ]
+}

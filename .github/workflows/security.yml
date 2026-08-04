@@ -1,0 +1,58 @@
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Monday morning. A dependency advisory that lands on a Friday should not
+    # wait for someone to push before anyone hears about it.
+    - cron: "0 6 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Static analysis over the protocol source. Vendored Uniswap and OpenZeppelin
+  # code is filtered out in slither.config.json: findings there belong upstream,
+  # and drowning our own results in theirs is how a security job stops being read.
+  slither:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      - name: vendor pinned dependencies
+        run: bash scripts/vendor-contracts-deps.sh
+
+      - name: slither
+        id: slither
+        uses: crytic/slither-action@v0.4.1
+        continue-on-error: true
+        with:
+          target: packages/contracts
+          slither-config: packages/contracts/slither.config.json
+          sarif: results.sarif
+          fail-on: high
+
+      # Uploaded whether or not the run failed, so findings are readable in the
+      # Security tab rather than only in a log that scrolls.
+      - name: upload findings
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && steps.slither.outputs.sarif != ''
+        with:
+          sarif_file: ${{ steps.slither.outputs.sarif }}
+
+      - name: fail on high severity
+        if: steps.slither.outcome == 'failure'
+        run: |
+          echo "Slither reported a high-severity finding. Read it in the Security tab."
+          exit 1

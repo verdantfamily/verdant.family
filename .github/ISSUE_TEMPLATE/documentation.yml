@@ -1,0 +1,33 @@
+name: Documentation
+description: Something here is wrong, unclear, or missing
+labels: [documentation]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repository treats its documentation as a record rather than as
+        marketing, so a claim that is not quite true is a defect and worth an
+        issue.
+
+  - type: input
+    id: where
+    attributes:
+      label: Which file
+      placeholder: SECURITY.md, models/classic/README.md, docs/decisions/003-…
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong with it
+      description: |
+        Especially useful: a claim with no check behind it, a check that no longer
+        exists, or a limitation that should be stated and is not.
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: What it should say instead

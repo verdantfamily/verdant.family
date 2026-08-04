@@ -1,0 +1,21 @@
+# Everything, by default.
+*                                   @verdantfamily
+
+# The contracts are immutable once broadcast, so a mistake here is permanent in a
+# way that a mistake in the interface is not.
+/packages/contracts/src/            @verdantfamily
+/packages/contracts/test/           @verdantfamily
+
+# The published record. These files are what someone checks the protocol against,
+# and a wrong address here is worse than no address.
+/deployments/                       @verdantfamily
+/models/                            @verdantfamily
+/scripts/verify-deployment.ts       @verdantfamily
+/scripts/verify-models.ts           @verdantfamily
+/packages/config/src/deployments.ts @verdantfamily
+
+# Copy that misdescribes contract behaviour is a security bug with no test that
+# catches it.
+/SECURITY.md                        @verdantfamily
+/packages/config/src/launch-models.ts @verdantfamily
+/packages/config/src/models.ts      @verdantfamily

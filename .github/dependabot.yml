@@ -1,0 +1,32 @@
+version: 2
+
+updates:
+  # Solidity dependencies are deliberately absent from this file. They are pinned
+  # by scripts/vendor-contracts-deps.sh to the exact commits matching bytecode
+  # already deployed on 4663, established by a byte-for-byte source diff. An
+  # automated bump to upstream main would silently break that correspondence, so
+  # those moves are made by hand with a diff to argue about.
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # One pull request per ecosystem rather than per package. Fifteen separate
+      # patch bumps is fifteen CI runs and one review nobody does carefully.
+      development:
+        dependency-type: development
+        update-types: [minor, patch]
+      production:
+        dependency-type: production
+        update-types: [patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]

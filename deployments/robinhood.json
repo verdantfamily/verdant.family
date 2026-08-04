@@ -1,0 +1,100 @@
+{
+  "$schema": "./schema/deployment.schema.json",
+  "schemaVersion": 1,
+  "network": "Robinhood Chain",
+  "chainId": 4663,
+  "deploymentBlock": 25393023,
+  "immutable": true,
+  "broadcast": {
+    "date": "2026-08-01",
+    "blocks": [
+      25393021,
+      25393023
+    ],
+    "operator": "0x1f23c28F93aE48E6346DD05Ca66ba5e2213b00b8",
+    "operatorNonce": 0,
+    "gasUsed": 14816427,
+    "artifact": "packages/contracts/broadcast/Deploy.s.sol/4663/run-1785622792525.json"
+  },
+  "build": {
+    "compiler": "solc 0.8.26",
+    "optimizer": true,
+    "optimizerRuns": 1000000,
+    "evmVersion": "cancun",
+    "settings": "packages/contracts/foundry.toml",
+    "dependencies": "pinned by scripts/vendor-contracts-deps.sh to the commits matching the bytecode already on 4663"
+  },
+  "contracts": {
+    "factoryOrigin": {
+      "address": "0x52490ee359bcF5fE60D79fA4D5eA8bFED853f592",
+      "runtimeCodeHash": "0x365786394356e8ea4d207d78725c75b4854dc164b652b6a990f78e10e77c37dc",
+      "runtimeCodeSize": 1070,
+      "transactionHash": "0xd1e989a65da1ec7d616ff68bfe9f2b8c85e26d0f8476626c51f32f2e915027a2",
+      "explorer": "https://robinhoodchain.blockscout.com/address/0x52490ee359bcF5fE60D79fA4D5eA8bFED853f592"
+    },
+    "modelRegistry": {
+      "address": "0xfC54c8fb2F5B9da90ca8227866b48a429568EA03",
+      "runtimeCodeHash": "0x8ebbbb54957cefab299927aedcb5f64d842f4cf20e969e4c9a6a2a20b017c0dd",
+      "runtimeCodeSize": 5675,
+      "transactionHash": "0xdab57d72a6188bfc41312f04874897b7a59409ee4ebe54ded1494698d854aaf0",
+      "explorer": "https://robinhoodchain.blockscout.com/address/0xfC54c8fb2F5B9da90ca8227866b48a429568EA03"
+    },
+    "marketRegistry": {
+      "address": "0x03f002FD5A8070D73f4f1627586968D446512A27",
+      "runtimeCodeHash": "0x9ecf71cc7084ca3ae375b7566d302820c660289b0a00f85ed4d1857fe48af026",
+      "runtimeCodeSize": 5129,
+      "transactionHash": "0xd7282fe98c4b9fed6d7c16826bc79a1c30311c1289264999a813a8f415a3a0c0",
+      "explorer": "https://robinhoodchain.blockscout.com/address/0x03f002FD5A8070D73f4f1627586968D446512A27"
+    },
+    "verdantDeployer": {
+      "address": "0x0B94311A18d2F3E0f38b670cF0a4927ed65420F3",
+      "runtimeCodeHash": "0xa800dd2b4ad101b3b1841cd06a42a18ddc4b6aed1b4a83d018c9485f18e701b5",
+      "runtimeCodeSize": 21318,
+      "transactionHash": "0xc5d7cc8a9aa3ab627d2b2621fe410cd75a195772f1d9ed9e9e7493d9eb39aa4b",
+      "explorer": "https://robinhoodchain.blockscout.com/address/0x0B94311A18d2F3E0f38b670cF0a4927ed65420F3"
+    },
+    "hook": {
+      "address": "0xf998c32CDdFA6354bd80Aab470C6ECF4d83Bb880",
+      "runtimeCodeHash": "0x636bf6668dbf46f0c8c60e30ff2135909a2772c3efe3808e8faeaa946a57730d",
+      "runtimeCodeSize": 8784,
+      "transactionHash": "0xba983d0c72bfe55e8254501ae3c1d5548ed7fb5db5daccc3f2533f1dc1064044",
+      "explorer": "https://robinhoodchain.blockscout.com/address/0xf998c32CDdFA6354bd80Aab470C6ECF4d83Bb880"
+    },
+    "factory": {
+      "address": "0x661A5B2A8d7DC0EaEd98B335e070478b40B92Dd9",
+      "runtimeCodeHash": "0x17cf9763aae77933c9550f6fea7b7c67ba86673a12c8b3dd5a3e6c10363e29eb",
+      "runtimeCodeSize": 16848,
+      "transactionHash": "0x975a498732790cda6ffe5d1900c42ad6f18d5493350e393167dfe27370692110",
+      "explorer": "https://robinhoodchain.blockscout.com/address/0x661A5B2A8d7DC0EaEd98B335e070478b40B92Dd9"
+    }
+  },
+  "addons": {
+    "feeForwarderFactory": {
+      "address": "0x266DEbCE6d33a4b84C140541bC142c7C8b46ae63",
+      "runtimeCodeHash": "0x09b98c5bde60b3e942e4d7a4d4b570ea25bc9a32c49bcee04841542603e2bb9b",
+      "runtimeCodeSize": 3713,
+      "transactionHash": "0x6dffa4e9bdc1ae22d1b6021afa78940461c911616fd50d4327dcbfa4cc603d9f",
+      "explorer": "https://robinhoodchain.blockscout.com/address/0x266DEbCE6d33a4b84C140541bC142c7C8b46ae63",
+      "enabled": false
+    }
+  },
+  "hookPermissions": {
+    "flags": "0x3880",
+    "encodedIn": "the low 14 bits of the hook's own address",
+    "granted": [
+      "beforeInitialize",
+      "afterInitialize",
+      "beforeAddLiquidity",
+      "beforeSwap"
+    ],
+    "withheld": [
+      "every *_RETURNS_DELTA bit, which is what makes the hook unable to take custody during a swap"
+    ]
+  },
+  "sourceVerification": {
+    "blockscout": "not-verified",
+    "note": "The source is in this repository and the build settings above reproduce it, but an explorer will show bytecode until the contracts are submitted. Tracked as an open gap in SECURITY.md.",
+    "reproduce": "pnpm contracts:deps && pnpm contracts:build"
+  },
+  "checkedAt": "2026-08-04T19:08:20Z"
+}

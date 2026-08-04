@@ -1,0 +1,40 @@
+{
+  "$schema": "./schema/registry.schema.json",
+  "schemaVersion": 1,
+  "lifecycle": {
+    "design": "A written mechanism and no contracts. Cannot be created.",
+    "building": "The interface and specification exist; the contract path does not. Cannot be created.",
+    "ready": "Deployed on Robinhood Chain, verified against it, and creatable through the interface."
+  },
+  "generatedFrom": "packages/config/src/launch-models.ts",
+  "generatedBy": "scripts/verify-models.ts",
+  "models": [
+    {
+      "id": "classic",
+      "name": "Classic",
+      "status": "ready",
+      "creatable": true,
+      "summary": "A fixed-supply token quoted in ether, with the swap fee written into the pool at creation and the launch position locked by a contract.",
+      "manifest": "models/classic/model.json",
+      "documentation": "models/classic/README.md"
+    },
+    {
+      "id": "stock-paired",
+      "name": "Stock-Paired",
+      "status": "ready",
+      "creatable": true,
+      "summary": "The same market, quoted in a tokenized equity instead of ether — pair your token against NVIDIA, Apple, the S&P 500 or silver.",
+      "manifest": "models/stock-paired/model.json",
+      "documentation": "models/stock-paired/README.md"
+    },
+    {
+      "id": "evergreen",
+      "name": "Evergreen",
+      "status": "design",
+      "creatable": false,
+      "summary": "A share of every fee is set aside and can be added back to the locked position as liquidity by anyone, forever.",
+      "manifest": "models/evergreen/model.json",
+      "documentation": "models/evergreen/README.md"
+    }
+  ]
+}

@@ -1,223 +1,210 @@
-# Verdant
+<p align="center">
+  <img src="assets/verdant-cover.jpg" alt="Verdant" width="100%" />
+</p>
 
-A market-creation layer on Robinhood Chain. Verdant lets someone create a token
-and a Uniswap v4 market for it in one transaction, where the market's fee
-behaviour is chosen from a small set of verified models, its parameters are
-bounded by contracts rather than by an interface, and its liquidity is locked by
-a contract that cannot be persuaded otherwise.
+<h1 align="center">Verdant</h1>
 
-**Status: deployed and trading on Robinhood Chain (4663).** The protocol was broadcast on
-2026-08-01 in blocks 25 393 021 to 25 393 023, markets have been created through the
-interface, and fees have been earned and claimed by a creator. Every address is recorded
-in [`packages/config/src/deployments.ts`](packages/config/src/deployments.ts), which is the
-only durable record of which deployment is the live one:
+<p align="center"><strong>Create a token and its Uniswap v4 market in one transaction.</strong></p>
+
+<p align="center">
+  A market-creation layer on Robinhood Chain, where a market's behaviour is bounded by contracts rather than by an interface.
+</p>
+
+<p align="center">
+  <a href="https://verdant.family"><strong>Launch</strong></a> ·
+  <a href="MODELS.md">Models</a> ·
+  <a href="ARCHITECTURE.md">Architecture</a> ·
+  <a href="deployments/robinhood.json">Deployment</a> ·
+  <a href="SECURITY.md">Security</a> ·
+  <a href="docs/decisions/">Decisions</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/verdantfamily/verdant.family/actions/workflows/ci.yml"><img src="https://github.com/verdantfamily/verdant.family/actions/workflows/ci.yml/badge.svg" alt="Build and tests" /></a>
+  <a href="https://github.com/verdantfamily/verdant.family/actions/workflows/security.yml"><img src="https://github.com/verdantfamily/verdant.family/actions/workflows/security.yml/badge.svg" alt="Static analysis" /></a>
+  <a href="https://github.com/verdantfamily/verdant.family/actions/workflows/evidence.yml"><img src="https://github.com/verdantfamily/verdant.family/actions/workflows/evidence.yml/badge.svg" alt="Deployment evidence" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-blue" alt="MIT licence" /></a>
+</p>
+
+Verdant creates a fixed-supply token, an ether- or equity-quoted Uniswap v4 pool,
+an immutable fee schedule and a permanently locked liquidity position — in a
+single call that either does all of it or none of it.
+
+**Live on Robinhood Chain (4663).** Broadcast on 2026-08-01 in blocks 25 393 021
+to 25 393 023. Markets have been created through the interface, traded, and had
+fees collected and claimed by their creator.
+
+## Every claim here has a receipt
+
+The uncomfortable thing about a launchpad is that all of its promises are about
+what *cannot* happen, and a promise like that is indistinguishable from a
+marketing sentence until someone can check it. So each row below names a command
+you can run. None of them need a key, and the two chain-facing ones run on a
+clean clone with no install step.
+
+| The claim | What checks it |
+| --- | --- |
+| The published addresses are the code actually deployed | `pnpm verify:deployment` — compares every runtime code hash against the chain's own `codeHash` from the state trie |
+| The hook cannot take custody during a swap | the same command, from the hook's address alone; and [`Remappings.t.sol`](packages/contracts/test/Remappings.t.sol) against Uniswap's own flag constants |
+| The launch position can never be withdrawn | [`PositionLocker.t.sol`](packages/contracts/test/PositionLocker.t.sol) |
+| A fee schedule cannot be edited after creation | [`VerdantHook.t.sol`](packages/contracts/test/VerdantHook.t.sol) |
+| Supply is fixed and there is no owner | [`VerdantToken.t.sol`](packages/contracts/test/VerdantToken.t.sol) |
+| Each party can pull their fee share and only their own | [`FeeSplitter.t.sol`](packages/contracts/test/FeeSplitter.t.sol) |
+| The models advertised here are the models the product will build | `pnpm verify:models` — [`models/`](models/) is generated from the interface's own config |
+| The preview equals the transaction | shared vectors, with expected values from a third naive implementation so a shared misconception cannot pass |
+| The displayed market data equals the chain | `pnpm proof` — a real chain, six launches, an indexer, and the assertion that they agree |
+| All of the above, and 422 other things | `pnpm contracts:test` — plus 333 TypeScript tests under `pnpm test` |
+
+Two of those run daily against the live chain, so if Robinhood moves something or
+a published hash stops matching, the
+[evidence badge](https://github.com/verdantfamily/verdant.family/actions/workflows/evidence.yml)
+goes red without anyone pushing a commit.
+
+## What one transaction does
+
+```mermaid
+flowchart LR
+    creator["Creator"] -->|"create(), payable"| factory["VerdantFactory"]
+    factory --> token["Fixed-supply token"]
+    factory --> pool["Uniswap v4 pool"]
+    factory --> schedule["Immutable fee schedule"]
+    factory --> locker["Locked position"]
+    factory --> buy["Creator's first buy"]
+    pool -->|"fees"| locker
+    locker -->|"collect(), permissionless"| splitter["FeeSplitter"]
+    splitter --> creator
+    splitter --> treasury["Treasury"]
+```
+
+If any step reverts, all of it does. There is no reachable state where a token
+exists without its pool, or a pool exists without its liquidity locked. The
+first buy is inside the same call so that a creator does not have to win a race
+against everyone watching the mempool for their launch —
+[ADR-009](docs/decisions/009-the-first-buy-is-part-of-the-launch.md).
+
+The whole system is fourteen contracts and no proxies:
+[ARCHITECTURE.md](ARCHITECTURE.md).
+
+## The models
+
+| Model | Status | Quoted in |
+| --- | --- | --- |
+| [Classic](models/classic/README.md) | **Live** | Ether |
+| [Stock-Paired](models/stock-paired/README.md) | **Live** | A reviewed tokenized equity — NVIDIA, Apple, the S&P 500, silver |
+| [Evergreen](models/evergreen/README.md) | Design | Ether |
+
+A model's status describes **contract readiness, never interface readiness**,
+because a form that accepts input for a contract that cannot execute it is worse
+than a form that is absent. Anything short of live has to state what remains, and
+CI fails if it does not. [MODELS.md](MODELS.md).
+
+One thing worth knowing before reading further, because most launchpads are
+vague about it: the fee is charged by **Uniswap**, from the currency going *into*
+the pool. So a buy pays in the quote asset and a sell pays in the launched token,
+and a creator's earnings are a mixture of both rather than a single currency.
+
+## The live deployment
 
 | Contract | Address |
-|---|---|
+| --- | --- |
 | VerdantFactory | `0x661A5B2A8d7DC0EaEd98B335e070478b40B92Dd9` |
 | VerdantHook | `0xf998c32CDdFA6354bd80Aab470C6ECF4d83Bb880` |
 | ModelRegistry | `0xfC54c8fb2F5B9da90ca8227866b48a429568EA03` |
 | MarketRegistry | `0x03f002FD5A8070D73f4f1627586968D446512A27` |
 | VerdantDeployer | `0x0B94311A18d2F3E0f38b670cF0a4927ed65420F3` |
 
-There is no upgrade path and there is not meant to be one. The hook's address encodes its
-permissions, and the factory, both registries and the deployer name each other in
-immutables — so replacing the protocol means a new record beside the old one, and the
-markets created under the old one keep trading.
+With code hashes, sizes, transactions and the settings that reproduce them:
+[`deployments/robinhood.json`](deployments/robinhood.json).
 
-### What is not done
+There is no upgrade path and there is not meant to be one. The hook's address
+encodes its permissions, and the factory, both registries and the deployer name
+each other in immutables — so replacing the protocol means a new record beside
+the old one, and the markets created under the old one keep trading.
 
-- **The contracts are not verified on Blockscout.** Their source is here and reproducible,
-  but an explorer will show bytecode until step 7 of the runbook is carried out.
-- **Evergreen is a design, not a market.** `ModelRegistry` carries it; the factory will not
-  create one. Its card says so rather than offering a button.
-- **`FeeForwarderFactory`** is deployed at `0x266DEbCE6d33a4b84C140541bC142c7C8b46ae63` and
-  deliberately not wired up. It would let a creator's fees be delivered by anyone instead of
-  claimed by them; the switch is one line of config, and it is off. No market has ever named
-  a forwarder as its fee recipient.
+## What is not done
 
-## Read these first
+- **The contracts are not verified on Blockscout.** The source is here and the
+  build settings reproduce it, but an explorer shows bytecode until they are
+  submitted. `pnpm verify:deployment` is the check that does not depend on it.
+- **There has been no independent audit** and no public security contest.
+- **Owner and treasury are one externally owned account**, not a multisig. What
+  that key can and cannot do is enumerated in
+  [SECURITY.md](SECURITY.md#what-can-be-changed-and-by-whom); the answer for
+  every existing market is "nothing".
+- **The Universal Router has never been sent calldata built by this SDK.** The
+  encoding is proved offline against Uniswap's own constants, and the quoter and
+  Permit2 paths against real deployed code, but the router itself needs one run
+  with network access — `pnpm proof:fork`.
 
-| Document | What it is |
-|---|---|
-| [`docs/deployment.md`](docs/deployment.md) | The runbook. What to decide, what to run, and what to verify before telling anyone an address |
-| [`docs/verification.md`](docs/verification.md) | The V1–V16 record: every chain fact, its evidence, and the decision it unblocks |
-| [`docs/feed.md`](docs/feed.md) | How market data is derived, and the proof that the indexer agrees with the contracts |
-| [`docs/interface.md`](docs/interface.md) | The interface: its routes, its design tokens, and how a launch form becomes a call |
-| [`docs/decisions/`](docs/decisions/) | ADR-001 to ADR-008. Every architectural choice a future reader would otherwise have to reverse-engineer |
-| [`docs/REVIEW.md`](docs/REVIEW.md) | The architecture review this design answers to |
-
-## What exists
-
-`ScheduleLib` — the fee schedule, in two storage words — and its TypeScript twin.
-Both are asserted against one shared corpus of 515 configurations and 11 435
-probes whose expected values come from a third, naive reference implementation in
-the generator, so a shared misconception in the two implementations under test
-cannot pass. Reading the fee on the swap path costs **7 186 gas and one storage
-slot** for a schedule of four stages or fewer; see
-[`packages/contracts/README.md`](packages/contracts/README.md) for the full table.
-
-## Layout
-
-```
-apps/
-  web/          the interface: explore, market pages, launch forms, docs
-                (docs/interface.md)
-  landing/      one static page, deployable anywhere, depends on nothing
-                (apps/landing/README.md)
-  indexer/      Ponder indexer and the API the interface reads (docs/feed.md)
-packages/
-  contracts/    Foundry — Solidity 0.8.26, optimizer 1_000_000
-  sdk/          TypeScript twins of on-chain math, generated ABIs, the read layer
-  config/       chain objects, external addresses, parameter bounds. Data only
-  ui/           formatting: integers to strings, never through a float
-scripts/
-  probe.ts                     pnpm chain:probe — reproduces every chain fact
-  vendor-contracts-deps.sh     pnpm contracts:deps — pinned Solidity deps
-  indexer-proof.sh             pnpm proof — a chain, six launches (two of them
-                               through the SDK), an indexer, and the assertion
-                               that they all agree
-  fork-test.sh                 pnpm proof:fork — the fork suite against live 4663
-docs/
-```
+The full list, with what each one would take, is
+[SECURITY.md § Open gaps](SECURITY.md#open-gaps).
 
 ## Getting started
 
 ```bash
 pnpm install
-pnpm contracts:deps      # fetch pinned Solidity deps into packages/contracts/vendor
+pnpm contracts:deps      # pinned Solidity dependencies
 pnpm build
 pnpm test
-pnpm chain:probe         # read-only; verifies every external address still has code
 ```
 
-`pnpm chain:probe` needs no install step at all — it uses plain `fetch` and
-Node's native TypeScript stripping, so it runs on a fresh clone.
-
-### Running the interface
-
-The interface needs markets to show, and the markets it is developed against should be
-ones whose numbers have just been checked against the contracts. So the development
-stack is the proof rig, left running:
+The development stack is the proof rig, left running — because the markets the
+interface is developed against should be ones whose numbers have just been
+checked against the contracts:
 
 ```bash
-pnpm dev:stack     # anvil, Uniswap, Verdant, six seeded markets, the indexer
+pnpm dev:stack           # anvil, Uniswap, Verdant, six seeded markets, the indexer
 ```
 
-Once the assertions pass it prints everything needed to point the interface at it —
-the pool ids of the two markets it launched through the SDK, and the full set of
-variables, because nothing is recorded in `packages/config/src/deployments.ts` yet and
-the interface refuses to spend gas against addresses it has not got:
+More in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Verify it yourself
+
+No install step, no key, no account:
 
 ```bash
-VERDANT_FEED_URL=http://127.0.0.1:42069 \
-NEXT_PUBLIC_CHAIN_ID=4663 \
-NEXT_PUBLIC_RPC_URL=http://127.0.0.1:8555 \
-NEXT_PUBLIC_VERDANT_FACTORY=0x… \
-NEXT_PUBLIC_VERDANT_HOOK=0x… \
-NEXT_PUBLIC_VERDANT_DEPLOYER=0x… \
-NEXT_PUBLIC_VERDANT_MODEL_REGISTRY=0x… \
-NEXT_PUBLIC_VERDANT_MARKET_REGISTRY=0x… \
-  pnpm --filter @verdant/web dev
+node scripts/verify-deployment.ts   # published record against the live chain
+node scripts/probe.ts               # every external address we depend on still has code
 ```
 
-Uniswap's quoter and Permit2 need no variables: the rig puts working code at the
-addresses `@verdant/config` already names, so the interface's own code path is the one
-being exercised. The Universal Router is *not* there and cannot be, so the trade
-panel's swap button fails on the rig even though its quote and its approvals do not.
-See [docs/feed.md](docs/feed.md#what-is-not-proved-and-the-one-command-that-would-prove-it).
+Both use plain `fetch` and Node's native TypeScript stripping, so they work on a
+fresh clone before `pnpm install` has ever run.
 
-The same rig without `VERDANT_KEEP` is the CI gate — `pnpm proof` — which launches
-markets, trades across a fee transition, collects and claims fees, and then requires the
-indexer's answers to equal the contracts' own. Neither needs an RPC, a database, or a
-key.
+## Repository map
 
-With no feed reachable the interface still builds and renders. It says the feed is
-unavailable, which is deliberately a different statement from saying no markets exist.
+```text
+models/         The model library, generated from the interface's own config
+deployments/    Addresses, runtime code hashes, and the settings that reproduce them
+docs/           The verification record, the runbook, and nine decision records
+packages/
+  contracts/    Foundry — Solidity 0.8.26, optimizer 1_000_000, cancun
+  sdk/          TypeScript twins of the on-chain math, generated ABIs, the read layer
+  config/       Chains, addresses, bounds, models. Data only
+  ui/           Formatting: integers to strings, never through a float
+apps/
+  web/          The interface
+  indexer/      Ponder indexer and the API the interface reads
+  landing/      One static page that depends on nothing
+scripts/        The probe, the verifiers, the proof rig
+```
 
-## The SDK, and what has been proved about it
-
-`packages/sdk` holds the twins of on-chain math, the generated ABIs, the read layer,
-and — since there is no `packages/sdk/README.md` — this is where its state is written
-down.
-
-**Proved, on a real chain, by `pnpm proof`.** The write path builds a launch that
-works: `readTokenInitCodeHash`, `mineTokenSalt`, `predictTokenAddress`,
-`buildCreate`/`encodeCreate`, and then `quoteExactIn` through a real `V4Quoter` and
-`readPermit2Allowance`/`buildErc20Approval`/`buildPermit2Approval` through the real
-Permit2. Two markets are launched every run — one ether-quoted, one quoted in a
-tokenized equity — using the same functions `apps/web` calls in the same order, and the
-chain is then asked whether the market that landed is the market the SDK described. The
-predicted token address, the pool key, the registry record, the locked position's owner
-and the fee the pool charges are all checked against reads rather than against the
-receipt. Before this existed, no create transaction built by the SDK had been broadcast
-anywhere.
-
-**Proved offline, by the vector suite.** `trade.buildSwap`'s bytes equal what Uniswap's
-own vendored `Actions` constants and `IV4Router.ExactInputSingleParams` produce, over a
-corpus that includes a sell, an equity-quoted buy and an explicit deadline
-(`packages/contracts/test/SwapCalldata.vectors.t.sol`). The schedule and pool-id twins
-are held to the Solidity by their own shared corpora.
-
-**Not proved.** The deployed Universal Router has never been sent calldata this SDK
-produced. That needs one run with network access — `pnpm proof:fork` — and until it
-happens the trade button should not be trusted with real money. The reason, and exactly
-what that run asserts, is in
-[docs/feed.md](docs/feed.md#what-is-not-proved-and-the-one-command-that-would-prove-it).
-
-## Principles that constrain the code
-
-These are not aspirations; each one is enforced somewhere and the enforcement
-point is named.
-
-**Bounds live in contracts, not in the interface.** Every limit is enforced
-on-chain and re-validated by the hook. `packages/config/src/bounds.ts` is the
-single source those bounds are transcribed from, and the SDK re-reads the
-on-chain values at runtime and warns on drift. A bound that exists only in the UI
-is not a bound.
-
-**The preview is the transaction.** Anything shown before signing is computed by
-the same code path that will execute. Where a value is computed both in Solidity
-and in TypeScript, the two are tested against shared vectors — see
-`packages/sdk/src/models/vectors/`. Two implementations that can disagree is the
-bug class those vectors exist to prevent.
-
-**The hook never holds value.** Verdant's hook is mined for exactly
-`0x3880` — `beforeInitialize | afterInitialize | beforeAddLiquidity |
-beforeSwap` — and no `*_RETURNS_DELTA` bit. It cannot take custody during a swap
-because it lacks the permission to. `packages/contracts/test/Remappings.t.sol`
-asserts this against Uniswap's own flag constants rather than against a literal.
-
-**Never `block.number`.** On this chain `block.number` returns the **L1** block
-number, measured advancing ≈119× slower than the L2 clock. All timing uses
-`block.timestamp`. See `docs/verification.md` V7.
-
-**Dependencies are pinned to deployed bytecode.** The Solidity dependencies are
-pinned to the exact commits matching what is deployed on chain 4663, established
-by a byte-for-byte source diff — not to upstream `main`, which has since
-diverged. See `packages/contracts/README.md`.
-
-## Chains
-
-| | id | RPC | explorer |
-|---|---|---|---|
-| Robinhood Chain | 4663 | `rpc.mainnet.chain.robinhood.com` | `robinhoodchain.blockscout.com` |
-| Robinhood Testnet | 46630 | `rpc.testnet.chain.robinhood.com` | `explorer.testnet.chain.robinhood.com` |
-
-Arbitrum Orbit (Nitro), settling to Ethereum with blob DA. Gas is ETH. Uniswap v4
-is deployed at identical addresses on both chains despite 46630 being absent from
-Uniswap's published deployments page.
+Start with [`docs/verification.md`](docs/verification.md) if you want the chain
+facts and how each was established, or [`docs/decisions/`](docs/decisions/) if
+you want to know why something is built the way it is.
 
 ## Licence
 
-MIT, for all of it — the contracts as much as the interface. See [`LICENSE`](LICENSE).
+MIT, for all of it — the contracts as much as the interface. See
+[`LICENSE`](LICENSE).
 
-That is a deliberate choice rather than a default. Most protocols put BUSL-1.1 on their
-contracts so that nobody can redeploy them as a competitor for a few years, and these
-contracts carried exactly that until this repository was made public. Under MIT anyone may
-take the factory, the hook and the schedule library and run their own launchpad with them,
-and that is allowed.
+That is a deliberate choice rather than a default. Most protocols put BUSL-1.1 on
+their contracts so nobody can redeploy them as a competitor for a few years, and
+these contracts carried exactly that until this repository was made public. Under
+MIT anyone may take the factory, the hook and the schedule library and run their
+own launchpad with them, and that is allowed. The name and the artwork are not
+included — see [`assets/README.md`](assets/README.md).
 
-The Solidity dependencies are not distributed here. `packages/contracts/vendor/` is fetched
-at pinned commits by `pnpm contracts:deps` and each of those projects carries its own
-licence; [`NOTICE`](NOTICE) records what is somebody else's.
+The Solidity dependencies are not distributed here.
+`packages/contracts/vendor/` is fetched at pinned commits by
+`pnpm contracts:deps`, and each of those projects carries its own licence;
+[`NOTICE`](NOTICE) records what is somebody else's.

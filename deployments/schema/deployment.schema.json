@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://verdant.family/schema/deployment.schema.json",
+  "title": "Verdant deployment record",
+  "description": "One deployment of the Verdant protocol: its addresses, the code actually running at them, and the settings that reproduce that code. Checked against the chain and against packages/config/src/deployments.ts by scripts/verify-deployment.ts.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "network",
+    "chainId",
+    "deploymentBlock",
+    "immutable",
+    "broadcast",
+    "build",
+    "contracts",
+    "sourceVerification",
+    "checkedAt"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "network": { "type": "string" },
+    "chainId": { "type": "integer" },
+    "deploymentBlock": {
+      "type": "integer",
+      "description": "The block the factory was created in. Where an indexer starts."
+    },
+    "immutable": {
+      "type": "boolean",
+      "description": "Whether this deployment has any upgrade path. Verdant's has none: replacing the protocol means a new record beside this one, and markets created under this one keep trading."
+    },
+    "broadcast": {
+      "type": "object",
+      "required": ["date", "blocks", "operator", "gasUsed", "artifact"],
+      "additionalProperties": false,
+      "properties": {
+        "date": { "type": "string", "format": "date" },
+        "blocks": {
+          "type": "array",
+          "items": { "type": "integer" },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "operator": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+        "operatorNonce": { "type": "integer" },
+        "gasUsed": { "type": "integer" },
+        "artifact": {
+          "type": "string",
+          "description": "The Foundry broadcast file for this exact run. Named explicitly because the directory also holds local runs, and run-latest.json is not necessarily the live one."
+        }
+      }
+    },
+    "build": {
+      "type": "object",
+      "required": ["compiler", "optimizer", "optimizerRuns", "evmVersion", "settings"],
+      "additionalProperties": true,
+      "properties": {
+        "compiler": { "type": "string" },
+        "optimizer": { "type": "boolean" },
+        "optimizerRuns": { "type": "integer" },
+        "evmVersion": { "type": "string" },
+        "settings": { "type": "string" },
+        "dependencies": { "type": "string" }
+      }
+    },
+    "contracts": {
+      "type": "object",
+      "description": "The contracts of the deployment proper: wired to each other in immutables, deployed in the one order that works, replaceable only all at once.",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/contract" }
+    },
+    "addons": {
+      "type": "object",
+      "description": "Contracts deployed beside a deployment rather than as part of one. An addon names nothing in the set above and nothing in it names the addon.",
+      "additionalProperties": {
+        "allOf": [
+          { "$ref": "#/$defs/contract" },
+          {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "description": "Whether the interface offers it. A deployed addon that is switched off is still published here, so that a contract found at that address can be read against something."
+              }
+            },
+            "required": ["enabled"]
+          }
+        ]
+      }
+    },
+    "hookPermissions": {
+      "type": "object",
+      "description": "Uniswap reads a hook's permissions from the low 14 bits of its own address, so the address is the permission and checking it requires no call.",
+      "additionalProperties": true
+    },
+    "sourceVerification": {
+      "type": "object",
+      "required": ["blockscout"],
+      "additionalProperties": true,
+      "properties": {
+        "blockscout": { "enum": ["verified", "partial", "not-verified"] },
+        "note": { "type": "string" },
+        "reproduce": { "type": "string" }
+      }
+    },
+    "checkedAt": {
+      "type": "string",
+      "description": "When the hashes below were last confirmed against the chain."
+    }
+  },
+  "$defs": {
+    "contract": {
+      "type": "object",
+      "required": ["address", "runtimeCodeHash", "runtimeCodeSize", "explorer"],
+      "additionalProperties": true,
+      "properties": {
+        "address": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+        "runtimeCodeHash": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$",
+          "description": "The account's codeHash from the state trie, via eth_getProof. The chain's own hash of the deployed code, not one computed locally from bytes it returned."
+        },
+        "runtimeCodeSize": { "type": "integer" },
+        "transactionHash": { "type": "string", "pattern": "^0x[0-9a-fA-F]{64}$" },
+        "explorer": { "type": "string" }
+      }
+    }
+  }
+}

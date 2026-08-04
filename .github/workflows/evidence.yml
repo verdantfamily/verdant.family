@@ -1,0 +1,45 @@
+name: evidence
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "deployments/**"
+      - "packages/config/src/deployments.ts"
+      - "scripts/verify-deployment.ts"
+  schedule:
+    # Daily. The point of this workflow is to notice a change to somebody else's
+    # chain, which does not wait for us to push.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Asks the chain whether the addresses, code hashes and sizes published in
+  # deployments/robinhood.json are still what is deployed, and whether they still
+  # agree with the config the interface runs on.
+  #
+  # A published address book is only evidence if something fails when it stops
+  # being true. This is that something.
+  #
+  # No install step: the script uses plain fetch and Node's TypeScript stripping,
+  # and reads the code hash out of the state trie via eth_getProof rather than
+  # hashing bytes locally.
+  deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: published record matches the chain
+        run: node scripts/verify-deployment.ts

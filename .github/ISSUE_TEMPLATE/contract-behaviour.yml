@@ -1,0 +1,52 @@
+name: Contract behaviour
+description: A contract does something other than what this repository says it does
+labels: [contracts]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For behaviour that is wrong but not exploitable. If it *is* exploitable,
+        [report it privately](https://github.com/verdantfamily/verdant.family/security/advisories/new)
+        instead — please do not describe it here.
+
+  - type: textarea
+    id: documented
+    attributes:
+      label: What the documentation says
+      description: Quote it, and link the file. A claim we cannot find is worth knowing about too.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What the contract does instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: |
+        A failing Foundry test is the most useful form. `pnpm proof` gives you a
+        local chain with six markets on it, so nothing has to be demonstrated
+        against a live market.
+      render: solidity
+    validations:
+      required: true
+
+  - type: input
+    id: where
+    attributes:
+      label: Chain and addresses
+      description: Chain id, and the market or contract addresses involved.
+      placeholder: "4663, factory 0x661A…"
+
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Before submitting
+      options:
+        - label: This is not exploitable, or I have already reported it privately.
+          required: true

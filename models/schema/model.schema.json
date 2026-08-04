@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://verdant.family/schema/model.schema.json",
+  "title": "Verdant launch model manifest",
+  "description": "Everything a launch model fixes at creation, what a creator chooses inside it, what it does not promise, and where in this repository each claim is checked. Generated from packages/config/src/launch-models.ts and models.ts — the same data the interface renders — so this record cannot describe a market the product would not create.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "id",
+    "name",
+    "status",
+    "creatable",
+    "summary",
+    "quotedIn",
+    "rewardCurrency",
+    "feeModels",
+    "highlights",
+    "fixedAtCreation",
+    "risks",
+    "evidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "name": { "type": "string" },
+    "status": { "enum": ["design", "building", "ready"] },
+    "statusLabel": { "type": "string" },
+    "statusMeans": { "type": "string" },
+    "creatable": { "type": "boolean" },
+    "summary": { "type": "string" },
+    "quotedIn": {
+      "type": "string",
+      "description": "What the market is priced against, for a human."
+    },
+    "rewardCurrency": {
+      "type": "string",
+      "description": "What a creator's fee share actually arrives in. Uniswap charges the fee on the currency entering the pool, so this is usually two currencies rather than one."
+    },
+    "feeModels": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "thesis", "mechanism", "creatorChooses", "traits", "risks"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "thesis": { "type": "string" },
+          "mechanism": {
+            "type": "string",
+            "description": "Plain-language behaviour. No metaphor without a definition."
+          },
+          "creatorChooses": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Parameters rendered as controls in the create flow. Listing one a creator cannot set would be a false disclosure, not a cosmetic error."
+          },
+          "traits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "means"],
+              "additionalProperties": false,
+              "properties": {
+                "id": { "type": "string" },
+                "means": { "type": "string" }
+              }
+            }
+          },
+          "risks": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "highlights": { "type": "array", "items": { "type": "string" } },
+    "fixedAtCreation": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Behaviour nobody can change afterwards, including Verdant."
+    },
+    "risks": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "remaining": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Required for any model short of `ready`: what is actually left to do."
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["contracts", "tests", "decisions", "deployment"],
+      "additionalProperties": false,
+      "properties": {
+        "contracts": { "type": "array", "items": { "type": "string" } },
+        "tests": { "type": "array", "items": { "type": "string" } },
+        "decisions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Architecture decision records explaining why this model works the way it does."
+        },
+        "deployment": {
+          "type": ["string", "null"],
+          "description": "Null for any model that is not deployed. A model cannot cite a deployment it does not have."
+        }
+      }
+    },
+    "generatedFrom": { "type": "array", "items": { "type": "string" } }
+  }
+}

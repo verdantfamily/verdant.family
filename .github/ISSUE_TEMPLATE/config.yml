@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/verdantfamily/verdant.family/security/advisories/new
+    about: Report privately. Do not open an issue for an unpatched vulnerability.
+
+  - name: Question, or a mechanism you want to argue about
+    url: https://github.com/verdantfamily/verdant.family/discussions
+    about: Discussions, rather than issues, for anything that is not a defect.
+
+  - name: Which addresses are live
+    url: https://github.com/verdantfamily/verdant.family/blob/main/deployments/robinhood.json
+    about: Checked against the chain daily. `pnpm verify:deployment` reproduces it on a clean clone.

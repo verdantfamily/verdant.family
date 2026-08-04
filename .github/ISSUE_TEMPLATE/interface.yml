@@ -1,0 +1,48 @@
+name: Interface or indexer
+description: Something in the app or the market data is wrong or broken
+labels: [interface]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If the interface displayed one thing and the transaction did another,
+        please say so prominently — that is the highest-consequence bug class in
+        the project.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: input
+    id: where
+    attributes:
+      label: Page or market
+      description: The URL, or the market's pool id.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part
+      options:
+        - The interface displayed something wrong
+        - The interface and the transaction disagreed
+        - Market data is wrong or stale
+        - A transaction failed
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Browser, wallet, and whether it is mobile

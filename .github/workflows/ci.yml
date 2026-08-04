@@ -31,14 +31,22 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # @verdant/contracts is excluded throughout this job: its build, test and
+      # lint are all forge, and the contracts job below is the one with the
+      # Foundry toolchain. Nothing in the workspace depends on it — the SDK's
+      # ABIs are generated and committed — so excluding it here still builds and
+      # tests everything else.
+      #
+      # turbo is invoked directly rather than through the root scripts because
+      # pnpm would read `--filter` as its own.
       - name: build
-        run: pnpm build
+        run: pnpm exec turbo run build --filter='!@verdant/contracts'
 
       - name: typecheck
-        run: pnpm typecheck
+        run: pnpm exec turbo run typecheck --filter='!@verdant/contracts'
 
       - name: test
-        run: pnpm test
+        run: pnpm exec turbo run test --filter='!@verdant/contracts'
 
       # models/ is generated from packages/config/src/launch-models.ts, so this
       # asserts that the published model library is the one the interface
@@ -56,7 +64,7 @@ jobs:
       # useful thing to be told about than a lint finding, and a job that stops at its
       # first failure should stop at the most informative one.
       - name: lint
-        run: pnpm lint
+        run: pnpm exec turbo run lint --filter='!@verdant/contracts'
 
   contracts:
     runs-on: ubuntu-latest

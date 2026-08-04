@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.26;
 
 import {Test} from "forge-std/Test.sol";
@@ -220,8 +220,7 @@ contract FeeForwarderTest is Test {
     function test_anOwnerThatRejectsEtherCannotBePaid() public {
         RejectsEther bad = new RejectsEther();
         FeeForwarder stuck = factory.deploy(address(bad));
-        FeeSplitter theirs =
-            new FeeSplitter(address(stuck), treasury, NATIVE_QUOTE, address(token), PROTOCOL_BPS);
+        FeeSplitter theirs = new FeeSplitter(address(stuck), treasury, NATIVE_QUOTE, address(token), PROTOCOL_BPS);
         vm.deal(address(theirs), 10 ether);
 
         // Documented rather than defended against: this contract cannot make an
@@ -282,8 +281,7 @@ contract FeeForwarderTest is Test {
 
     function test_oneForwarderServesEveryMarketItsOwnerCreates() public {
         MockERC20 second = new MockERC20("Second", "TWO", 18);
-        FeeSplitter other =
-            new FeeSplitter(address(forwarder), treasury, NATIVE_QUOTE, address(second), PROTOCOL_BPS);
+        FeeSplitter other = new FeeSplitter(address(forwarder), treasury, NATIVE_QUOTE, address(second), PROTOCOL_BPS);
 
         _fund(10 ether, 0);
         vm.deal(address(other), 4 ether);

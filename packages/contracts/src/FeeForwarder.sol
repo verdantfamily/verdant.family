@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.26;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -115,11 +115,7 @@ contract FeeForwarder {
     /// @notice What this contract could pull out of `splitter` right now.
     /// @dev For a keeper deciding whether a call is worth the gas. Zero is the
     /// normal state of a market nobody has traded since the last pull.
-    function claimableFrom(IFeeSplitter splitter)
-        external
-        view
-        returns (uint256 quoteAmount, uint256 tokenAmount)
-    {
+    function claimableFrom(IFeeSplitter splitter) external view returns (uint256 quoteAmount, uint256 tokenAmount) {
         return splitter.claimable(address(this));
     }
 

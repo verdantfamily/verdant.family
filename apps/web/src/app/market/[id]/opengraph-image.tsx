@@ -101,8 +101,11 @@ export default async function Image({ params }: { params: Promise<{ id: string }
             <div style={{ fontSize: 62, fontWeight: 600, letterSpacing: -1.5 }}>
               {truncate(market.name, 22)}
             </div>
+            {/* One interpolated string rather than interleaved children: the rasteriser
+                refuses a div holding more than one node unless it declares a display, and
+                a ticker line is one sentence, not a layout. */}
             <div style={{ fontSize: 30, color: MUTED, marginTop: 4 }}>
-              ${market.symbol} · {market.symbol}/{quote.symbol}
+              {`$${market.symbol} · ${market.symbol}/${quote.symbol}`}
             </div>
           </div>
         </div>

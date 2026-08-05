@@ -113,8 +113,14 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { readonly children: ReactNode }) {
   const photo = BRAND.background;
 
+  /*
+   * `data-scroll-behavior` because `globals.css` sets `scroll-behavior: smooth`, and Next
+   * currently disables that during a route change on its own. It is dropping that
+   * behaviour, and without this attribute a navigation would smooth-scroll to the top of
+   * the new page rather than simply arriving there.
+   */
   return (
-    <html lang="en" className={display.variable}>
+    <html lang="en" data-scroll-behavior="smooth" className={display.variable}>
       {/* The wallet providers wrap everything because the header carries the connect
           control on every page. They render their children through, so a page that
           asks for no account is still rendered on the server. */}

@@ -13,7 +13,7 @@ import type { Market } from "./feed";
  * against the contracts today would still work and would still be indexed. This closes an
  * interface, and saying so plainly is more honest than implying the protocol is gated.
  */
-export const LAUNCHING_OPEN = false;
+export const LAUNCHING_OPEN = true;
 
 /**
  * Markets kept out of the listing.

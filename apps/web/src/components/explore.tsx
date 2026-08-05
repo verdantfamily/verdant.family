@@ -167,8 +167,18 @@ export function Explore({
         </div>
       ) : (
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
-          {shown.map((market) => (
-            <MarketCard key={market.poolId} market={market} at={at} usdPerEth={usdPerEth} />
+          {shown.map((market, index) => (
+            <MarketCard
+              // The key carries the ordering as well as the market, so re-sorting
+              // remounts the tiles and they stagger into their new places. Keyed by pool
+              // id alone, React would move the existing nodes and the grid would rearrange
+              // itself instantly and silently.
+              key={`${ordering}:${market.poolId}`}
+              market={market}
+              at={at}
+              usdPerEth={usdPerEth}
+              index={index}
+            />
           ))}
         </div>
       )}

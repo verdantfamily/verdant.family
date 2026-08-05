@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { LAUNCHING_OPEN } from "../../lib/launch-window";
 import { ConnectButton } from "../connect-button";
@@ -43,6 +43,7 @@ export function Header({
 }) {
   const pathname = usePathname();
   const scrolled = useScrolled();
+  const { track, pill, settled } = useSlidingPill(pathname);
 
   /** `/` would otherwise match every path, and `/launch/classic` should light Launch. */
   function isCurrent(href: string) {
@@ -79,8 +80,28 @@ export function Header({
         </Link>
 
         {/* A well with a white pill in it, which is what a segmented control looks like on
-            a dark surface: the track is pressed into the page rather than raised off it. */}
-        <nav className="hidden items-center rounded-full border border-border bg-surface-sunken/80 p-1 backdrop-blur-xl md:flex">
+            a dark surface: the track is pressed into the page rather than raised off it.
+            The pill is one element that moves, rather than a background switched off one
+            link and on to another — so a navigation reads as a thing sliding across the
+            control instead of two separate flickers. */}
+        <nav
+          ref={track}
+          className="relative hidden items-center rounded-full border border-border bg-surface-sunken/80 p-1 backdrop-blur-xl md:flex"
+        >
+          {pill === null ? null : (
+            <span
+              aria-hidden="true"
+              className={`absolute inset-y-1 rounded-full bg-ink shadow-card ${
+                settled ? "transition-[transform,width] duration-300 ease-out" : ""
+              }`}
+              style={{
+                width: pill.width,
+                transform: `translateX(${pill.left}px)`,
+                left: 0,
+              }}
+            />
+          )}
+
           {NAV.map((item) => {
             const current = isCurrent(item.href);
             return (
@@ -88,10 +109,9 @@ export function Header({
                 key={item.href}
                 href={item.href}
                 aria-current={current ? "page" : undefined}
-                className={`rounded-full px-4 py-1.5 text-sm transition ${
-                  current
-                    ? "bg-ink text-ink-inverse shadow-card"
-                    : "text-ink-muted hover:bg-surface-raised hover:text-ink"
+                // Above the pill, and coloured against it rather than carrying it.
+                className={`relative z-10 rounded-full px-4 py-1.5 text-sm transition-colors ${
+                  current ? "text-ink-inverse" : "text-ink-muted hover:text-ink"
                 }`}
               >
                 {item.label}
@@ -121,6 +141,62 @@ export function Header({
       </div>
     </header>
   );
+}
+
+/**
+ * Where the lit segment is, so one pill can move between them.
+ *
+ * Measured from the DOM rather than computed, because the labels have different widths
+ * and the only thing that knows how wide "Profile" renders in this face at this size is
+ * the browser that just laid it out.
+ *
+ * ## Why the layout effect, and why `settled`
+ *
+ * The measurement has to happen before the browser paints, or the first frame of every
+ * page load has an unlit control and the pill visibly snaps into place. `useLayoutEffect`
+ * runs in that gap — on the client only, which is what the guard below is for: it does
+ * not run during a server render and React warns if it is asked to.
+ *
+ * `settled` then withholds the transition until after that first positioning. Without it
+ * the pill animates from the left edge of the control to the current tab every time
+ * somebody loads a page, which looks like a bug rather than like an entrance.
+ */
+const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
+
+function useSlidingPill(pathname: string) {
+  const track = useRef<HTMLElement>(null);
+  const [pill, setPill] = useState<{ left: number; width: number } | null>(null);
+  const [settled, setSettled] = useState(false);
+
+  useIsomorphicLayoutEffect(() => {
+    const container = track.current;
+    if (container === null) return;
+
+    function measure() {
+      const active = container?.querySelector<HTMLElement>('[aria-current="page"]');
+      setPill(
+        active == null ? null : { left: active.offsetLeft, width: active.offsetWidth },
+      );
+    }
+
+    measure();
+
+    // The control's width changes with the viewport, and a pill measured at one width is
+    // in the wrong place at another.
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [pathname]);
+
+  // A frame after the first placement, so the transition applies to every move except the
+  // one that put it there.
+  useEffect(() => {
+    if (pill === null || settled) return;
+    const frame = requestAnimationFrame(() => setSettled(true));
+    return () => cancelAnimationFrame(frame);
+  }, [pill, settled]);
+
+  return { track, pill, settled };
 }
 
 /**

@@ -24,15 +24,28 @@ import { TimeAgo } from "./time-ago";
  * market quoted in a tokenized equity has no rate to convert through, so it keeps its own
  * unit rather than being run through a price this app does not have.
  */
+/**
+ * How far into the stagger a tile may be pushed.
+ *
+ * Eight, times fifty milliseconds, is four tenths of a second for the last card that
+ * waits at all. Beyond that the delay stops reading as choreography and starts reading as
+ * a page that has not finished loading — and a listing can hold sixty of these.
+ */
+const STAGGER_LIMIT = 8;
+const STAGGER_STEP_MS = 50;
+
 export function MarketCard({
   market,
   at,
   usdPerEth,
+  index = 0,
 }: {
   readonly market: Market;
   readonly at: number;
   /** Dollars per ether, or `null` when no price could be had. */
   readonly usdPerEth: number | null;
+  /** Position in the grid, which decides when this tile arrives. */
+  readonly index?: number;
 }) {
   const quote = describeQuote(market.quote);
   const marketCap = impliedValueInQuote(market.totalSupply, market.sqrtPriceX96);
@@ -41,7 +54,8 @@ export function MarketCard({
   return (
     <Link
       href={`/market/${market.poolId}`}
-      className="group flex flex-col overflow-hidden rounded-card border border-border bg-surface shadow-card backdrop-blur-xl transition duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:shadow-lift"
+      style={{ animationDelay: `${Math.min(index, STAGGER_LIMIT) * STAGGER_STEP_MS}ms` }}
+      className="tile-in group flex flex-col overflow-hidden rounded-card border border-border bg-surface shadow-card backdrop-blur-xl transition duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:shadow-lift"
     >
       <div className="aspect-square w-full overflow-hidden">
         <TokenAvatar symbol={market.symbol} uri={market.metadataURI} size="card" />

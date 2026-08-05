@@ -552,6 +552,72 @@ body {
   }
 }
 
+/**
+ * A tile arriving in the listing.
+ *
+ * Staggered by a delay the grid sets per card, so the page assembles rather than
+ * appearing — which is the difference between a listing that feels fetched and one that
+ * feels rendered. The stagger is capped by the caller: a fortieth card that waited two
+ * seconds would read as a page still loading rather than as a flourish.
+ *
+ * `backwards` matters. Without it a card is fully visible for the length of its own delay
+ * and then jumps to the start of the animation, which is worse than no animation at all.
+ */
+@keyframes tile-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.tile-in {
+  animation: tile-in 460ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+/**
+ * A section arriving as it is scrolled to.
+ *
+ * The class is applied by `Reveal`, which adds it when the element first crosses into
+ * view and never removes it — a section that re-animated every time it was scrolled past
+ * would be a section nobody could read on the way back up.
+ */
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.reveal {
+  opacity: 0;
+}
+
+.reveal-in {
+  animation: reveal-in 620ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile-in,
+  .reveal-in {
+    animation-duration: 1ms;
+    animation-delay: 0ms;
+  }
+
+  /* The reveal hides its content until the observer fires, so the resting state has to
+     be visible for anybody who will never see the animation. */
+  .reveal {
+    opacity: 1;
+  }
+}
+
 /** A hairline that reads as a fold rather than a border. */
 .hairline {
   background-image: linear-gradient(

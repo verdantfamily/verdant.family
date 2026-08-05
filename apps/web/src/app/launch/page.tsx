@@ -10,6 +10,7 @@ import Link from "next/link";
 
 import { LaunchSoon } from "../../components/launch-soon";
 import { Badge, PageHeading } from "../../components/primitives";
+import { Reveal } from "../../components/reveal";
 import { LAUNCHING_OPEN } from "../../lib/launch-window";
 import classicArt from "../../../public/models/classic.jpg";
 import evergreenArt from "../../../public/models/evergreen.jpg";
@@ -61,11 +62,13 @@ export default function LaunchPage() {
 
       <div className="mx-auto grid max-w-6xl gap-6 px-6 lg:grid-cols-3">
         {LAUNCH_MODEL_ORDER.map((id, index) => (
-          <ModelCard key={id} model={LAUNCH_MODELS[id]} index={index} />
+          <Reveal key={id} delay={index * 90} className="flex">
+            <ModelCard model={LAUNCH_MODELS[id]} index={index} />
+          </Reveal>
         ))}
       </div>
 
-      <div className="mx-auto mt-14 max-w-3xl px-6">
+      <Reveal as="div" className="mx-auto mt-14 max-w-3xl px-6">
         <div className="hairline" />
         <h2 className="mt-10 text-center text-[1.35rem] font-semibold tracking-tight text-ink">
           What every model does, regardless of which you pick
@@ -95,7 +98,7 @@ export default function LaunchPage() {
             </div>
           ))}
         </dl>
-      </div>
+      </Reveal>
     </div>
   );
 }

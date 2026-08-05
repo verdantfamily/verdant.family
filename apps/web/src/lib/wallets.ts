@@ -18,48 +18,6 @@ export interface Offerable {
   readonly id: string;
 }
 
-/**
- * Wallets that can only ever reach a list of chains somebody else maintains.
- *
- * Most wallets implement EIP-3085 and will add whatever chain a page asks for, which is
- * why Verdant works in them without being on anybody's list. A few do not: they ship a
- * fixed roster and refuse everything outside it, with no way for a user to add one.
- *
- * On such a wallet Verdant is not degraded, it is impossible — every signature fails, and
- * the wallet reports it in its own words. Phantom's are "There was an error attempting to
- * sign the transaction", which names neither the chain nor the reason, so somebody hits
- * the identical failure launching and trading and has nothing to go on. Offering the
- * wallet as an ordinary choice is what makes that happen, so it is named here instead.
- *
- * Keyed by EIP-6963 `rdns`, which is what wagmi uses as a connector id for an announced
- * wallet. The rosters are the wallet's own published list and will go stale; a wallet that
- * adds a chain is a line to change here, and the cost of being wrong is a caution shown to
- * somebody it no longer applies to rather than a route closed off — nothing below prevents
- * a connection.
- */
-const FIXED_ROSTER: Record<string, { readonly name: string; readonly chains: readonly number[] }> =
-  {
-    // docs.phantom.com/sdks/browser-sdk, "Supported EVM Networks", read 2026-08-05.
-    "app.phantom": {
-      name: "Phantom",
-      chains: [1, 11_155_111, 137, 80_002, 8_453, 84_532, 42_161, 421_614, 143, 10_143],
-    },
-  };
-
-/**
- * The wallet's name when it cannot reach this chain, and `null` when it can or when
- * nothing is known about it.
- *
- * Unknown means reachable, deliberately. The overwhelming majority of wallets will add a
- * chain on request, and warning about every one this file has not heard of would be a
- * false alarm on almost all of them.
- */
-export function cannotReach(connectorId: string, chainId: number): string | null {
-  const roster = FIXED_ROSTER[connectorId];
-  if (roster === undefined) return null;
-  return roster.chains.includes(chainId) ? null : roster.name;
-}
-
 export interface WalletChoices<T extends Offerable> {
   /**
    * Wallets on this machine: those that announced themselves over EIP-6963, or the

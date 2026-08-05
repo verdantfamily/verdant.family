@@ -10,9 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { cannotReach, walletChoices } from "./wallets";
-
-const ROBINHOOD = 4_663;
+import { walletChoices } from "./wallets";
 
 const INJECTED = { id: "injected" };
 const WALLET_CONNECT = { id: "walletConnect" };
@@ -74,34 +72,5 @@ describe("choosing which wallets to offer", () => {
   it("preserves the order wagmi announced wallets in", () => {
     const { installed } = walletChoices([INJECTED, PHANTOM, METAMASK], true);
     expect(installed.map((entry) => entry.id)).toEqual(["app.phantom", "io.metamask"]);
-  });
-});
-
-/*
- * The failure this describes cost an afternoon. Launching and trading both failed with
- * Phantom's own words — "There was an error attempting to sign the transaction" — while
- * every simulation of both, run against the real chain from outside the browser, said the
- * transactions were fine. They were: Phantom cannot reach chain 4663 and never could.
- */
-describe("wallets that cannot reach the chain Verdant is on", () => {
-  it("names Phantom on Robinhood Chain, which is not on its roster", () => {
-    expect(cannotReach("app.phantom", ROBINHOOD)).toBe("Phantom");
-  });
-
-  it("says nothing about Phantom on a chain it does support", () => {
-    expect(cannotReach("app.phantom", 1)).toBe(null);
-    expect(cannotReach("app.phantom", 8_453)).toBe(null);
-  });
-
-  /*
-   * Unknown means reachable. Almost every wallet will add a chain on request, so warning
-   * about each one this file has not heard of would be a false alarm on nearly all of
-   * them — and a false alarm on the wallet that does work is worse than no alarm at all.
-   */
-  it("says nothing about a wallet it has never heard of", () => {
-    expect(cannotReach("io.metamask", ROBINHOOD)).toBe(null);
-    expect(cannotReach("walletConnect", ROBINHOOD)).toBe(null);
-    expect(cannotReach("injected", ROBINHOOD)).toBe(null);
-    expect(cannotReach("xyz.unknown.wallet", ROBINHOOD)).toBe(null);
   });
 });

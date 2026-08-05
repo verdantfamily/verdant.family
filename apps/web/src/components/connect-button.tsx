@@ -192,9 +192,24 @@ function ChoosePanel({
 }) {
   const injectedIsReal = useInjectedIsReal();
 
-  const announced = connectors.filter((entry) => entry.id !== "injected");
-  const offered =
-    announced.length > 0 ? announced : injectedIsReal ? connectors : [];
+  /*
+   * Three kinds of entry, and they cannot be told apart by one predicate.
+   *
+   * WalletConnect is not a wallet on this machine — it is the way to reach one that is
+   * not — so it is always offerable and must not be counted when deciding whether any
+   * extension was found. Sorting it in with the announced ones, which an earlier
+   * "anything that is not `injected`" rule did, would suppress the generic injected
+   * fallback on every browser that has a non-announcing wallet.
+   */
+  const bridges = connectors.filter((entry) => entry.id === "walletConnect");
+  const announced = connectors.filter(
+    (entry) => entry.id !== "injected" && entry.id !== "walletConnect",
+  );
+  const generic = connectors.filter((entry) => entry.id === "injected");
+
+  const installed =
+    announced.length > 0 ? announced : injectedIsReal ? generic : [];
+  const offered = [...installed, ...bridges];
 
   if (offered.length === 0) {
     return (
@@ -202,11 +217,10 @@ function ChoosePanel({
         <p className="text-sm font-semibold text-ink">No wallet on this device</p>
 
         {/*
-         * Two paths, phone first, because the phone is where somebody arrives at this
-         * message. Verdant has no WalletConnect connector — that needs a project id
-         * issued to a named application — so on a phone there is exactly one way in,
-         * and saying it plainly beats a list of wallets none of which can be reached
-         * from here.
+         * Reached only by a build with no WalletConnect project id configured, since
+         * that connector is offerable everywhere and would have filled this list. So
+         * this is the case where a phone genuinely has one way in, and saying which
+         * beats a roster of wallets none of which can be reached from here.
          */}
         <p className="mt-2 text-[0.8rem] leading-relaxed text-ink-muted">
           <span className="font-medium text-ink">On a phone:</span> open{" "}
@@ -234,24 +248,66 @@ function ChoosePanel({
       </p>
 
       <div className="mt-3 space-y-1.5">
-        {offered.map((entry) => (
-          <button
+        {installed.map((entry) => (
+          <WalletRow
             key={entry.uid}
-            type="button"
-            disabled={pending}
-            onClick={() => onConnect(entry)}
-            className="flex w-full items-center gap-3 rounded-xl border border-border bg-surface-sunken px-3 py-2.5 text-left transition hover:border-border-strong hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <WalletIcon icon={entry.icon} />
-            <span className="min-w-0 flex-1 truncate text-[0.85rem] font-medium text-ink">
-              {entry.name}
-            </span>
-          </button>
+            entry={entry}
+            pending={pending}
+            onConnect={onConnect}
+          />
+        ))}
+
+        {/* Set apart from the wallets above it, because it is not one. Choosing it opens
+            a pairing flow rather than a wallet, and on a phone it leaves the browser
+            entirely — worth saying before the tap rather than after it. */}
+        {bridges.map((entry) => (
+          <WalletRow
+            key={entry.uid}
+            entry={entry}
+            pending={pending}
+            onConnect={onConnect}
+            hint={
+              installed.length > 0
+                ? "Scan with a phone, or open a wallet app"
+                : "Opens your wallet app"
+            }
+          />
         ))}
       </div>
 
       <FailureNote error={error} />
     </>
+  );
+}
+
+function WalletRow({
+  entry,
+  pending,
+  hint,
+  onConnect,
+}: {
+  readonly entry: Connector;
+  readonly pending: boolean;
+  readonly hint?: string;
+  readonly onConnect: (connector: Connector) => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={pending}
+      onClick={() => onConnect(entry)}
+      className="flex w-full items-center gap-3 rounded-xl border border-border bg-surface-sunken px-3 py-2.5 text-left transition hover:border-border-strong hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      <WalletIcon icon={entry.icon} />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[0.85rem] font-medium text-ink">
+          {entry.name}
+        </span>
+        {hint === undefined ? null : (
+          <span className="block truncate text-[0.72rem] text-ink-muted">{hint}</span>
+        )}
+      </span>
+    </button>
   );
 }
 

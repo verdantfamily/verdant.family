@@ -17,6 +17,8 @@
     "@verdant/config": "workspace:*",
     "@verdant/sdk": "workspace:*",
     "@verdant/ui": "workspace:*",
+    "@wagmi/connectors": "8.0.26",
+    "@walletconnect/ethereum-provider": "^2.23.10",
     "lightweight-charts": "^5.2.0",
     "next": "^15.5.4",
     "react": "^19.1.1",

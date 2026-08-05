@@ -424,11 +424,14 @@ export function TradePanel({
         ? usdOfToken(amountOut)
         : usdOfQuote(amountOut);
 
+  /** Whether the box below is waiting on the quoter rather than showing an answer. */
+  const quoting = amountIn > 0n && (quoted.isFetching || debouncedAmountIn !== amountIn);
+
   /** What the receive box shows, which is a quote in progress as often as a number. */
   const receiving =
     amountIn <= 0n
       ? "0"
-      : quoted.isFetching || debouncedAmountIn !== amountIn
+      : quoting
         ? "…"
         : quoted.error !== null || amountOut === undefined
           ? "0"
@@ -546,7 +549,20 @@ export function TradePanel({
       <Leg
         label="Buy"
         amount={
-          <div className="numeric truncate text-[2rem] leading-none text-ink">{receiving}</div>
+          /* A block the size of the answer rather than an ellipsis. The ellipsis occupied
+             none of the room the number needs, so the panel resized the instant a quote
+             landed — and said nothing about whether the quoter was working. */
+          quoting ? (
+            <div
+              role="status"
+              aria-label="Fetching a quote"
+              className="shimmer h-[2rem] w-32 rounded-lg bg-surface-sunken"
+            />
+          ) : (
+            <div className="numeric truncate text-[2rem] leading-none text-ink">
+              {receiving}
+            </div>
+          )
         }
         usd={usdOut}
         asset={
@@ -903,7 +919,14 @@ function Action({
 
   return (
     <div>
-      <button type="button" disabled={!ready} onClick={onSwap} className={PRIMARY}>
+      {/* A wallet opens in its own window, sometimes on another monitor. The ring is what
+          makes somebody look back at the button that is telling them so. */}
+      <button
+        type="button"
+        disabled={!ready}
+        onClick={onSwap}
+        className={`${PRIMARY} ${swap.phase === "signing" ? "awaiting" : ""}`}
+      >
         {swap.phase === "signing"
           ? "Confirm in your wallet"
           : swap.phase === "pending"

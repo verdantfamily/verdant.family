@@ -2,7 +2,7 @@
 
 import { formatAge, formatAmount, formatCompact, formatFeeRate } from "@verdant/ui";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { SerializedHistory } from "../lib/trades";
 import { Pagination } from "./pagination";
@@ -41,6 +41,37 @@ const POLL_MILLISECONDS = 2_000;
 /** Must match `ROWS` in the route this polls, which is what decides a page. */
 const ROWS = 30;
 
+/**
+ * Which rows were not here last time.
+ *
+ * A table that reorders itself every two seconds gives a reader no way to tell the new
+ * trade from the one above it that simply moved down to make space. This is what lets the
+ * new one say so.
+ *
+ * The first render marks nothing. Everything is new then, and thirty rows announcing
+ * themselves on arrival is a table that looks like it is malfunctioning rather than one
+ * that is live.
+ */
+function useArrivals(swaps: readonly { readonly id: string }[]): ReadonlySet<string> {
+  const seen = useRef<Set<string> | null>(null);
+  const [arrived, setArrived] = useState<ReadonlySet<string>>(new Set());
+
+  useEffect(() => {
+    const ids = new Set(swaps.map((swap) => swap.id));
+
+    if (seen.current === null) {
+      seen.current = ids;
+      return;
+    }
+
+    const fresh = new Set([...ids].filter((id) => !seen.current?.has(id)));
+    seen.current = ids;
+    if (fresh.size > 0) setArrived(fresh);
+  }, [swaps]);
+
+  return arrived;
+}
+
 export function TradeHistoryTable({
   poolId,
   initial,
@@ -74,6 +105,7 @@ export function TradeHistoryTable({
   });
 
   const history = data ?? initial;
+  const arrived = useArrivals(history.swaps);
 
   if (history.swaps.length === 0) {
     return <p className="px-6 py-8 text-[0.85rem] text-ink-muted">Nothing has traded yet.</p>;
@@ -98,7 +130,12 @@ export function TradeHistoryTable({
           </thead>
           <tbody className="divide-y divide-border">
             {history.swaps.map((swap) => (
-              <tr key={swap.id} className="transition-colors hover:bg-surface-sunken">
+              <tr
+                key={swap.id}
+                className={`transition-colors hover:bg-surface-sunken ${
+                  arrived.has(swap.id) ? (swap.buy ? "row-in-rise" : "row-in-fall") : ""
+                }`}
+              >
                 {/* A recessed chip with a coloured edge and a coloured word, rather than a
                     coloured wash with a coloured word on it: on dark, a wash lifts the
                     surface towards the label instead of away from it. */}

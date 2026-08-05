@@ -59,14 +59,19 @@ export function LaunchSoon({ compact = false }: { readonly compact?: boolean }) 
  * of the path — see `.chart-draw`. The area beneath is a second path closed to the floor,
  * faded in behind the line after it has been drawn, so the two do not arrive together and
  * flatten the effect.
+ *
+ * Exported because the launch confirmation draws the same line. The two moments are
+ * opposites — one is "not yet" and the other is "it exists" — but the picture is the
+ * same promise, and drawing it twice from one file is what keeps them looking like the
+ * same product.
  */
-function RisingChart() {
+export function RisingChart({ className = "h-auto w-full max-w-sm" }: { readonly className?: string }) {
   return (
     <svg
       viewBox="0 0 320 148"
       role="img"
       aria-label="A price line rising"
-      className="h-auto w-full max-w-sm"
+      className={className}
     >
       <defs>
         <linearGradient id="launch-soon-fill" x1="0" y1="0" x2="0" y2="1">

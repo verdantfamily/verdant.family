@@ -618,6 +618,112 @@ body {
   }
 }
 
+/**
+ * A value being fetched, in the shape of the value.
+ *
+ * An ellipsis says "wait" and occupies none of the room the answer will need, so the
+ * panel resizes the moment it arrives. A block the size of the number holds the space and
+ * tells the reader the same thing by moving — which is the difference between a control
+ * that is working and one that has stopped.
+ */
+@keyframes shimmer {
+  from {
+    background-position: -180% 0;
+  }
+  to {
+    background-position: 180% 0;
+  }
+}
+
+.shimmer {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    oklch(1 0 0 / 0.09) 45%,
+    oklch(1 0 0 / 0.14) 50%,
+    oklch(1 0 0 / 0.09) 55%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 1400ms linear infinite;
+}
+
+/**
+ * A trade arriving in the table.
+ *
+ * The tint is the point rather than the movement: on a table that reorders every two
+ * seconds, a reader needs to know which row is the new one, and a row that merely slid is
+ * indistinguishable from the row above it that moved down to make space. It fades from
+ * the direction's own colour, so a buy and a sell announce themselves differently.
+ */
+@keyframes row-in-rise {
+  from {
+    background-color: var(--color-rise-soft);
+    transform: translateY(-6px);
+    opacity: 0.4;
+  }
+  to {
+    background-color: transparent;
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes row-in-fall {
+  from {
+    background-color: var(--color-fall-soft);
+    transform: translateY(-6px);
+    opacity: 0.4;
+  }
+  to {
+    background-color: transparent;
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.row-in-rise {
+  animation: row-in-rise 900ms ease-out;
+}
+
+.row-in-fall {
+  animation: row-in-fall 900ms ease-out;
+}
+
+/**
+ * A control that is waiting on a wallet.
+ *
+ * A wallet extension opens in its own window, and on a second monitor — or behind the
+ * browser — somebody can sit looking at a page that appears to have done nothing. The
+ * button says "Confirm in your wallet"; this is what makes them look at the button.
+ */
+@keyframes awaiting {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--color-accent-ring);
+  }
+  50% {
+    box-shadow: 0 0 0 6px oklch(0.8 0.13 158 / 0);
+  }
+}
+
+.awaiting {
+  animation: awaiting 1600ms ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer,
+  .awaiting {
+    animation: none;
+  }
+
+  .row-in-rise,
+  .row-in-fall {
+    animation-duration: 1ms;
+  }
+}
+
 /** A hairline that reads as a fold rather than a border. */
 .hairline {
   background-image: linear-gradient(

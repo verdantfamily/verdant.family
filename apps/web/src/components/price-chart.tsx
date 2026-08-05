@@ -17,6 +17,7 @@ import {
   type AxisScale,
   type SerializedSeries,
 } from "../lib/candles";
+import { useRollingNumber } from "../lib/roll";
 import { formatUsdPrecise, formatUsdSignificant } from "../lib/usd";
 import { Segmented } from "./form";
 import { LiveValue } from "./live-value";
@@ -432,6 +433,28 @@ export function PriceChart({
 
   const shown = hovered?.price ?? summary?.price;
 
+  /*
+   * The headline, counted to rather than snapped to.
+   *
+   * Only the dollar figure rolls. A price in the quote asset is a 36-decimal integer
+   * formatted with subscript zeros, and tweening through that produces a string whose
+   * length changes on every frame — motion that reads as a fault. The dollar figure is an
+   * ordinary number and the one most readers are looking at.
+   *
+   * Rolling is off while the crosshair is driving the value: that number follows a
+   * pointer, and tweening between pointer positions lags it.
+   */
+  const target =
+    shown === undefined || valueScale === null ? null : asFloat(shown) * valueScale;
+  const rolled = useRollingNumber(target, { disabled: hovered !== null });
+
+  const headline =
+    shown === undefined
+      ? "—"
+      : valueScale === null
+        ? `${formatPrice(shown)} ${quoteLabel}`
+        : formatUsdPrecise(rolled ?? asFloat(shown) * valueScale);
+
   /** A stored price in whatever unit the chart is currently drawing. */
   const label = (price: bigint): string =>
     valueScale === null
@@ -464,13 +487,7 @@ export function PriceChart({
                 drag would be motion that means nothing. */}
             <LiveValue
               quiet={hovered !== null}
-              text={
-                shown === undefined
-                  ? "—"
-                  : valueScale === null
-                    ? `${formatPrice(shown)} ${quoteLabel}`
-                    : formatUsdPrecise(asFloat(shown) * valueScale)
-              }
+              text={headline}
               amount={shown === undefined ? null : asFloat(shown)}
             />
           </p>

@@ -86,6 +86,8 @@ export function LaunchForm({ modelId }: { readonly modelId: LaunchModelId }) {
     enabled: blocking.length === 0,
   });
 
+  const steps = launchSteps(blocking);
+
   function set<K extends keyof LaunchDraft>(key: K, value: LaunchDraft[K]) {
     setDraft((previous) => ({ ...previous, [key]: value }));
   }
@@ -231,6 +233,12 @@ export function LaunchForm({ modelId }: { readonly modelId: LaunchModelId }) {
 
   return (
     <div className="mx-auto grid max-w-6xl gap-6 px-6 lg:grid-cols-[1fr_22rem] lg:items-start">
+      {/* Pinned under the header, because a progress bar somebody has to scroll back up to
+          see is a progress bar that tells them nothing while they work. */}
+      <div className="sticky top-16 z-30 -mx-6 mb-1 bg-canvas/80 px-6 py-3 backdrop-blur-xl lg:col-span-2">
+        <LaunchProgress steps={steps} />
+      </div>
+
       <div className="space-y-6">
         {/* ---------------------------------------------------------------- identity */}
         <FormSection
@@ -866,6 +874,90 @@ export function FeeSelect({
     return { value: percent, label: `${percent}%` };
   });
   return <Select value={value} onChange={onChange} options={options} />;
+}
+
+/**
+ * What stands between this draft and a launch, grouped the way the form is.
+ *
+ * Progress towards launching rather than fields filled in, which are different numbers:
+ * almost every control here opens with a default that would produce a valid market, so
+ * "how much of the form have you touched" would sit near zero on a draft that is one
+ * ticker away from being sendable. What a creator wants to know is how many things are
+ * still wrong, and that is exactly the list the blockers panel below already shows — this
+ * is the same fact, in a shape you can read while scrolling past it.
+ *
+ * Matched by prefix, because a stage's fee reports itself as `stages.2.fee` and a split's
+ * address as `splits.0.address`.
+ */
+const LAUNCH_STEPS: readonly { readonly label: string; readonly fields: readonly string[] }[] = [
+  { label: "Name and ticker", fields: ["name", "symbol"] },
+  { label: "Pair", fields: ["quoteSymbol"] },
+  { label: "Supply and price", fields: ["supplyTokens", "initialTick"] },
+  { label: "Fee", fields: ["buyFeePercent", "sellFeePercent", "stages"] },
+  { label: "Where fees go", fields: ["rewardWallet", "splits"] },
+  {
+    label: "Allocation",
+    fields: ["allocationPercent", "lockDays", "vestDays", "cliffDays"],
+  },
+  { label: "First buy", fields: ["initialBuy"] },
+  { label: "Links and image", fields: ["imageUrl", "website", "metadataUrl"] },
+];
+
+interface LaunchStep {
+  readonly label: string;
+  readonly done: boolean;
+}
+
+function launchSteps(blocking: readonly { readonly field: string }[]): readonly LaunchStep[] {
+  return LAUNCH_STEPS.map((step) => ({
+    label: step.label,
+    done: !blocking.some((issue) =>
+      step.fields.some(
+        (field) => issue.field === field || issue.field.startsWith(`${field}.`),
+      ),
+    ),
+  }));
+}
+
+/**
+ * The bar, and what is left.
+ *
+ * A hairline rather than a band: it is a status, not a control, and it sits under a
+ * header that is already carrying navigation. It says nothing at all once everything is
+ * done except that everything is done — the panel at the bottom of the form is where a
+ * creator goes to read the detail.
+ */
+function LaunchProgress({ steps }: { readonly steps: readonly LaunchStep[] }) {
+  const done = steps.filter((step) => step.done).length;
+  const remaining = steps.length - done;
+  const percent = Math.round((done / steps.length) * 100);
+
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-4">
+        <p className="text-[0.72rem] font-medium text-ink">
+          {remaining === 0 ? "Ready to launch" : `${remaining} to fix`}
+        </p>
+        <p className="numeric text-[0.7rem] text-ink-faint">{percent}%</p>
+      </div>
+
+      <div
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+        aria-label="Progress towards a launchable draft"
+        className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-surface-sunken"
+      >
+        <div
+          className={`h-full rounded-full transition-[width] duration-500 ease-out ${
+            remaining === 0 ? "bg-accent" : "bg-ink/70"
+          }`}
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+    </div>
+  );
 }
 
 /** Exported for the docs page, which explains the same durations in prose. */

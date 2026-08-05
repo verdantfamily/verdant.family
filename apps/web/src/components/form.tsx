@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ChangeEvent, ReactNode } from "react";
 
 /**
@@ -302,17 +303,35 @@ export function Segmented<T extends string>({
   readonly full?: boolean;
 }) {
   const padding = size === "small" ? "px-3 py-1 text-[0.78rem]" : "px-4 py-2 text-[0.85rem]";
+  const { track, pill, settled } = useSlidingSelection(value, wrap);
 
   return (
     <div
+      ref={track}
       role="radiogroup"
       /* Blurred as well as sunken: this control is used both inside a card and straight on
          the page, and in the second case it is the only thing between its labels and the
          photograph. */
-      className={`gap-1 rounded-full border border-border bg-surface-sunken p-1 backdrop-blur-xl ${
+      className={`relative gap-1 rounded-full border border-border bg-surface-sunken p-1 backdrop-blur-xl ${
         full ? "flex w-full" : "inline-flex"
       } ${wrap ? "flex-wrap" : "shrink-0 flex-nowrap"}`}
     >
+      {/*
+       * One pill that moves, rather than a background switched off one segment and on to
+       * another. Suppressed when the control is allowed to wrap: a selection on the second
+       * row would need the pill to travel diagonally through the first, and the segments
+       * fall back to carrying their own background there.
+       */}
+      {pill === null ? null : (
+        <span
+          aria-hidden="true"
+          className={`absolute inset-y-1 rounded-full bg-surface-raised shadow-card ${
+            settled ? "transition-[transform,width] duration-300 ease-out" : ""
+          }`}
+          style={{ left: 0, width: pill.width, transform: `translateX(${pill.left}px)` }}
+        />
+      )}
+
       {options.map((option) => {
         const selected = option.value === value;
         return (
@@ -325,11 +344,11 @@ export function Segmented<T extends string>({
             /* The chosen segment is `surface-raised` rather than `surface`: the track it
                sits in is a well, and 5.5% white inside 18% black is a difference you have
                to look for. The inner light edge in `shadow-card` does the rest. */
-            className={`whitespace-nowrap rounded-full font-medium transition ${padding} ${
+            className={`relative z-10 whitespace-nowrap rounded-full font-medium transition-colors ${padding} ${
               full ? "flex-1" : ""
             } ${
               selected
-                ? "bg-surface-raised text-ink shadow-card"
+                ? `text-ink ${pill === null ? "bg-surface-raised shadow-card" : ""}`
                 : "text-ink-muted hover:text-ink"
             }`}
           >
@@ -339,6 +358,57 @@ export function Segmented<T extends string>({
       })}
     </div>
   );
+}
+
+/**
+ * Where the chosen segment is, so one pill can travel between them.
+ *
+ * The twin of the header's navigation pill, and it exists for the same reasons: the
+ * labels have different widths and only the browser that laid them out knows by how much;
+ * the measurement has to land before paint or the first frame shows an unselected control;
+ * and the transition is withheld until after that first placement, or the pill slides in
+ * from the left edge every time the control mounts.
+ *
+ * Returns no position at all when the control may wrap, which is the signal to the caller
+ * to let the segments carry their own background instead.
+ */
+const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
+
+function useSlidingSelection(value: string, wrap: boolean) {
+  const track = useRef<HTMLDivElement>(null);
+  const [pill, setPill] = useState<{ left: number; width: number } | null>(null);
+  const [settled, setSettled] = useState(false);
+
+  useIsomorphicLayoutEffect(() => {
+    const container = track.current;
+    if (container === null || wrap) {
+      setPill(null);
+      return;
+    }
+
+    function measure() {
+      const selected = container?.querySelector<HTMLElement>('[aria-checked="true"]');
+      setPill(
+        selected == null
+          ? null
+          : { left: selected.offsetLeft, width: selected.offsetWidth },
+      );
+    }
+
+    measure();
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [value, wrap]);
+
+  useEffect(() => {
+    if (pill === null || settled) return;
+    const frame = requestAnimationFrame(() => setSettled(true));
+    return () => cancelAnimationFrame(frame);
+  }, [pill, settled]);
+
+  return { track, pill, settled };
 }
 
 /**

@@ -11,8 +11,11 @@ import { useConnection, usePublicClient } from "wagmi";
 import { CHAIN_ID, VERDANT_ADDRESSES, chain } from "../../lib/chain";
 import { describeError } from "../../lib/errors";
 import { launchParams, tokenIdentity, type DerivedLaunch, type LaunchDraft } from "../../lib/launch";
+import { useCountUp, useTypedText } from "../../lib/roll";
 import { ConnectButton } from "../connect-button";
-import { AddressLink, Notice } from "../primitives";
+import { CopyButton } from "../copy-button";
+import { RisingChart } from "../launch-soon";
+import { Notice } from "../primitives";
 import { MissingAddresses, TransactionNote, useTransaction } from "../transaction";
 
 /**
@@ -412,7 +415,9 @@ function LaunchAction({
           type="button"
           disabled={approval.busy}
           onClick={() => void approve()}
-          className="inline-flex h-12 w-full items-center justify-center rounded-full bg-ink px-6 text-[0.95rem] font-medium text-ink-inverse shadow-card transition hover:bg-ink/90 active:scale-[0.985] disabled:cursor-not-allowed disabled:bg-surface-raised disabled:text-ink-faint disabled:active:scale-100"
+          className={`inline-flex h-12 w-full items-center justify-center rounded-full bg-ink px-6 text-[0.95rem] font-medium text-ink-inverse shadow-card transition hover:bg-ink/90 active:scale-[0.985] disabled:cursor-not-allowed disabled:bg-surface-raised disabled:text-ink-faint disabled:active:scale-100 ${
+            approval.phase === "signing" ? "awaiting" : ""
+          }`}
         >
           {approval.phase === "signing"
             ? "Confirm in your wallet"
@@ -442,7 +447,9 @@ function LaunchAction({
         type="button"
         disabled={preparing || run.busy || cannotAfford}
         onClick={() => void submit()}
-        className="inline-flex h-12 w-full items-center justify-center rounded-full bg-ink px-6 text-[0.95rem] font-medium text-ink-inverse shadow-card transition hover:bg-ink/90 active:scale-[0.985] disabled:cursor-not-allowed disabled:bg-surface-raised disabled:text-ink-faint disabled:active:scale-100"
+        className={`inline-flex h-12 w-full items-center justify-center rounded-full bg-ink px-6 text-[0.95rem] font-medium text-ink-inverse shadow-card transition hover:bg-ink/90 active:scale-[0.985] disabled:cursor-not-allowed disabled:bg-surface-raised disabled:text-ink-faint disabled:active:scale-100 ${
+          run.phase === "signing" ? "awaiting" : ""
+        }`}
       >
         {run.phase === "signing"
           ? "Confirm in your wallet"
@@ -556,29 +563,55 @@ function MarketCreated({
 }) {
   const amount = initialBuy.trim();
   const spent = amount === "" ? "0" : amount;
-  const bought_ = bought === 0n ? null : formatUnits(bought, 18);
+  const held = bought === 0n ? null : Number(formatUnits(bought, 18));
+
+  /*
+   * The one place a number counts up from zero rather than travelling between values.
+   *
+   * A market cap doing this on every page load would be a slot machine; here the count is
+   * the event. This string has never been true before — the token did not exist a block
+   * ago — and the address types in for the same reason.
+   */
+  const counted = useCountUp(held, { durationMs: 1200, delayMs: 320 });
+  const typed = useTypedText(token, { perCharMs: 12, delayMs: 700 });
 
   return (
     <div>
-      <div className="rounded-xl border border-accent-ring/40 bg-accent-soft px-4 py-3">
-        <p className="text-[0.85rem] font-semibold text-accent-strong">
-          {bought_ === null ? "Market created" : "Market created, and bought"}
+      <div className="overflow-hidden rounded-panel border border-accent-ring/40 bg-accent-soft px-5 pb-5 pt-4 text-center">
+        <RisingChart className="mx-auto h-auto w-full max-w-[15rem]" />
+
+        <p className="mt-3 text-[0.8rem] font-semibold uppercase tracking-[0.1em] text-accent-strong">
+          {held === null ? "Market created" : "Market created"}
         </p>
-        <p className="mt-1 text-[0.75rem] leading-relaxed text-ink-muted">
-          The token is at <AddressLink address={token} />. Its pool is open and anyone may
-          trade it from now on.
-          {bought_ === null ? null : (
-            <>
-              {" "}
-              You spent {spent} {quoteLabel} and hold{" "}
-              <span className="font-medium text-ink">
-                {Number(bought_).toLocaleString(undefined, { maximumFractionDigits: 0 })}{" "}
-                {symbol}
-              </span>
-              .
-            </>
+
+        {held === null ? (
+          <p className="display mt-2 text-[1.6rem] text-ink">${symbol} is live</p>
+        ) : (
+          <p className="numeric mt-2 text-[1.9rem] leading-none text-ink">
+            {(counted ?? held).toLocaleString(undefined, { maximumFractionDigits: 0 })}{" "}
+            <span className="text-[1rem] text-ink-muted">{symbol}</span>
+          </p>
+        )}
+
+        <p className="mt-1.5 text-[0.75rem] text-ink-muted">
+          {held === null
+            ? "The pool is open and anyone may trade it from now on."
+            : `Yours, for ${spent} ${quoteLabel}.`}
+        </p>
+
+        {/* The address arriving a character at a time, then sitting there to be copied.
+            `min-h` holds the line so the card does not grow as it types. */}
+        <div className="mt-4 flex min-h-8 items-center justify-center gap-1.5 rounded-full border border-border bg-surface-sunken px-3 py-1.5">
+          <span className="numeric truncate text-[0.72rem] text-ink-muted">
+            {typed}
+            {typed.length < token.length ? (
+              <span className="text-accent">▍</span>
+            ) : null}
+          </span>
+          {typed.length < token.length ? null : (
+            <CopyButton value={token} label="Copy the token address" />
           )}
-        </p>
+        </div>
       </div>
 
       <Link
@@ -588,7 +621,7 @@ function MarketCreated({
         Go to the market
       </Link>
 
-      {bought_ !== null ? null : (
+      {held !== null ? null : (
         <div className="mt-3">
           <Notice title="The pool opened one-sided">
             You launched without a first buy, so the pool holds only {symbol} and no{" "}

@@ -5,6 +5,7 @@ import type { Market } from "../lib/feed";
 import { describeQuote, formatQuoteAmount } from "../lib/quote";
 import { formatUsd, usdValueOf } from "../lib/usd";
 import { TokenAvatar } from "./primitives";
+import { Sparkline } from "./sparkline";
 import { TimeAgo } from "./time-ago";
 
 /**
@@ -57,8 +58,12 @@ export function MarketCard({
       style={{ animationDelay: `${Math.min(index, STAGGER_LIMIT) * STAGGER_STEP_MS}ms` }}
       className="tile-in group flex flex-col overflow-hidden rounded-card border border-border bg-surface shadow-card backdrop-blur-xl transition duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:shadow-lift"
     >
-      <div className="aspect-square w-full overflow-hidden">
+      {/* `relative`, so the hour of history can sit along the bottom of the artwork
+          rather than taking a row of its own — the tile is already dense and the shape is
+          an aside, not a figure. */}
+      <div className="relative aspect-square w-full overflow-hidden">
         <TokenAvatar symbol={market.symbol} uri={market.metadataURI} size="card" />
+        <Sparkline poolId={market.poolId} />
       </div>
 
       <div className="flex flex-1 flex-col p-3.5">

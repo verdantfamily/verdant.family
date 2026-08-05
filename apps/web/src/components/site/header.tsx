@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 
 import { ConnectButton } from "../connect-button";
 
@@ -35,6 +36,7 @@ export function Header({
   readonly lockup: string | null;
 }) {
   const pathname = usePathname();
+  const scrolled = useScrolled();
 
   /** `/` would otherwise match every path, and `/launch/classic` should light Launch. */
   function isCurrent(href: string) {
@@ -45,9 +47,23 @@ export function Header({
    * Floating rather than a bar. The header carries no background of its own, so the
    * photograph runs unbroken behind it and the controls read as glass pills laid on top —
    * each one carries its own blur, which is what keeps their labels legible over a picture.
+   *
+   * The veil below is what makes that survive contact with a page. See `.header-veil`.
    */
   return (
     <header className="sticky top-0 z-40">
+      {/*
+       * Absent at the top of a page, because there is nothing up there to separate from and
+       * the photograph is the first thing anybody sees. It fades in the moment the page
+       * moves, which is also the moment content starts arriving under the controls.
+       */}
+      <div
+        aria-hidden="true"
+        className={`header-veil pointer-events-none absolute inset-x-0 top-0 -z-10 h-24 transition-opacity duration-300 ${
+          scrolled ? "opacity-100" : "opacity-0"
+        }`}
+      />
+
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
         <Link href="/" className="group flex items-center gap-2.5">
           <Mark mark={mark} lockup={lockup} />
@@ -90,6 +106,33 @@ export function Header({
       </div>
     </header>
   );
+}
+
+/**
+ * Whether the page has moved at all.
+ *
+ * A few pixels rather than zero, so that the veil does not flicker on and off under the
+ * elastic overscroll a trackpad produces at the very top of a page.
+ *
+ * Read in an effect and not during render: the server has no scroll position, and a
+ * component that answered differently in the two places would be a hydration error. The
+ * listener is passive because it only reads — declaring that is what lets the browser
+ * scroll without waiting to see whether this handler cancels it.
+ */
+function useScrolled(): boolean {
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    function read() {
+      setScrolled(window.scrollY > 8);
+    }
+
+    read();
+    window.addEventListener("scroll", read, { passive: true });
+    return () => window.removeEventListener("scroll", read);
+  }, []);
+
+  return scrolled;
 }
 
 /**

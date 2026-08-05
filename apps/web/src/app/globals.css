@@ -425,6 +425,32 @@ body {
   }
 }
 
+/**
+ * What the header sits on once the page has moved under it.
+ *
+ * The header carries no background — that is the point of it, the photograph runs
+ * unbroken behind the controls and each one holds its own blur. What that costs is the
+ * gap between them: a heading or a form label scrolling past lands in the same band as
+ * the navigation and the two read as one collided line.
+ *
+ * A wash fixes it without giving the header a bar back, because the bottom edge of a
+ * gradient is not an edge. It is deepest where the controls are and gone by the time it
+ * clears them, so nothing on the page ever meets a line — content fades out rather than
+ * sliding under a plate.
+ *
+ * Mixed from `--color-canvas` rather than written as its own colour, so a change to the
+ * page's background cannot leave a differently-tinted band across the top of every route.
+ */
+.header-veil {
+  background: linear-gradient(
+    to bottom,
+    color-mix(in oklab, var(--color-canvas) 92%, transparent) 0%,
+    color-mix(in oklab, var(--color-canvas) 74%, transparent) 42%,
+    color-mix(in oklab, var(--color-canvas) 32%, transparent) 74%,
+    transparent 100%
+  );
+}
+
 /** A hairline that reads as a fold rather than a border. */
 .hairline {
   background-image: linear-gradient(

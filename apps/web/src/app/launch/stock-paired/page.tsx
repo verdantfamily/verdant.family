@@ -3,7 +3,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { LaunchForm } from "../../../components/launch/launch-form";
+import { LaunchSoon } from "../../../components/launch-soon";
 import { Badge, Notice, PageHeading } from "../../../components/primitives";
+import { LAUNCHING_OPEN } from "../../../lib/launch-window";
 
 export const metadata: Metadata = {
   title: "Launch Stock-Paired",
@@ -13,6 +15,14 @@ export const metadata: Metadata = {
 
 export default function StockPairedLaunchPage() {
   const model = LAUNCH_MODELS["stock-paired"];
+
+  if (!LAUNCHING_OPEN) {
+    return (
+      <div className="px-6 py-24">
+        <LaunchSoon />
+      </div>
+    );
+  }
 
   return (
     <div className="pb-16">

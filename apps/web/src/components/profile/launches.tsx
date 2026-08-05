@@ -6,6 +6,7 @@ import { useConnection } from "wagmi";
 
 import type { SerializedLaunch } from "../../app/api/markets/route";
 import { CHAIN_ID, chain } from "../../lib/chain";
+import { LAUNCHING_OPEN } from "../../lib/launch-window";
 import { ConnectButton } from "../connect-button";
 import { Card, Notice } from "../primitives";
 import { ClaimCard } from "./claim-card";
@@ -91,12 +92,21 @@ export function Launches() {
           Markets are listed here by the address that created them. If you launched from a
           different wallet, connect that one.
         </p>
-        <Link
-          href="/launch"
-          className="mt-4 inline-flex h-10 items-center rounded-full bg-ink px-5 text-[0.85rem] font-medium text-ink-inverse transition hover:bg-ink/90"
-        >
-          Launch a token
-        </Link>
+        {/* Offered only when it can be taken up. An invitation to launch, on a build where
+            launching is closed, is a button whose whole job is to explain that it does not
+            work yet. */}
+        {LAUNCHING_OPEN ? (
+          <Link
+            href="/launch"
+            className="mt-4 inline-flex h-10 items-center rounded-full bg-ink px-5 text-[0.85rem] font-medium text-ink-inverse transition hover:bg-ink/90"
+          >
+            Launch a token
+          </Link>
+        ) : (
+          <p className="mt-4 text-[0.8rem] text-ink-faint">
+            Creating a market is not open yet.
+          </p>
+        )}
       </Card>
     );
   }

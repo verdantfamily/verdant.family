@@ -3,7 +3,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { LaunchForm } from "../../../components/launch/launch-form";
+import { LaunchSoon } from "../../../components/launch-soon";
 import { Badge, PageHeading } from "../../../components/primitives";
+import { LAUNCHING_OPEN } from "../../../lib/launch-window";
 
 export const metadata: Metadata = {
   title: "Launch Classic",
@@ -13,6 +15,16 @@ export const metadata: Metadata = {
 
 export default function ClassicLaunchPage() {
   const model = LAUNCH_MODELS.classic;
+
+  // Reached by anybody who has the URL, so the form is gated here and not only behind the
+  // chooser that normally links to it.
+  if (!LAUNCHING_OPEN) {
+    return (
+      <div className="px-6 py-24">
+        <LaunchSoon />
+      </div>
+    );
+  }
 
   return (
     <div className="pb-16">

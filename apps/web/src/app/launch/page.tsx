@@ -8,7 +8,9 @@ import type { Metadata } from "next";
 import Image, { type StaticImageData } from "next/image";
 import Link from "next/link";
 
+import { LaunchSoon } from "../../components/launch-soon";
 import { Badge, PageHeading } from "../../components/primitives";
+import { LAUNCHING_OPEN } from "../../lib/launch-window";
 import classicArt from "../../../public/models/classic.jpg";
 import evergreenArt from "../../../public/models/evergreen.jpg";
 import stockPairedArt from "../../../public/models/stock-paired.jpg";
@@ -34,6 +36,19 @@ export const metadata: Metadata = {
  * where somebody who wants it is already looking for it.
  */
 export default function LaunchPage() {
+  /*
+   * The chooser is not shown while there is nothing to choose. It would be a page of three
+   * cards whose every button leads to the same notice, which is a worse way of saying the
+   * one thing this page currently has to say.
+   */
+  if (!LAUNCHING_OPEN) {
+    return (
+      <div className="px-6 py-24">
+        <LaunchSoon />
+      </div>
+    );
+  }
+
   return (
     <div className="pb-10">
       <section className="px-6 pb-14 pt-20">

@@ -451,6 +451,107 @@ body {
   );
 }
 
+/**
+ * The line on the "opening soon" card, drawing itself.
+ *
+ * `pathLength="100"` on the path is what makes this exact: the dash length is normalised
+ * by the browser, so one keyframe pair works for any path without anybody measuring it.
+ * Without it the offset has to be a guess larger than the real length, and the line
+ * finishes drawing before the animation does.
+ *
+ * Everything here animates `opacity`, `transform` or `stroke-dashoffset`, which are the
+ * properties a compositor can carry on its own. Nothing reflows, so it stays at frame
+ * rate on a phone that is also decoding a background photograph.
+ */
+@keyframes chart-draw {
+  from {
+    stroke-dashoffset: 100;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes chart-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chart-tip {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.25);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* The halo, which is the only thing here that repeats. It is what keeps the card from
+   looking like a screenshot once the line has finished drawing. */
+@keyframes chart-ping {
+  0% {
+    opacity: 0.5;
+    transform: scale(0.9);
+  }
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(2.6);
+  }
+}
+
+.chart-draw {
+  stroke-dasharray: 100;
+  animation: chart-draw 1600ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.chart-area {
+  opacity: 0;
+  animation: chart-rise 900ms ease-out 900ms forwards;
+}
+
+/* `fill-box` because an SVG element's transform origin is the user-space origin by
+   default, so a scale about "center" would otherwise be a scale about the corner of the
+   whole drawing and the dot would fly across the card. */
+.chart-tip {
+  transform-box: fill-box;
+  transform-origin: center;
+  opacity: 0;
+  animation: chart-tip 520ms cubic-bezier(0.34, 1.56, 0.64, 1) 1500ms forwards;
+}
+
+.chart-ping {
+  transform-box: fill-box;
+  transform-origin: center;
+  opacity: 0;
+  animation: chart-ping 2400ms ease-out 2000ms infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-draw,
+  .chart-area,
+  .chart-tip {
+    animation-duration: 1ms;
+    animation-delay: 0ms;
+  }
+
+  .chart-ping {
+    animation: none;
+  }
+}
+
 /** A hairline that reads as a fold rather than a border. */
 .hairline {
   background-image: linear-gradient(

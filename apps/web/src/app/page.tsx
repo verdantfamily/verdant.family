@@ -1,8 +1,10 @@
 import Link from "next/link";
 
 import { Explore } from "../components/explore";
+import { LaunchSoon } from "../components/launch-soon";
 import { Notice } from "../components/primitives";
 import { FeedUnavailableError, fetchMarkets, type Listing } from "../lib/feed";
+import { LAUNCHING_OPEN, listable } from "../lib/launch-window";
 import { fetchUsdPerEth } from "../lib/usd";
 
 /**
@@ -40,6 +42,9 @@ export default async function ExplorePage() {
 
   const usdPerEth = await usdPromise;
 
+  // The launches made while building this are not the front page of it. See `listable`.
+  const markets = listing === null ? [] : listable(listing.markets);
+
   return (
     <div className="pb-10">
       {/* The first screen is the photograph and one sentence. No badge, no buttons: the
@@ -65,22 +70,31 @@ export default async function ExplorePage() {
             they live in contracts and can be traded through any interface. Try again
             shortly.
           </Notice>
-        ) : listing !== null && listing.markets.length === 0 ? (
+        ) : listing !== null && markets.length === 0 ? (
+          /* One empty state, reading differently depending on why it is empty. "The first
+             one to launch will appear here" beside a button that cannot be pressed would
+             be an invitation this page is in no position to make. */
           <div className="rounded-panel border border-border bg-surface p-12 text-center shadow-card backdrop-blur-xl">
-            <h2 className="text-[1.1rem] font-semibold text-ink">No markets yet.</h2>
-            <p className="mx-auto mt-2 max-w-sm text-[0.85rem] leading-relaxed text-ink-muted">
-              The first one to launch will appear here, with its fee schedule and its locked
-              position visible from the moment it exists.
-            </p>
-            <Link
-              href="/launch"
-              className="mt-6 inline-flex h-10 items-center rounded-full bg-ink px-5 text-[0.85rem] font-medium text-ink-inverse transition hover:bg-ink/90"
-            >
-              Launch the first one
-            </Link>
+            {LAUNCHING_OPEN ? (
+              <>
+                <h2 className="text-[1.1rem] font-semibold text-ink">No markets yet.</h2>
+                <p className="mx-auto mt-2 max-w-sm text-[0.85rem] leading-relaxed text-ink-muted">
+                  The first one to launch will appear here, with its fee schedule and its
+                  locked position visible from the moment it exists.
+                </p>
+                <Link
+                  href="/launch"
+                  className="mt-6 inline-flex h-10 items-center rounded-full bg-ink px-5 text-[0.85rem] font-medium text-ink-inverse transition hover:bg-ink/90"
+                >
+                  Launch the first one
+                </Link>
+              </>
+            ) : (
+              <LaunchSoon />
+            )}
           </div>
         ) : listing !== null ? (
-          <Explore markets={listing.markets} at={listing.at} usdPerEth={usdPerEth} />
+          <Explore markets={markets} at={listing.at} usdPerEth={usdPerEth} />
         ) : null}
       </div>
     </div>

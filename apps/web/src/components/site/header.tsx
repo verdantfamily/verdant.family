@@ -4,7 +4,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { LAUNCHING_OPEN } from "../../lib/launch-window";
 import { ConnectButton } from "../connect-button";
+import { LaunchSoonTrigger } from "../launch-soon";
+
+/** Shared so the link and the button that replaces it are the same object on screen. */
+const LAUNCH_BUTTON =
+  "hidden h-9 items-center rounded-full border border-border bg-surface/80 px-4 text-sm font-medium text-ink backdrop-blur-xl transition hover:border-border-strong hover:bg-surface-raised md:inline-flex";
 
 /**
  * The four places there are to go.
@@ -95,12 +101,21 @@ export function Header({
         </nav>
 
         <div className="flex items-center gap-2">
-          <Link
-            href="/launch"
-            className="hidden h-9 items-center rounded-full border border-border bg-surface/80 px-4 text-sm font-medium text-ink backdrop-blur-xl transition hover:border-border-strong hover:bg-surface-raised md:inline-flex"
-          >
-            Launch token
-          </Link>
+          {/* While launching is closed this opens the notice rather than navigating to a
+              route whose only content is that notice. */}
+          {LAUNCHING_OPEN ? (
+            <Link href="/launch" className={LAUNCH_BUTTON}>
+              Launch token
+            </Link>
+          ) : (
+            <LaunchSoonTrigger>
+              {(open) => (
+                <button type="button" onClick={open} className={LAUNCH_BUTTON}>
+                  Launch token
+                </button>
+              )}
+            </LaunchSoonTrigger>
+          )}
           <ConnectButton label="Connect Wallet" />
         </div>
       </div>

@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { Address, Hex } from "viem";
-import { erc20Abi, formatUnits, parseEventLogs, zeroAddress } from "viem";
+import { erc20Abi, formatEther, formatUnits, parseEventLogs, zeroAddress } from "viem";
 import { useConnection, usePublicClient } from "wagmi";
 
 import { CHAIN_ID, VERDANT_ADDRESSES, chain } from "../../lib/chain";
@@ -189,6 +189,7 @@ export function LaunchSubmit({
       params={params}
       creator={address}
       quoteLabel={derived.quoteLabel}
+      quoteDecimals={derived.quoteDecimals}
       initialBuy={draft.initialBuy}
       symbol={symbol}
       mining={mining}
@@ -217,6 +218,7 @@ function LaunchAction({
   params,
   creator,
   quoteLabel,
+  quoteDecimals,
   initialBuy,
   symbol,
   mining,
@@ -227,6 +229,8 @@ function LaunchAction({
   readonly params: launch.LaunchParams | null;
   readonly creator: Address;
   readonly quoteLabel: string;
+  /** For rendering a balance of the quote asset in its own units. */
+  readonly quoteDecimals: number;
   readonly initialBuy: string;
   readonly symbol: string;
   readonly mining: boolean;
@@ -263,6 +267,88 @@ function LaunchAction({
   const approved = allowance.data;
   const needsApproval =
     paysErc20 && params !== null && approved !== undefined && approved < params.initialBuyAmount;
+
+  /*
+   * Whether the creator can actually pay for the launch they have described.
+   *
+   * Nothing checked this, and the way it failed was the worst available: the form was
+   * satisfied, the button said "Launch", and the wallet answered with its own words —
+   * Phantom's being "There was an error attempting to sign the transaction", which names
+   * neither the shortfall nor the amount. A creator holding 0.0025 ether who asked for a
+   * 0.005 ether first buy had no way to learn that from anything on screen.
+   *
+   * The gas is estimated only when the value alone already fits, because estimating is
+   * itself a call that fails for want of funds — the node answers "the total cost exceeds
+   * the balance of the account" rather than a gas figure, so asking in the case that
+   * matters would replace a known shortfall with an unexplained error. Where it cannot be
+   * had, the check falls back to the value, which is the part a creator chose and the part
+   * large enough to matter.
+   */
+  const funds = useQuery({
+    queryKey: [
+      "launch-funds",
+      creator,
+      quoteAsset,
+      params?.initialBuyAmount.toString(),
+      CHAIN_ID,
+    ] as const,
+    queryFn: async () => {
+      if (client === undefined || params === null) throw new Error("not ready");
+      const call = launch.buildCreate({ factory, params });
+
+      const [balance, block, quoteBalance] = await Promise.all([
+        client.getBalance({ address: creator }),
+        client.getBlock(),
+        paysErc20
+          ? client.readContract({
+              address: quoteAsset,
+              abi: erc20Abi,
+              functionName: "balanceOf",
+              args: [creator],
+            })
+          : Promise.resolve(null),
+      ]);
+
+      let gas: bigint | null = null;
+      if (balance > call.value) {
+        try {
+          const units = await client.estimateGas({
+            account: creator,
+            to: call.to,
+            data: call.data,
+            value: call.value,
+          });
+          gas = units * (block.baseFeePerGas ?? 0n);
+        } catch {
+          // Estimation can fail for reasons that are not affordability. Not knowing the
+          // gas is not evidence of anything, so the check proceeds on the value alone.
+          gas = null;
+        }
+      }
+
+      return { balance, value: call.value, gas, quoteBalance };
+    },
+    enabled: client !== undefined && params !== null,
+    staleTime: 10_000,
+  });
+
+  /** What the launch costs against what the creator holds, once both are known. */
+  const shortfall = ((): { needed: bigint; held: bigint; gas: bigint | null } | null => {
+    const read = funds.data;
+    if (read === undefined) return null;
+
+    const needed = read.value + (read.gas ?? 0n);
+    if (read.balance >= needed) return null;
+    return { needed, held: read.balance, gas: read.gas };
+  })();
+
+  /** The equity-quoted twin: the first buy is pulled in the quote asset, not in ether. */
+  const shortOfQuote =
+    params !== null &&
+    funds.data?.quoteBalance != null &&
+    funds.data.quoteBalance < params.initialBuyAmount
+      ? { needed: params.initialBuyAmount, held: funds.data.quoteBalance }
+      : null;
 
   async function approve() {
     if (params === null) return;
@@ -317,6 +403,7 @@ function LaunchAction({
   }
 
   const preparing = mining || params === null;
+  const cannotAfford = shortfall !== null || shortOfQuote !== null;
 
   if (needsApproval) {
     return (
@@ -353,7 +440,7 @@ function LaunchAction({
     <div>
       <button
         type="button"
-        disabled={preparing || run.busy}
+        disabled={preparing || run.busy || cannotAfford}
         onClick={() => void submit()}
         className="inline-flex h-12 w-full items-center justify-center rounded-full bg-ink px-6 text-[0.95rem] font-medium text-ink-inverse shadow-card transition hover:bg-ink/90 active:scale-[0.985] disabled:cursor-not-allowed disabled:bg-surface-raised disabled:text-ink-faint disabled:active:scale-100"
       >
@@ -363,10 +450,48 @@ function LaunchAction({
             ? "Launching…"
             : preparing
               ? "Preparing…"
-              : buying
-                ? `Launch ${symbol} and buy ${initialBuy} ${quoteLabel}`
-                : `Launch ${symbol}`}
+              : cannotAfford
+                ? "Not enough to cover this launch"
+                : buying
+                  ? `Launch ${symbol} and buy ${initialBuy} ${quoteLabel}`
+                  : `Launch ${symbol}`}
       </button>
+
+      {/* Named amounts rather than "insufficient funds", because the creator chose one of
+          these numbers and can change it: the first buy is a field on this form, and a
+          launch with no first buy costs only gas. */}
+      {shortfall === null ? null : (
+        <div className="mt-3 rounded-xl border border-fall/40 bg-fall/14 px-4 py-3 text-[0.78rem] leading-relaxed text-ink-muted">
+          <p className="font-medium text-ink">This wallet cannot cover the launch.</p>
+          <p className="mt-1">
+            It holds {formatEther(shortfall.held)} ETH.{" "}
+            {funds.data === undefined || funds.data.value === 0n
+              ? "The launch needs enough to pay for gas."
+              : `The first buy alone spends ${formatEther(funds.data.value)} ETH`}
+            {shortfall.gas === null
+              ? funds.data !== undefined && funds.data.value > 0n
+                ? ", before gas."
+                : ""
+              : `, and gas is about ${formatEther(shortfall.gas)} ETH.`}
+          </p>
+          <p className="mt-1.5">
+            Lower the first buy, or fund this wallet with at least{" "}
+            {formatEther(shortfall.needed - shortfall.held)} ETH more.
+          </p>
+        </div>
+      )}
+
+      {shortOfQuote === null ? null : (
+        <div className="mt-3 rounded-xl border border-fall/40 bg-fall/14 px-4 py-3 text-[0.78rem] leading-relaxed text-ink-muted">
+          <p className="font-medium text-ink">
+            This wallet does not hold enough {quoteLabel}.
+          </p>
+          <p className="mt-1">
+            The first buy spends {initialBuy} {quoteLabel} and the wallet holds{" "}
+            {formatUnits(shortOfQuote.held, quoteDecimals)} {quoteLabel}.
+          </p>
+        </div>
+      )}
 
       {miningProblem === undefined ? null : (
         <p className="mt-3 rounded-xl border border-fall/40 bg-fall/14 px-4 py-3 text-[0.78rem] leading-relaxed text-ink-muted">

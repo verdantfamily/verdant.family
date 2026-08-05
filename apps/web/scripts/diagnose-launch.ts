@@ -13,7 +13,13 @@
  *
  * Usage:  node apps/web/scripts/diagnose-launch.ts
  * Environment: VERDANT_FROM (the address to simulate from), VERDANT_RPC,
- *              VERDANT_BUY (ether, default 0.001)
+ *              VERDANT_BUY (ether, default 0.001),
+ *              VERDANT_FEE (per cent, default the form's own),
+ *              VERDANT_ALLOCATION (per cent of supply, default none)
+ *
+ * The fee and the allocation are settings rather than constants because the report that
+ * prompted this was specific about them, and a diagnosis run against the form's defaults
+ * answers a question nobody asked.
  */
 
 import {
@@ -88,13 +94,19 @@ async function main(): Promise<void> {
   });
   console.log(`  per-transaction gas cap  ${maxTxGas}`);
 
-  // The form's own draft, with the two fields a creator must fill and a first buy.
+  // The form's own draft, with the two fields a creator must fill, a first buy, and
+  // whatever fee and allocation the run is asking about.
+  const fee = process.env["VERDANT_FEE"]?.trim();
+  const allocation = process.env["VERDANT_ALLOCATION"]?.trim();
+
   const draft = {
     ...emptyDraft(),
     name: "Diagnostic",
     symbol: "DIAG",
     metadataUrl: "ipfs://verdant-diagnostic",
     initialBuy: formatEther(buy),
+    ...(fee === undefined ? {} : { buyFeePercent: fee, sellFeePercent: fee }),
+    ...(allocation === undefined ? {} : { allocationPercent: allocation }),
   };
 
   const derived = derive(draft);
@@ -102,6 +114,11 @@ async function main(): Promise<void> {
   console.log("\nthe draft, as the form would hold it");
   console.log(`  quote asset              ${derived.quoteLabel} (${derived.quoteAsset})`);
   console.log(`  first buy                ${formatEther(buy)} ETH`);
+  console.log(
+    `  fee                      ${derived.stages.map((stage) => `${stage.feePpm / 10_000}%`).join(" then ")}`,
+  );
+  console.log(`  creator allocation       ${derived.allocationBps / 100}% of supply`);
+  console.log(`  vesting                  ${derived.vestingDuration}s`);
   console.log(
     `  the form would submit    ${blockers.length === 0 ? "yes" : `no: ${blockers.map((issue) => issue.message).join("; ")}`}`,
   );

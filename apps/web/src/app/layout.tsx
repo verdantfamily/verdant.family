@@ -136,7 +136,7 @@ export default function RootLayout({ children }: { readonly children: ReactNode 
               exist in a browser. */}
           <Header mark={BRAND.mark} lockup={BRAND.lockup} />
           <main className="flex-1">{children}</main>
-          <Footer />
+          <Footer mark={BRAND.mark} />
           <BottomNav />
         </Providers>
       </body>

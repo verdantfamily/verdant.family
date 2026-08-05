@@ -16,7 +16,6 @@ import { erc20Abi, formatUnits } from "viem";
 import { useConnection, usePublicClient } from "wagmi";
 
 import { CHAIN_ID, EXTERNAL, VERDANT_ADDRESSES, chain, type AddressProblem } from "../lib/chain";
-import { describeError } from "../lib/errors";
 import type { Market } from "../lib/feed";
 import { parseDecimal } from "../lib/launch";
 import { describeQuote, formatQuoteAmount } from "../lib/quote";
@@ -166,6 +165,60 @@ export function TradePanel({
     // interval is what makes a quote left on screen stop being a claim about now.
     staleTime: 10_000,
     refetchInterval: 15_000,
+    retry: false,
+  });
+
+  /*
+   * The largest trade this pool could actually fill, found only once one has failed.
+   *
+   * A Verdant market opens one-sided: the locked position holds the token and no ether at
+   * all, so the only ether a seller can be paid with is what buyers have put in. A
+   * creator holding a tenth of the supply on a market that has taken one small first buy
+   * therefore cannot sell any meaningful part of it, and the pool does not explain
+   * itself — `V4Quoter` wraps the failure in `UnexpectedRevertBytes`, whose payload on
+   * this path is empty. There is nothing to read and nothing to report.
+   *
+   * So the ceiling is measured rather than parsed: bisect between zero and the amount
+   * that failed until the largest quotable size is known to within a fraction of a per
+   * cent. Fourteen quoter calls, on a path that is already an error, in exchange for
+   * being able to name the number instead of saying "try less".
+   */
+  const ceiling = useQuery({
+    queryKey: ["fillable", market.poolId, side, debouncedAmountIn.toString()],
+    queryFn: async (): Promise<bigint> => {
+      if (client === undefined || poolKey === null) throw new Error("not ready");
+
+      const fits = async (amount: bigint): Promise<boolean> => {
+        if (amount <= 0n) return true;
+        try {
+          await trade.quoteExactIn(client, {
+            quoter: EXTERNAL.quoter,
+            poolKey,
+            zeroForOne: zeroForOne(side),
+            exactAmount: amount,
+          });
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      let low = 0n;
+      let high = debouncedAmountIn;
+      for (let step = 0; step < 14 && high - low > 1n; step++) {
+        const middle = (low + high) / 2n;
+        if (await fits(middle)) low = middle;
+        else high = middle;
+      }
+      return low;
+    },
+    // Only after a quote has actually failed, and only for a size worth bisecting.
+    enabled:
+      client !== undefined &&
+      poolKey !== null &&
+      quoted.error !== null &&
+      debouncedAmountIn > 0n,
+    staleTime: 15_000,
     retry: false,
   });
 
@@ -582,11 +635,47 @@ export function TradePanel({
         ) : null}
       </div>
 
+      {/*
+       * What used to be here printed the quoter's own words, which on this path are a
+       * four-byte selector wrapping an empty payload — "the contract function
+       * quoteExactInputSingle reverted with the following signature: 0x6190b2b0" — under
+       * a guess at what it meant. It is the right guess and it is unreadable, and it
+       * leaves out the one thing a seller can act on: how much they could sell instead.
+       */}
       {quoted.error === null || amountIn <= 0n ? null : (
-        <p className="mt-3 rounded-xl border border-border bg-surface-sunken px-4 py-3 text-[0.7rem] leading-relaxed text-ink-muted">
-          The pool would not quote this trade: {describeError(quoted.error)} A trade larger
-          than the pool&apos;s liquidity is the usual reason.
-        </p>
+        <div className="mt-3 rounded-xl border border-border bg-surface-sunken px-4 py-3 text-[0.72rem] leading-relaxed text-ink-muted">
+          <p className="font-medium text-ink">
+            {side === "sell"
+              ? "This market cannot pay for a sale that size."
+              : "The pool cannot fill a trade that size."}
+          </p>
+
+          {side === "sell" ? (
+            <p className="mt-1">
+              A launch opens holding only {market.symbol} and no {quote.symbol}, so the
+              only {quote.symbol} a sale can be paid in is what buyers have put in so far.
+            </p>
+          ) : null}
+
+          {ceiling.isFetching ? (
+            <p className="mt-1.5 text-ink-faint">Working out the most it can take…</p>
+          ) : ceiling.data === undefined || ceiling.data === 0n ? (
+            <p className="mt-1.5">Try a smaller amount.</p>
+          ) : (
+            <p className="mt-1.5">
+              The most it can take right now is about{" "}
+              <button
+                type="button"
+                onClick={() => setAmount(formatUnits(ceiling.data, inputDecimals))}
+                className="numeric text-ink underline decoration-border-strong decoration-dotted underline-offset-4 transition-colors hover:decoration-ink"
+              >
+                {formatAmount(ceiling.data, { decimals: inputDecimals, places: 4 })}{" "}
+                {side === "buy" ? quote.symbol : market.symbol}
+              </button>
+              .
+            </p>
+          )}
+        </div>
       )}
 
       {nearTransition ? (

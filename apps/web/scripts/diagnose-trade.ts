@@ -26,12 +26,46 @@ import {
 import { pool, trade } from "@verdant/sdk";
 import {
   createPublicClient,
+  erc20Abi,
   formatEther,
+  formatUnits,
   http,
   isAddress,
   parseEther,
   type Address,
+  type Hex,
 } from "viem";
+
+/**
+ * What the quoter was actually told, as opposed to what it says.
+ *
+ * `V4Quoter` catches the pool's revert and re-throws it wrapped in
+ * `UnexpectedRevertBytes(bytes)`, so every failure arrives under one selector —
+ * `0x6190b2b0` — with the real reason as an argument nobody unwraps. An interface that
+ * prints the outer error is guessing, which is how "a trade larger than the pool's
+ * liquidity is the usual reason" ends up under a failure that has nothing to do with
+ * liquidity.
+ *
+ * The inner bytes are their own selector and arguments, so this pulls them out and looks
+ * them up in the same table `find-selector.mjs` builds.
+ */
+function unwrap(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+
+  // viem prints the raw data it received; the inner call's revert is inside it.
+  const wrapped = /0x6190b2b0([0-9a-f]*)/i.exec(text);
+  if (wrapped?.[1] === undefined) return text.split("\n")[0] ?? text;
+
+  const payload = wrapped[1];
+  // abi.encode(bytes): offset, length, then the bytes themselves, right-padded.
+  const length = Number.parseInt(payload.slice(64, 128), 16);
+  if (!Number.isFinite(length) || length === 0) {
+    return "the pool reverted with no reason at all";
+  }
+
+  const inner = `0x${payload.slice(128, 128 + length * 2)}` as Hex;
+  return `inner revert ${inner.slice(0, 10)}  (full: ${inner})`;
+}
 
 function mainnetDeployment(): VerdantDeployment {
   const found = deploymentFor(ROBINHOOD_MAINNET_ID);
@@ -181,6 +215,76 @@ async function main(): Promise<void> {
   } catch (error) {
     console.log(`  eth_estimateGas          FAILED: ${(error as Error).message.split("\n")[0]}`);
   }
+
+  await sell(market, poolKey);
+}
+
+/**
+ * The other direction, which is the one being reported as broken.
+ *
+ * Selling is not the mirror of buying on a market that opened one-sided. The locked
+ * position holds only the token above the launch tick, so the ether a sell is paid in is
+ * whatever previous buyers put in — and a sale larger than that has nothing to be filled
+ * against however much of the token the seller holds.
+ */
+async function sell(market: FeedMarket, poolKey: ReturnType<typeof pool.poolKeyFor>) {
+  const held = await client.readContract({
+    address: market.token,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: [trader],
+  });
+
+  console.log("\nwhat the quoter says about selling");
+  console.log(`  the account holds        ${formatUnits(held, 18)} ${market.symbol}`);
+
+  if (held === 0n) {
+    console.log("  nothing to sell from this address.\n");
+    return;
+  }
+
+  /*
+   * A ladder in absolute tokens rather than in shares of the balance.
+   *
+   * Shares were the wrong unit: on a market that has taken one small first buy, one per
+   * cent of a creator's allocation is already far more than the pool could ever pay for,
+   * so every rung failed and the ladder said nothing about where the edge is. What
+   * matters is the smallest size that works, because that is the number a seller needs.
+   */
+  const whole = 10n ** 18n;
+  const sizes = [
+    1_000n * whole,
+    10_000n * whole,
+    100_000n * whole,
+    250_000n * whole,
+    500_000n * whole,
+    1_000_000n * whole,
+    held,
+  ];
+
+  for (const amount of sizes) {
+    if (amount === 0n || amount > held) continue;
+    const share = (amount * 10_000n) / held;
+
+    try {
+      const answer = await trade.quoteExactIn(client, {
+        quoter: EXTERNAL_ADDRESSES.v4Quoter as Address,
+        poolKey,
+        // Selling the launch token, which is always currency1.
+        zeroForOne: false,
+        exactAmount: amount,
+      });
+      console.log(
+        `  ${formatUnits(amount, 18).padStart(22)} (${(Number(share) / 100).toFixed(2)}%)  ->  ${formatEther(answer.amountOut)} ETH`,
+      );
+    } catch (error) {
+      console.log(
+        `  ${formatUnits(amount, 18).padStart(22)} (${(Number(share) / 100).toFixed(2)}%)  ->  REVERTS: ${unwrap(error)}`,
+      );
+    }
+  }
+
+  console.log("");
 }
 
 await main();

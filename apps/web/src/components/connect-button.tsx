@@ -7,6 +7,7 @@ import { useConnect, useConnection, useConnectors, useDisconnect, useSwitchChain
 
 import { CHAIN_ID, chain } from "../lib/chain";
 import { describeError, isUserRejection } from "../lib/errors";
+import { walletChoices } from "../lib/wallets";
 
 /**
  * The one place a wallet connection is asked for.
@@ -191,27 +192,9 @@ function ChoosePanel({
   readonly onConnect: (connector: Connector) => void;
 }) {
   const injectedIsReal = useInjectedIsReal();
+  const { installed, bridges } = walletChoices(connectors, injectedIsReal);
 
-  /*
-   * Three kinds of entry, and they cannot be told apart by one predicate.
-   *
-   * WalletConnect is not a wallet on this machine — it is the way to reach one that is
-   * not — so it is always offerable and must not be counted when deciding whether any
-   * extension was found. Sorting it in with the announced ones, which an earlier
-   * "anything that is not `injected`" rule did, would suppress the generic injected
-   * fallback on every browser that has a non-announcing wallet.
-   */
-  const bridges = connectors.filter((entry) => entry.id === "walletConnect");
-  const announced = connectors.filter(
-    (entry) => entry.id !== "injected" && entry.id !== "walletConnect",
-  );
-  const generic = connectors.filter((entry) => entry.id === "injected");
-
-  const installed =
-    announced.length > 0 ? announced : injectedIsReal ? generic : [];
-  const offered = [...installed, ...bridges];
-
-  if (offered.length === 0) {
+  if (installed.length + bridges.length === 0) {
     return (
       <>
         <p className="text-sm font-semibold text-ink">No wallet on this device</p>
@@ -257,20 +240,23 @@ function ChoosePanel({
           />
         ))}
 
-        {/* Set apart from the wallets above it, because it is not one. Choosing it opens
-            a pairing flow rather than a wallet, and on a phone it leaves the browser
-            entirely — worth saying before the tap rather than after it. */}
+        {/*
+         * Set apart from the wallets above it, because it is not one. Choosing it opens a
+         * pairing flow rather than a wallet, and on a phone it leaves the browser
+         * entirely — worth saying before the tap rather than after it.
+         *
+         * The hint names wallets rather than describing a mechanism. Only extensions
+         * actually installed here can be listed above, so to a reader with two of them
+         * this row is the entire rest of the world, and "WalletConnect" alone does not
+         * say that SafePal and Backpack are behind it.
+         */}
         {bridges.map((entry) => (
           <WalletRow
             key={entry.uid}
             entry={entry}
             pending={pending}
             onConnect={onConnect}
-            hint={
-              installed.length > 0
-                ? "Scan with a phone, or open a wallet app"
-                : "Opens your wallet app"
-            }
+            hint="SafePal, Backpack, Trust and 70+ more"
           />
         ))}
       </div>
@@ -392,12 +378,30 @@ function FailureNote({ error }: { readonly error: Error | null }) {
 /**
  * A wallet's own mark, as announced.
  *
- * Drawn as a background image rather than an `<img>`, because these arrive as data
- * URIs from the extension: there is nothing for an image loader to optimise, and a
- * bare `<img>` is what this app's lint rules exist to catch.
+ * ## Why an `<img>` and not a background image
+ *
+ * This was a background image, and Phantom rendered as an empty square because of it.
+ * An EIP-6963 icon is a data URI, and the specification's own example is a *raw* SVG
+ * one — `data:image/svg+xml,<svg version="1.1" ...>`, double quotes and all. Interpolated
+ * into `url("…")` the first of those quotes closes the CSS string, the declaration is
+ * discarded as malformed, and what is left is the empty plate behind it. There is no
+ * error to catch and nothing in the console: the wallet simply has no logo.
+ *
+ * An attribute has no such problem, and the specification asks for this element by name
+ * anyway — an SVG can carry script, and rendering one through `<img>` is what guarantees
+ * none of it runs. The usual objection does not apply either: there is nothing for an
+ * image optimiser to do with a data URI a browser extension just handed us.
+ *
+ * ## Why the failure is caught
+ *
+ * Because the string comes from a third party and may be anything at all. A mark that
+ * will not decode falls back to the drawn glyph, which is the same one a wallet that
+ * announced no icon gets — a row with a plate and a name, rather than a hole.
  */
 function WalletIcon({ icon }: { readonly icon: string | undefined }) {
-  if (icon === undefined) {
+  const [broken, setBroken] = useState(false);
+
+  if (icon === undefined || broken) {
     return (
       <span
         aria-hidden="true"
@@ -409,10 +413,15 @@ function WalletIcon({ icon }: { readonly icon: string | undefined }) {
   }
 
   return (
-    <span
+    /* A data URI an extension handed us: nothing for an optimiser to fetch or resize, and
+       EIP-6963 asks for this element by name so that SVG script cannot run. */
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={icon}
+      alt=""
       aria-hidden="true"
-      className="size-6 shrink-0 rounded-md bg-surface-sunken bg-contain bg-center bg-no-repeat"
-      style={{ backgroundImage: `url("${icon}")` }}
+      onError={() => setBroken(true)}
+      className="size-6 shrink-0 rounded-md bg-surface-sunken object-contain"
     />
   );
 }

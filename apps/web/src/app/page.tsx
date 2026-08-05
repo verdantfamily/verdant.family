@@ -63,39 +63,46 @@ export default async function ExplorePage() {
         </div>
       </section>
 
+      {/*
+       * Four states, in the order they take precedence.
+       *
+       * A listing wins whenever there is one, whatever else is true — including while
+       * launching is closed, because the factory has no pause and a market created
+       * straight against the contracts is a real market this page should show.
+       *
+       * Otherwise, with launching closed, the notice. Deliberately ahead of the feed
+       * error: there is nothing to list either way, so an indexer having a bad minute is
+       * not news anybody visiting needs, and "the market feed is not answering" is a poor
+       * first impression of a site whose listing is empty by design.
+       */}
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
-        {unavailable ? (
+        {listing !== null && markets.length > 0 ? (
+          <Explore markets={markets} at={listing.at} usdPerEth={usdPerEth} />
+        ) : !LAUNCHING_OPEN ? (
+          <div className="rounded-panel border border-border bg-surface p-12 shadow-card backdrop-blur-xl">
+            <LaunchSoon />
+          </div>
+        ) : unavailable ? (
           <Notice tone="caution" title="The market feed is not answering.">
             This is a problem with our indexer, not with the chain. Markets are unaffected —
             they live in contracts and can be traded through any interface. Try again
             shortly.
           </Notice>
-        ) : listing !== null && markets.length === 0 ? (
-          /* One empty state, reading differently depending on why it is empty. "The first
-             one to launch will appear here" beside a button that cannot be pressed would
-             be an invitation this page is in no position to make. */
+        ) : (
           <div className="rounded-panel border border-border bg-surface p-12 text-center shadow-card backdrop-blur-xl">
-            {LAUNCHING_OPEN ? (
-              <>
-                <h2 className="text-[1.1rem] font-semibold text-ink">No markets yet.</h2>
-                <p className="mx-auto mt-2 max-w-sm text-[0.85rem] leading-relaxed text-ink-muted">
-                  The first one to launch will appear here, with its fee schedule and its
-                  locked position visible from the moment it exists.
-                </p>
-                <Link
-                  href="/launch"
-                  className="mt-6 inline-flex h-10 items-center rounded-full bg-ink px-5 text-[0.85rem] font-medium text-ink-inverse transition hover:bg-ink/90"
-                >
-                  Launch the first one
-                </Link>
-              </>
-            ) : (
-              <LaunchSoon />
-            )}
+            <h2 className="text-[1.1rem] font-semibold text-ink">No markets yet.</h2>
+            <p className="mx-auto mt-2 max-w-sm text-[0.85rem] leading-relaxed text-ink-muted">
+              The first one to launch will appear here, with its fee schedule and its
+              locked position visible from the moment it exists.
+            </p>
+            <Link
+              href="/launch"
+              className="mt-6 inline-flex h-10 items-center rounded-full bg-ink px-5 text-[0.85rem] font-medium text-ink-inverse transition hover:bg-ink/90"
+            >
+              Launch the first one
+            </Link>
           </div>
-        ) : listing !== null ? (
-          <Explore markets={markets} at={listing.at} usdPerEth={usdPerEth} />
-        ) : null}
+        )}
       </div>
     </div>
   );

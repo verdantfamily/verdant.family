@@ -635,18 +635,24 @@ body {
   }
 }
 
+/*
+ * The sweep has to be visible against a surface that is already dark, which the first
+ * attempt was not: at nine per cent white over an eighteen per cent black well it read as
+ * an empty rectangle, which is exactly the "nothing is happening" this exists to avoid.
+ * The block itself is lifted off the well and the highlight roughly doubled.
+ */
 .shimmer {
   background-image: linear-gradient(
     90deg,
     transparent 0%,
-    oklch(1 0 0 / 0.09) 45%,
-    oklch(1 0 0 / 0.14) 50%,
-    oklch(1 0 0 / 0.09) 55%,
+    oklch(1 0 0 / 0.14) 40%,
+    oklch(1 0 0 / 0.26) 50%,
+    oklch(1 0 0 / 0.14) 60%,
     transparent 100%
   );
   background-size: 220% 100%;
   background-repeat: no-repeat;
-  animation: shimmer 1400ms linear infinite;
+  animation: shimmer 1200ms linear infinite;
 }
 
 /**

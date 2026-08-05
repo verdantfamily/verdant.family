@@ -556,7 +556,7 @@ export function TradePanel({
             <div
               role="status"
               aria-label="Fetching a quote"
-              className="shimmer h-[2rem] w-32 rounded-lg bg-surface-sunken"
+              className="shimmer h-[2rem] w-32 rounded-lg bg-surface-raised"
             />
           ) : (
             <div className="numeric truncate text-[2rem] leading-none text-ink">

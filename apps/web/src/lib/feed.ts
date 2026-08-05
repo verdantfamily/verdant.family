@@ -384,12 +384,27 @@ export class FeedUnavailableError extends Error {
   }
 }
 
-async function get<T>(path: string): Promise<T> {
+/**
+ * Ask the indexer, with or without the window in front of it.
+ *
+ * The cache is right for a page render: several components ask for the same market while
+ * one page is built, a listing is read by everybody who arrives in the same few seconds,
+ * and none of them needs a figure fresher than the last block or two.
+ *
+ * It is wrong for the routes a component polls. Those exist precisely because a number
+ * moved, and a poll every second against a response held for five gets the same answer
+ * four times — the interface looked frozen while the chain was busy, which is the whole
+ * of the "not updating in real time" complaint. Freshness is therefore the caller's
+ * decision, because only the caller knows whether it is rendering a page once or asking
+ * again on a timer.
+ */
+async function get<T>(path: string, fresh = false): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${FEED_URL}${path}`, {
-      next: { revalidate: REVALIDATE_SECONDS },
-    });
+    response = await fetch(
+      `${FEED_URL}${path}`,
+      fresh ? { cache: "no-store" } : { next: { revalidate: REVALIDATE_SECONDS } },
+    );
   } catch (cause) {
     throw new FeedUnavailableError(path, cause);
   }
@@ -433,8 +448,8 @@ export async function fetchMarketsBy(creator: string, limit = 50): Promise<Listi
 }
 
 /** By pool id or by token address; the indexer accepts either. */
-export async function fetchMarket(id: string): Promise<Market> {
-  return parseMarket(await get<RawMarket>(`/markets/${id}`));
+export async function fetchMarket(id: string, fresh = false): Promise<Market> {
+  return parseMarket(await get<RawMarket>(`/markets/${id}`, fresh));
 }
 
 /**
@@ -448,6 +463,7 @@ export async function fetchSwaps(
   poolId: string,
   limit = 25,
   offset = 0,
+  fresh = false,
 ): Promise<TradeHistory> {
   const raw = await get<{
     at: number;
@@ -458,7 +474,7 @@ export async function fetchSwaps(
       tokenAmount: string;
       sqrtPriceX96: string;
     })[];
-  }>(`/markets/${poolId}/swaps?limit=${limit}&offset=${offset}`);
+  }>(`/markets/${poolId}/swaps?limit=${limit}&offset=${offset}`, fresh);
 
   return {
     at: raw.at,
@@ -485,6 +501,7 @@ export async function fetchHolders(
   id: string,
   limit = 25,
   offset = 0,
+  fresh = false,
 ): Promise<HolderPage> {
   const raw = await get<{
     token: string;
@@ -493,7 +510,7 @@ export async function fetchHolders(
     total: number;
     offset: number;
     holders: readonly { address: string; balance: string }[];
-  }>(`/markets/${id}/holders?limit=${limit}&offset=${offset}`);
+  }>(`/markets/${id}/holders?limit=${limit}&offset=${offset}`, fresh);
 
   return {
     token: raw.token as `0x${string}`,
@@ -509,7 +526,7 @@ export async function fetchHolders(
 }
 
 /** The rolling window and all-time extremes a market page leads with. */
-export async function fetchMarketStats(id: string): Promise<MarketStats> {
+export async function fetchMarketStats(id: string, fresh = false): Promise<MarketStats> {
   const raw = await get<{
     at: number;
     window: number;
@@ -521,7 +538,7 @@ export async function fetchMarketStats(id: string): Promise<MarketStats> {
     };
     allTime: { high: string; low: string };
     holders: number;
-  }>(`/markets/${id}/stats`);
+  }>(`/markets/${id}/stats`, fresh);
 
   return {
     at: raw.at,
@@ -555,9 +572,11 @@ export async function fetchCandles(
   poolId: string,
   interval: candles.CandleInterval,
   limit = 240,
+  fresh = false,
 ): Promise<CandleSeries> {
   const raw = await get<RawCandles>(
     `/markets/${poolId}/candles?interval=${interval}&limit=${limit}`,
+    fresh,
   );
 
   const observed = raw.candles.map((candle) => ({

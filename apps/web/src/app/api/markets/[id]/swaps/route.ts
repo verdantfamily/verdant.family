@@ -30,7 +30,7 @@ export async function GET(
   const offset = offsetOf(new URL(request.url).searchParams.get("offset"));
 
   try {
-    const history = await fetchSwaps(id, ROWS, offset);
+    const history = await fetchSwaps(id, ROWS, offset, true);
     // Serialised by the same function the page uses, so the shape the table hydrates
     // with and the shape it polls for cannot drift apart.
     return Response.json(serializeHistory(history), {

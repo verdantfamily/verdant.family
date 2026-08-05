@@ -19,6 +19,7 @@ import {
 } from "../lib/candles";
 import { formatUsdPrecise, formatUsdSignificant } from "../lib/usd";
 import { Segmented } from "./form";
+import { LiveValue } from "./live-value";
 
 /**
  * A market's price, over the interval a reader chooses.
@@ -457,11 +458,21 @@ export function PriceChart({
                 : "text-[1.9rem] tracking-tight"
             }`}
           >
-            {shown === undefined
-              ? "—"
-              : valueScale === null
-                ? `${formatPrice(shown)} ${quoteLabel}`
-                : formatUsdPrecise(asFloat(shown) * valueScale)}
+            {/* The one figure the page is built around, so it says when it moves. Not
+                while the crosshair is driving it: that number changes with the pointer
+                rather than with the market, and washing it green on every pixel of a
+                drag would be motion that means nothing. */}
+            <LiveValue
+              quiet={hovered !== null}
+              text={
+                shown === undefined
+                  ? "—"
+                  : valueScale === null
+                    ? `${formatPrice(shown)} ${quoteLabel}`
+                    : formatUsdPrecise(asFloat(shown) * valueScale)
+              }
+              amount={shown === undefined ? null : asFloat(shown)}
+            />
           </p>
 
           <p

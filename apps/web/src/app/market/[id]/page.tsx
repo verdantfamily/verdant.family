@@ -6,7 +6,6 @@ import {
   formatInstant,
   formatPrice,
   impliedValueInQuote,
-  lockedValueInQuote,
   priceChangeBps,
   quotePerToken,
 } from "@verdant/ui";
@@ -19,6 +18,7 @@ import { CopyPill } from "../../../components/copy-pill";
 import { Countdown } from "../../../components/countdown";
 import { FeeLadder } from "../../../components/fee-ladder";
 import { HoldersTable } from "../../../components/holders-table";
+import { LiveFigures } from "../../../components/live-figures";
 import { PriceChart } from "../../../components/price-chart";
 import {
   AddressLink,
@@ -35,7 +35,7 @@ import { TokenDescription, TokenLinks } from "../../../components/token-document
 import { TradeHistoryTable } from "../../../components/trade-history";
 import { TradePanel } from "../../../components/trade-panel";
 import { BRAND } from "../../../lib/brand";
-import { asFloat, serializeSeries } from "../../../lib/candles";
+import { serializeSeries } from "../../../lib/candles";
 import {
   FeedUnavailableError,
   MarketNotFoundError,
@@ -48,6 +48,7 @@ import {
   type Market,
   type MarketStats,
 } from "../../../lib/feed";
+import { serializeLive } from "../../../lib/live";
 import { describeQuote, formatQuoteAmount } from "../../../lib/quote";
 import { serializeHistory, serializeHolders } from "../../../lib/trades";
 import { fetchUsdPerEth, formatUsd, usdValueOf } from "../../../lib/usd";
@@ -66,45 +67,6 @@ const DEFAULT_INTERVAL = "5m" as const;
 /** Rows the trades table and the holders table open with. Must match their routes. */
 const TRADE_ROWS = 30;
 const HOLDER_ROWS = 25;
-
-/**
- * A figure in the band under the chart.
- *
- * No border, no box, no fill. A row of six of these is separated by the space around them
- * and by one hairline above and below the band, which is the whole visual budget the band
- * gets — six bordered cells would be six more rectangles on a page whose point is that it
- * has very few. The label sits above the value in small caps so the row can be scanned
- * down the numbers rather than read across the words.
- */
-function Metric({
-  label,
-  value,
-  hint,
-  tone = "default",
-}: {
-  readonly label: string;
-  readonly value: string;
-  readonly hint?: ReactNode;
-  readonly tone?: "default" | "accent";
-}) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-[0.66rem] font-medium uppercase tracking-[0.09em] text-ink-muted">
-        {label}
-      </dt>
-      <dd
-        className={`numeric mt-2 truncate text-[1.15rem] leading-none ${
-          tone === "accent" ? "text-accent" : "text-ink"
-        }`}
-      >
-        {value}
-      </dd>
-      {hint === undefined ? null : (
-        <dd className="mt-1.5 truncate text-[0.7rem] text-ink-faint">{hint}</dd>
-      )}
-    </div>
-  );
-}
 
 /**
  * The heading over a region of the page below the fold.
@@ -317,18 +279,11 @@ export default async function MarketPage({ params, searchParams }: PageProps) {
    * market cap rather than instead of it: the two are routinely different by orders of
    * magnitude on a young market, and only one of them bounds what you can sell.
    */
-  const liquidityValue = lockedValueInQuote(
-    market.liquidity,
-    market.sqrtPriceX96,
-    market.initialSqrtPriceX96,
-  );
-
   // Dollars where there is a rate to convert through — an ether-quoted market — and the
-  // quote asset's own units otherwise.
+  // quote asset's own units otherwise. Only the market cap is derived here now: every
+  // other figure in the band is computed by `LiveFigures`, from a payload it refetches,
+  // using these same functions.
   const impliedUsd = usdValueOf(impliedValue, quote, usdPerEth);
-  const liquidityUsd = usdValueOf(liquidityValue, quote, usdPerEth);
-  const dayVolumeUsd =
-    stats === null ? null : usdValueOf(stats.day.volumeQuote, quote, usdPerEth);
 
   /*
    * What turns a per-token price into the dollar figure the chart draws.
@@ -344,10 +299,6 @@ export default async function MarketPage({ params, searchParams }: PageProps) {
    */
   const wholeSupply = Number(market.totalSupply) / 10 ** market.decimals;
   const valueScale = usdPerEth === null || !quote.isNative ? null : wholeSupply * usdPerEth;
-
-  /** The high as a market cap too, so the stat and the chart are the same measurement. */
-  const athUsd =
-    stats === null || valueScale === null ? null : asFloat(stats.allTime.high) * valueScale;
 
   const modelId = MARKET_MODELS[market.model];
   const model = modelId === undefined ? undefined : MODELS[modelId];
@@ -463,57 +414,19 @@ export default async function MarketPage({ params, searchParams }: PageProps) {
             )}
           </div>
 
-          {/* The band. Market cap is absent because it is the headline above; repeating it
-              here would be two places for one number to be read from. */}
-          <dl className="mt-10 grid grid-cols-2 gap-x-8 gap-y-7 border-y border-border py-7 sm:grid-cols-3 lg:grid-cols-6">
-            <Metric label="Liquidity" value={money(liquidityUsd, liquidityValue)} />
-            <Metric
-              label="24h volume"
-              value={stats === null ? "—" : money(dayVolumeUsd, stats.day.volumeQuote)}
-              hint={stats === null ? undefined : `${stats.day.trades} trades`}
+          {/* The band, which polls rather than sitting where the server left it. Market
+              cap is absent because it is the headline above; repeating it here would be
+              two places for one number to be read from. */}
+          <div className="mt-10">
+            <LiveFigures
+              poolId={market.poolId}
+              initial={serializeLive(market, stats, usdPerEth)}
+              quote={quote}
+              tokenSymbol={market.symbol}
+              tokenDecimals={market.decimals}
+              nextFeePpm={nextStage?.feePpm ?? null}
             />
-            <Metric
-              label="All-time high"
-              value={
-                stats === null
-                  ? "—"
-                  : athUsd === null
-                    ? `${formatPrice(stats.allTime.high)} ${quote.symbol}`
-                    : formatUsd(athUsd)
-              }
-            />
-            <Metric
-              label="Holders"
-              value={stats === null ? "—" : stats.holders.toLocaleString("en-US")}
-            />
-            <Metric
-              label="Fee"
-              tone="accent"
-              value={formatFeeRate(market.fee.ppm)}
-              hint={
-                market.fee.nextTransitionAt === null ? (
-                  market.fee.stageCount === 1 ? (
-                    "never changes"
-                  ) : (
-                    "final stage"
-                  )
-                ) : (
-                  <>
-                    {formatFeeRate(nextStage?.feePpm ?? market.fee.ppm)} in{" "}
-                    <Countdown
-                      anchorAt={market.fee.at}
-                      targetAt={market.fee.nextTransitionAt}
-                    />
-                  </>
-                )
-              }
-            />
-            <Metric
-              label="Supply"
-              value={`${formatCompact(market.totalSupply)} ${market.symbol}`}
-              hint="no mint, no burn"
-            />
-          </dl>
+          </div>
         </section>
 
         {/* `self-start` is what makes the pin work: a grid item stretches to its row by

@@ -29,8 +29,14 @@ import { AddressLink, TransactionLink } from "./primitives";
  * new rows belong at the top, so it is the only one that takes them.
  */
 
-/** Often enough to feel live on a chain with sub-second blocks, rarely enough to be free. */
-const POLL_MILLISECONDS = 5_000;
+/**
+ * Two seconds, on a chain that produces a block roughly every hundred milliseconds.
+ *
+ * Slower than the chart and the figures above it, deliberately. Those are single numbers
+ * whose movement is the whole signal; this is thirty rows, and a table that reorders
+ * itself under a reader every second is harder to read than one a beat behind.
+ */
+const POLL_MILLISECONDS = 2_000;
 
 /** Must match `ROWS` in the route this polls, which is what decides a page. */
 const ROWS = 30;

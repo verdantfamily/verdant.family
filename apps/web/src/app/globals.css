@@ -372,6 +372,59 @@ body {
   font-weight: 600;
 }
 
+/**
+ * A figure that just changed.
+ *
+ * The problem this solves is not that a number is slow to arrive — it is that a number
+ * which updates silently cannot be distinguished from one that is stuck. A market with
+ * six live figures on it and no motion anywhere reads as a screenshot, and a reader
+ * watching for a trade to land has no way to tell the difference between "nothing has
+ * happened" and "this page stopped listening".
+ *
+ * So the tint, not the digits, carries the event: a wash behind the value that decays
+ * over two thirds of a second, green when it rose and red when it fell. Colouring the
+ * text instead was the first attempt and it is worse — the value's own colour is
+ * meaningful on the fee, and a number that changes hue on every tick is harder to read
+ * at exactly the moment somebody is reading it.
+ *
+ * The padding is cancelled by an equal negative margin where these are used, so the wash
+ * has room without the figure moving when it appears.
+ */
+@keyframes flash-rise {
+  from {
+    background-color: var(--color-rise-soft);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@keyframes flash-fall {
+  from {
+    background-color: var(--color-fall-soft);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+.flash-rise {
+  animation: flash-rise 640ms ease-out;
+}
+
+.flash-fall {
+  animation: flash-fall 640ms ease-out;
+}
+
+/* A reader who asked not to be moved did not ask to be kept guessing, so the wash still
+   appears — it simply arrives and leaves without the fade. */
+@media (prefers-reduced-motion: reduce) {
+  .flash-rise,
+  .flash-fall {
+    animation-duration: 1ms;
+  }
+}
+
 /** A hairline that reads as a fold rather than a border. */
 .hairline {
   background-image: linear-gradient(

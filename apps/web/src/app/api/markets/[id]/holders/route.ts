@@ -31,7 +31,7 @@ export async function GET(
   const offset = offsetOf(new URL(request.url).searchParams.get("offset"));
 
   try {
-    const page = await fetchHolders(id, ROWS, offset);
+    const page = await fetchHolders(id, ROWS, offset, true);
     return Response.json(serializeHolders(page), {
       headers: { "cache-control": "no-store" },
     });

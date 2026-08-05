@@ -49,7 +49,10 @@ export async function GET(
   }
 
   try {
-    const series = await fetchCandles(id, requested, bucketsOf(query.get("limit")));
+    // Fresh, past the cache the page render uses. This route is polled every second or
+    // so precisely because the last bucket's close moves on every trade, and a window in
+    // front of the indexer would hand the chart the same line it already drew.
+    const series = await fetchCandles(id, requested, bucketsOf(query.get("limit")), true);
     return Response.json(serializeSeries(series), {
       // Not cached. The series is polled precisely because it changes, and a cache in
       // front of it would hand the chart the same picture it already has.

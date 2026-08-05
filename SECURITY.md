@@ -107,7 +107,7 @@ Verdant uses `block.timestamp` everywhere; the measurement is recorded as V7 in
 | Check | What it covers | How to run it |
 | --- | --- | --- |
 | Unit and integration tests | 422 contract tests across 26 files | `pnpm contracts:test` |
-| | 337 TypeScript tests across the SDK, formatting and interface | `pnpm test` |
+| | 345 TypeScript tests across the SDK, formatting and interface | `pnpm test` |
 | Fuzzing | 10 000 runs per property | included above |
 | Invariants | 2 invariants, 256 runs at depth 20 | included above |
 | Differential tests | Every value computed in both Solidity and TypeScript is asserted against shared vectors, with expected values from a third naive implementation so a shared misconception cannot pass | `pnpm vectors:generate` |

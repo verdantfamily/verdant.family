@@ -87,11 +87,17 @@ export function parseSeries(raw: SerializedSeries): CandleSeries {
  * trade tape beside the chart — the two would visibly disagree if the tape showed a swap
  * the line had not moved for yet.
  *
- * The cost is one small request every two seconds per open market page. The response is a
- * few hundred buckets of six numbers, and the query behind it is a grouped scan over an
- * index that already exists.
+ * A second, matching the band of figures under the chart so the two cannot visibly
+ * disagree — a market cap that had moved above a line that had not would be worse than
+ * both being a beat behind. It is still far slower than the chain, which produces a block
+ * roughly every hundred milliseconds; what bounds this is politeness to the indexer
+ * rather than anything about how live it looks.
+ *
+ * The cost is one small request a second per open market page. The response is a few
+ * hundred buckets of six numbers, and the query behind it is a grouped scan over an index
+ * that already exists.
  */
-export const POLL_MILLISECONDS = 2_000;
+export const POLL_MILLISECONDS = 1_000;
 
 /**
  * How much history a reader is asking for, and what to bucket it into.

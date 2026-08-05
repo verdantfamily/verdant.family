@@ -69,6 +69,18 @@ export interface PriceChartProps {
   /** Chain time and the market's birthday, for the range that means "everything". */
   readonly at: number;
   readonly createdAt: number;
+  /**
+   * How much room the chart is being given, and therefore how loud it is allowed to be.
+   *
+   * `hero` is for a chart that is the top of a page rather than one card in a row of
+   * them: the readout is set at headline size, the canvas is given a much taller floor,
+   * and the horizontal padding comes off because at that size the chart sits directly on
+   * the page instead of inside a bordered card.
+   *
+   * This is a property of the composition, not of the data, which is why it is a prop
+   * rather than something the component works out. The same series is drawn either way.
+   */
+  readonly size?: "default" | "hero";
 }
 
 /** The colours the canvas is handed, read from the stylesheet at mount. */
@@ -153,7 +165,9 @@ export function PriceChart({
   valueScale,
   at,
   createdAt,
+  size = "default",
 }: PriceChartProps) {
+  const hero = size === "hero";
   /** Every range on offer, with "everything" sized from how old this market is. */
   const ranges = useMemo(
     () => [...CHART_RANGES, allRangeFor(at - createdAt)],
@@ -427,12 +441,22 @@ export function PriceChart({
     // A column, so the canvas can take whatever the header and the footer leave. The chart
     // is created with `autoSize`, so it follows that height rather than needing to be told.
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 px-5 pt-4">
+      <div
+        className={`flex shrink-0 flex-wrap items-end justify-between gap-4 ${
+          hero ? "" : "px-5 pt-4"
+        }`}
+      >
         <div>
           {/* The headline. A market capitalisation where a dollar rate exists, and the
               price in the quote asset where one does not — the figure changes but the
               treatment does not, so the chart always has one number at its top left. */}
-          <p className="numeric text-[1.9rem] leading-none tracking-tight text-ink">
+          <p
+            className={`numeric leading-none text-ink ${
+              hero
+                ? "text-[2.5rem] tracking-[-0.03em] sm:text-[3.25rem]"
+                : "text-[1.9rem] tracking-tight"
+            }`}
+          >
             {shown === undefined
               ? "—"
               : valueScale === null
@@ -440,7 +464,9 @@ export function PriceChart({
                 : formatUsdPrecise(asFloat(shown) * valueScale)}
           </p>
 
-          <p className="mt-1.5 flex items-center gap-2 text-[0.75rem]">
+          <p
+            className={`flex items-center gap-2 ${hero ? "mt-3 text-[0.82rem]" : "mt-1.5 text-[0.75rem]"}`}
+          >
             {summary?.change === undefined || summary.change === null ? null : (
               <span className={rising ? "text-rise" : "text-fall"}>
                 {summary.change >= 0 ? "+" : "−"}
@@ -466,10 +492,21 @@ export function PriceChart({
         </div>
       </div>
 
-      {/* A floor as well as a share of the slack: in one column on a phone this row has no
-          height to divide, and a chart allowed to collapse to nothing is worse than one
-          that makes the card a little taller. */}
-      <div className="relative mt-4 min-h-64 flex-1">
+      {/*
+       * In a card, a floor plus a share of the slack: the row has a height set by the
+       * tallest panel in it, and a chart allowed to collapse to nothing is worse than one
+       * that makes the card a little taller.
+       *
+       * As a hero, a stated height instead, because there is no row to take one from. The
+       * library measures this element when it builds the chart and autoscales the price
+       * axis against what it finds; asked to do that inside a box whose height is still
+       * indefinite — `flex-1` against an auto-height parent — it lays the axis out for a
+       * box of no height and never revisits it, which shows up as a price scale with no
+       * labels on it and the line pressed flat against the bottom edge.
+       */}
+      <div
+        className={`relative ${hero ? "mt-6 h-[17rem] sm:h-[24rem]" : "mt-4 min-h-64 flex-1"}`}
+      >
         <div ref={container} className="size-full" />
 
         {points.length === 0 ? (
@@ -483,7 +520,11 @@ export function PriceChart({
         ) : null}
       </div>
 
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border px-5 py-3 text-[0.72rem] text-ink-muted">
+      <div
+        className={`flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border text-[0.72rem] text-ink-muted ${
+          hero ? "mt-2 pt-3" : "px-5 py-3"
+        }`}
+      >
         <span>{summary === null ? "" : formatInstant(summary.from)}</span>
         <span className="numeric">
           {summary === null

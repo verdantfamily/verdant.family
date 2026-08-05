@@ -33,12 +33,24 @@ export function Tabs({
   items,
   initial,
   aside,
+  variant = "pill",
 }: {
   readonly items: readonly TabItem[];
   readonly initial?: string | undefined;
   /** Rendered at the far end of the strip: a filter, a total, a link out. */
   readonly aside?: ReactNode;
+  /**
+   * How much the strip asserts itself.
+   *
+   * `pill` is the enclosed control: a row of buttons in a sunken track, which reads as a
+   * thing to operate and is right where the tabs are one widget among several. `quiet`
+   * sets them as words on a rule with the open one underlined, which is right where the
+   * tabs are the page's own table of contents and the enclosure would be a second box
+   * around content that is already in cards.
+   */
+  readonly variant?: "pill" | "quiet";
 }) {
+  const quiet = variant === "quiet";
   const base = useId();
   const first = items[0]?.id ?? "";
   const [open, setOpen] = useState(initial ?? first);
@@ -57,10 +69,20 @@ export function Tabs({
 
   return (
     <div>
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div
+        className={`flex items-center justify-between gap-3 ${
+          quiet ? "border-b border-border" : "flex-wrap"
+        }`}
+      >
         <div
           role="tablist"
-          className="inline-flex flex-wrap gap-1 rounded-full border border-border bg-surface-sunken p-1 backdrop-blur-xl"
+          className={
+            quiet
+              ? // Scrolls rather than wraps. Four labels on a rule are wider than a phone,
+                // and a second row of them would put a stray tab under the rule it belongs on.
+                "-mb-px flex min-w-0 flex-nowrap gap-6 overflow-x-auto"
+              : "inline-flex flex-wrap gap-1 rounded-full border border-border bg-surface-sunken p-1 backdrop-blur-xl"
+          }
         >
           {items.map((item, index) => {
             const selected = item.id === active.id;
@@ -81,11 +103,19 @@ export function Tabs({
                   if (event.key === "ArrowRight") move(index, 1);
                   if (event.key === "ArrowLeft") move(index, -1);
                 }}
-                className={`whitespace-nowrap rounded-full px-4 py-2 text-[0.82rem] font-medium transition ${
-                  selected
-                    ? "bg-surface-raised text-ink shadow-card"
-                    : "text-ink-muted hover:text-ink"
-                }`}
+                className={
+                  quiet
+                    ? `whitespace-nowrap border-b-2 pb-3 text-[0.85rem] font-medium transition ${
+                        selected
+                          ? "border-accent text-ink"
+                          : "border-transparent text-ink-muted hover:text-ink"
+                      }`
+                    : `whitespace-nowrap rounded-full px-4 py-2 text-[0.82rem] font-medium transition ${
+                        selected
+                          ? "bg-surface-raised text-ink shadow-card"
+                          : "text-ink-muted hover:text-ink"
+                      }`
+                }
               >
                 {item.label}
                 {item.count === undefined ? null : (
@@ -102,14 +132,14 @@ export function Tabs({
           })}
         </div>
 
-        {aside}
+        {aside === undefined ? null : <div className="shrink-0">{aside}</div>}
       </div>
 
       <div
         id={`${base}-panel-${active.id}`}
         role="tabpanel"
         aria-labelledby={`${base}-tab-${active.id}`}
-        className="mt-4"
+        className={quiet ? "mt-6" : "mt-4"}
       >
         {active.panel}
       </div>

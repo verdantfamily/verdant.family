@@ -145,12 +145,39 @@ export function ConnectButton({
 }
 
 /**
+ * Whether the generic injected connector has anything behind it.
+ *
+ * It is configured statically, so wagmi lists it whether or not a wallet ever put
+ * itself on `window.ethereum` — and on a phone's ordinary browser nothing has. Offering
+ * it there produced the whole of the failure this guards against: the only entry in the
+ * list was one called "Injected", tapping it raised a provider-not-found, and a reader
+ * had no way to learn that no wallet on their device was ever going to appear.
+ *
+ * Read in an effect rather than during render because the server has no `window` and a
+ * component that answered differently in the two places would be a hydration error.
+ * Announced wallets need no such test: a connector exists for one only because it
+ * announced itself, which is proof it is there.
+ */
+function useInjectedIsReal(): boolean {
+  const [real, setReal] = useState(false);
+
+  useEffect(() => {
+    setReal(
+      typeof window !== "undefined" &&
+        (window as { ethereum?: unknown }).ethereum !== undefined,
+    );
+  }, []);
+
+  return real;
+}
+
+/**
  * The wallets to choose from.
  *
  * Announced wallets first, and the generic injected connector only when nothing
- * announced itself. A wallet that both announces and occupies `window.ethereum` would
- * otherwise appear twice under two different names, and a reader has no way to tell
- * that the two entries are the same extension.
+ * announced itself and something is actually on `window.ethereum`. A wallet that both
+ * announces and occupies that property would otherwise appear twice under two different
+ * names, and a reader has no way to tell that the two entries are the same extension.
  */
 function ChoosePanel({
   connectors,
@@ -163,17 +190,36 @@ function ChoosePanel({
   readonly error: Error | null;
   readonly onConnect: (connector: Connector) => void;
 }) {
+  const injectedIsReal = useInjectedIsReal();
+
   const announced = connectors.filter((entry) => entry.id !== "injected");
-  const offered = announced.length > 0 ? announced : connectors;
+  const offered =
+    announced.length > 0 ? announced : injectedIsReal ? connectors : [];
 
   if (offered.length === 0) {
     return (
       <>
-        <p className="text-sm font-semibold text-ink">No wallet found</p>
+        <p className="text-sm font-semibold text-ink">No wallet on this device</p>
+
+        {/*
+         * Two paths, phone first, because the phone is where somebody arrives at this
+         * message. Verdant has no WalletConnect connector — that needs a project id
+         * issued to a named application — so on a phone there is exactly one way in,
+         * and saying it plainly beats a list of wallets none of which can be reached
+         * from here.
+         */}
         <p className="mt-2 text-[0.8rem] leading-relaxed text-ink-muted">
-          This page looks for browser wallets that announce themselves, which every
-          current extension does. Install one, or open this page in a wallet&apos;s own
-          browser, and it will appear here.
+          <span className="font-medium text-ink">On a phone:</span> open{" "}
+          <span className="numeric text-ink">verdant.family</span> inside your
+          wallet&apos;s own browser — MetaMask, Rainbow, Trust and Coinbase Wallet each
+          have one under a Browser or Discover tab. A wallet cannot be reached from
+          Safari or Chrome.
+        </p>
+
+        <p className="mt-2 text-[0.8rem] leading-relaxed text-ink-muted">
+          <span className="font-medium text-ink">On a computer:</span> install a browser
+          extension. This page finds every wallet that announces itself, so it will
+          appear here once one is installed.
         </p>
       </>
     );

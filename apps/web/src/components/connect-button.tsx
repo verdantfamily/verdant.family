@@ -7,7 +7,7 @@ import { useConnect, useConnection, useConnectors, useDisconnect, useSwitchChain
 
 import { CHAIN_ID, chain } from "../lib/chain";
 import { describeError, isUserRejection } from "../lib/errors";
-import { walletChoices } from "../lib/wallets";
+import { cannotReach, walletChoices } from "../lib/wallets";
 
 /**
  * The one place a wallet connection is asked for.
@@ -117,6 +117,9 @@ export function ConnectButton({
             <ConnectedPanel
               address={address}
               wallet={connector?.name}
+              stranded={
+                connector === undefined ? null : cannotReach(connector.id, CHAIN_ID)
+              }
               wrongNetwork={wrongNetwork}
               switching={switchChain.isPending}
               error={switchChain.error}
@@ -231,14 +234,22 @@ function ChoosePanel({
       </p>
 
       <div className="mt-3 space-y-1.5">
-        {installed.map((entry) => (
-          <WalletRow
-            key={entry.uid}
-            entry={entry}
-            pending={pending}
-            onConnect={onConnect}
-          />
-        ))}
+        {installed.map((entry) => {
+          // Named before the tap rather than discovered after it. Connecting is still
+          // allowed — the roster this comes from is somebody else's and will go stale —
+          // but nothing signed from here would ever succeed, and a reader deserves that
+          // sentence before they spend a launch finding out.
+          const stranded = cannotReach(entry.id, CHAIN_ID);
+          return (
+            <WalletRow
+              key={entry.uid}
+              entry={entry}
+              pending={pending}
+              onConnect={onConnect}
+              caution={stranded === null ? undefined : `Cannot reach ${chain.name}`}
+            />
+          );
+        })}
 
         {/*
          * Set apart from the wallets above it, because it is not one. Choosing it opens a
@@ -270,11 +281,14 @@ function WalletRow({
   entry,
   pending,
   hint,
+  caution,
   onConnect,
 }: {
   readonly entry: Connector;
   readonly pending: boolean;
-  readonly hint?: string;
+  readonly hint?: string | undefined;
+  /** Shown in place of the hint, in the colour of a thing that will not work. */
+  readonly caution?: string | undefined;
   readonly onConnect: (connector: Connector) => void;
 }) {
   return (
@@ -289,7 +303,9 @@ function WalletRow({
         <span className="block truncate text-[0.85rem] font-medium text-ink">
           {entry.name}
         </span>
-        {hint === undefined ? null : (
+        {caution !== undefined ? (
+          <span className="block truncate text-[0.72rem] text-caution">{caution}</span>
+        ) : hint === undefined ? null : (
           <span className="block truncate text-[0.72rem] text-ink-muted">{hint}</span>
         )}
       </span>
@@ -301,6 +317,7 @@ function WalletRow({
 function ConnectedPanel({
   address,
   wallet,
+  stranded,
   wrongNetwork,
   switching,
   error,
@@ -309,6 +326,8 @@ function ConnectedPanel({
 }: {
   readonly address: `0x${string}`;
   readonly wallet: string | undefined;
+  /** The wallet's name when it cannot reach this chain at all, and `null` otherwise. */
+  readonly stranded: string | null;
   readonly wrongNetwork: boolean;
   readonly switching: boolean;
   readonly error: Error | null;
@@ -322,7 +341,28 @@ function ConnectedPanel({
         {address}
       </p>
 
-      {wrongNetwork ? (
+      {/*
+       * Checked before the wrong-network offer, because for this wallet that offer is a
+       * lie: switching is what it cannot do. Telling somebody to press a button that will
+       * fail is worse than telling them nothing, and it is what sent one launch and every
+       * trade into the same unexplained signing error.
+       */}
+      {stranded !== null ? (
+        <div className="mt-3 rounded-xl border border-caution/30 bg-caution-soft px-3.5 py-3">
+          <p className="text-[0.78rem] font-semibold text-ink">
+            {stranded} cannot reach {chain.name}
+          </p>
+          <p className="mt-1 text-[0.75rem] leading-relaxed text-ink-muted">
+            It supports a fixed list of networks and does not let anyone add another, so
+            chain {CHAIN_ID} is out of its reach. Nothing signed here will go through, and
+            the error it gives will not say why.
+          </p>
+          <p className="mt-2 text-[0.75rem] leading-relaxed text-ink-muted">
+            Use a wallet that adds networks on request — MetaMask, Rabby, Rainbow — or
+            connect one on your phone through WalletConnect.
+          </p>
+        </div>
+      ) : wrongNetwork ? (
         <div className="mt-3 rounded-xl border border-caution/30 bg-caution-soft px-3.5 py-3">
           <p className="text-[0.78rem] font-semibold text-ink">
             Your wallet is on another network

@@ -16,9 +16,9 @@
     "@verdant/config": "workspace:*",
     "@verdant/sdk": "workspace:*",
     "@verdant/ui": "workspace:*",
-    "hono": "^4.12.33",
+    "hono": "^4.13.1",
     "ponder": "^0.17.4",
-    "viem": "^2.40.0"
+    "viem": "^2.55.11"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",

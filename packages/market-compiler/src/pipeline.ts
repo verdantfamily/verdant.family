@@ -835,6 +835,7 @@ export async function runBuild(
           sources,
           diagnostics: compiled.diagnostics,
           attempt,
+          remedy: remedyBrief(recogniseAll(compiled.diagnostics)),
         });
         repair = output.value;
         job = remember(job, Stage.CompilationRepair, output);
@@ -1055,6 +1056,7 @@ export async function runBuild(
                 sources: [...sources, ...tests],
                 diagnostics: tested.buildFailure,
                 attempt: testAttempt,
+                remedy: remedyBrief(recogniseAll(tested.buildFailure)),
               })
             : await repairTests(provider, {
                 specification,
@@ -1062,6 +1064,7 @@ export async function runBuild(
                 tests,
                 failures,
                 attempt: testAttempt,
+                remedy: remedyBrief(recogniseAll([], failures)),
               });
         repair = output.value;
         job = remember(job, Stage.TestRepair, output);

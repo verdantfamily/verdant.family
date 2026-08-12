@@ -2557,11 +2557,14 @@ export async function repairCompilation(
     sources,
     diagnostics,
     attempt,
+    remedy = null,
     timeoutMs = STAGE_TIMEOUTS.repair,
   }: {
     readonly sources: readonly GeneratedSource[];
     readonly diagnostics: readonly Diagnostic[];
     readonly attempt: number;
+    /** The known fix, where this failure has been met before. See `playbook.ts`. */
+    readonly remedy?: string | null;
     readonly timeoutMs?: number;
   },
 ): Promise<StageOutput<Repair>> {
@@ -2583,6 +2586,10 @@ export async function repairCompilation(
       "",
       "Compiler errors:",
       forModel(diagnostics),
+      // Ahead of the files rather than after them, because it is the thing most likely
+      // to make the rest unnecessary: a recognised failure has an answer somebody worked
+      // out once, and rediscovering it from the message is what costs the attempts.
+      ...(remedy === null ? [] : ["", remedy]),
       "",
       // Only the files the compiler complained about, plus anything they import from
       // this bundle. Sending the whole market on every round was costing a minute a
@@ -2694,6 +2701,7 @@ export async function repairTests(
     tests,
     failures,
     attempt,
+    remedy = null,
     timeoutMs = STAGE_TIMEOUTS.repair,
   }: {
     readonly specification: MarketSpecification;
@@ -2701,6 +2709,8 @@ export async function repairTests(
     readonly tests: readonly GeneratedSource[];
     readonly failures: readonly TestOutcome[];
     readonly attempt: number;
+    /** The known fix, where this failure has been met before. See `playbook.ts`. */
+    readonly remedy?: string | null;
     readonly timeoutMs?: number;
   },
 ): Promise<StageOutput<Repair>> {
@@ -2725,6 +2735,10 @@ export async function repairTests(
       failures
         .map((failure) => `${failure.suite} :: ${failure.name}\n  ${failure.reason ?? "no reason given"}`)
         .join("\n"),
+      // A recognised failure already says which side is wrong, which is the question
+      // this call spends most of its reasoning on. Given first, so the rest is read in
+      // the light of it.
+      ...(remedy === null ? [] : ["", remedy]),
       "",
       // The rules and invariants rather than the whole document. This call decides
       // whether the contract or the test is wrong, and that is answered by what the

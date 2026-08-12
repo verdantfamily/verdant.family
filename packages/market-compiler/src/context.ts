@@ -342,6 +342,15 @@ Tests are Foundry tests using forge-std. Conventions:
   - vm.ffi is DISABLED and any test using it will fail
   - bound(x, min, max) to constrain fuzz inputs rather than vm.assume where possible
 
+One vm.prank sets the caller for exactly one external call, and setting a second before
+the first has been spent fails the test with "cannot overwrite a prank until it is
+applied at least once". So do not stack them, and do not open one before a block that
+makes no external call at all. Where several calls need the same caller, use
+vm.startPrank and vm.stopPrank around them. Note that calling a helper on this contract
+— deployHook, addLiquidity, swapExactIn — does not consume the prank by itself: the
+first external call the helper makes does, and every call after that is back to being
+made by the test.
+
 For every invariant in the specification, write a test whose name contains the
 invariant's id in some recognisable form, because a claimed invariant with no test
 bearing its id blocks deployment.

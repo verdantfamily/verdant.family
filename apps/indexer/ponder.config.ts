@@ -23,7 +23,7 @@ import { abi } from "@verdant/sdk";
 import { createConfig, factory } from "ponder";
 import { getAbiItem } from "viem";
 
-import { CHAIN_ID, FACTORY, HOOK, POOL_MANAGER, RPC_URL, START_BLOCK } from "./src/addresses";
+import { AGENTS, CHAIN_ID, FACTORY, HOOK, POOL_MANAGER, RPC_URL, START_BLOCK } from "./src/addresses";
 
 /**
  * A market's own contracts are created by the factory, so their addresses are only
@@ -39,11 +39,103 @@ function createdByFactory(parameter: "token" | "splitter" | "locker" | "vesting"
   return factory({ address: FACTORY, event: marketCreated, parameter });
 }
 
+/**
+ * `AgentLaunched`, which carries all four of an agent's contracts.
+ *
+ * The event is on the launch factory rather than the identity registry, because the
+ * registry never sees the addresses as a set — the factory deploys them and then
+ * registers them. `AgentRegistered` names only the treasury.
+ */
+const agentLaunched = getAbiItem({
+  abi: abi.agentLaunchFactoryAbi,
+  name: "AgentLaunched",
+});
+
+function createdByAgentLaunch(
+  parameter: "mandate" | "treasury" | "router" | "executionModule",
+) {
+  return factory({ address: AGENTS.launchFactory, event: agentLaunched, parameter });
+}
+
+/**
+ * The Agen agent layer.
+ *
+ * Registered whether or not it is deployed, with the zero address standing in when it
+ * is not. `src/addresses.ts` explains why: `ponder codegen` derives the valid event
+ * names from this configuration, so a conditionally-registered contract would make
+ * every agent handler a type error on any build where the layer is absent — handlers
+ * nobody could typecheck until after a deployment. A contract at the zero address emits
+ * nothing, so the cost is a filter that never matches.
+ *
+ * ## Four contracts per agent, discovered from one event
+ *
+ * An agent's mandate, treasury, execution module and revenue router are deployed when
+ * it is created, so their addresses are only knowable from `AgentLaunched` — the same
+ * situation a market's token, splitter and locker are in, and the same answer.
+ *
+ * The difference is that their events mostly do not carry an agent id.
+ * `AgentTreasury.Spent` says which asset went where, and the only thing tying it to an
+ * agent is which treasury emitted it. So the handlers resolve that through the
+ * `agentContract` link table, which `AgentLaunched` fills in.
+ */
+const agentContracts = {
+  AgentLaunchFactory: {
+    abi: abi.agentLaunchFactoryAbi,
+    chain: "robinhood" as const,
+    address: AGENTS.launchFactory,
+    startBlock: AGENTS.startBlock,
+  },
+
+  AgentIdentityRegistry: {
+    abi: abi.agentIdentityRegistryAbi,
+    chain: "robinhood" as const,
+    address: AGENTS.identityRegistry,
+    startBlock: AGENTS.startBlock,
+  },
+
+  AgentServiceRegistry: {
+    abi: abi.agentServiceRegistryAbi,
+    chain: "robinhood" as const,
+    address: AGENTS.serviceRegistry,
+    startBlock: AGENTS.startBlock,
+  },
+
+  AgentMandate: {
+    abi: abi.agentMandateAbi,
+    chain: "robinhood" as const,
+    address: createdByAgentLaunch("mandate"),
+    startBlock: AGENTS.startBlock,
+  },
+
+  AgentTreasury: {
+    abi: abi.agentTreasuryAbi,
+    chain: "robinhood" as const,
+    address: createdByAgentLaunch("treasury"),
+    startBlock: AGENTS.startBlock,
+  },
+
+  AgentExecutionModule: {
+    abi: abi.agentExecutionModuleAbi,
+    chain: "robinhood" as const,
+    address: createdByAgentLaunch("executionModule"),
+    startBlock: AGENTS.startBlock,
+  },
+
+  AgentRevenueRouter: {
+    abi: abi.agentRevenueRouterAbi,
+    chain: "robinhood" as const,
+    address: createdByAgentLaunch("router"),
+    startBlock: AGENTS.startBlock,
+  },
+};
+
 export default createConfig({
   chains: {
     robinhood: { id: CHAIN_ID, rpc: RPC_URL },
   },
   contracts: {
+    ...agentContracts,
+
     VerdantFactory: {
       abi: abi.verdantFactoryAbi,
       chain: "robinhood",

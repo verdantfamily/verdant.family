@@ -43,14 +43,110 @@ is a liveness decision and is commented at the call site.
 Suppressed with a targeted `// slither-disable-next-line arbitrary-send-eth` on
 that one line. The detector stays enabled everywhere else.
 
+### `arbitrary-send-eth` — `AgentRevenueRouter.settle`
+
+**Dismissed. False positive.**
+
+> `AgentRevenueRouter.settle(address,uint256)` sends eth to arbitrary user
+
+Same detector, same shape, different reason. The destination is
+`destinationOf(leg)`, which returns one of three `immutable`s fixed at
+construction — the agent's treasury, its developer, or the protocol treasury. It
+is not arbitrary and cannot become arbitrary:
+
+1. **There is no setter.** None of the three has one, for the developer, the
+   agent, or the guardian. `AgentRevenueRouter` declares no function that writes
+   any of them after the constructor.
+2. **`leg` is bounded before it is used.** `settle` rejects `leg >= 4` before
+   resolving a destination, and `destinationOf` reverts `UnknownLeg` on anything
+   else, so the three cases are exhaustive.
+3. **The amount is what that leg is owed.** `allocated - settled` for the leg,
+   and `_settled` is written before the transfer.
+
+The bare `.call` rather than `transfer` is deliberate for the reason
+`FeeSplitter.claim` gives, and here it is load-bearing rather than defensive: one
+of the three destinations is `AgentTreasury`, a contract, and a 2 300 gas stipend
+would make the operations leg unpayable.
+
+Suppressed with a targeted `// slither-disable-next-line arbitrary-send-eth`.
+
+## Medium
+
+### `divide-before-multiply` — `RevenueAllocationLib.entitlement`
+
+**Dismissed. Deliberate, and proven exact.**
+
+> `RevenueAllocationLib.entitlement(uint256,uint16)` performs a multiplication on
+> the result of a division
+
+The detector is right that the code divides first. It is wrong that precision is
+lost, and the reason the code is written this way is the reason the finding
+exists at all.
+
+The definition of a leg's share is `received * bps / 10_000`. Evaluated directly,
+that reverts on overflow once `received` passes `2^256 / 10_000` — which would
+turn an arithmetic edge into a router that can never allocate that asset again.
+So the library splits `received` into `whole * 10_000 + remainder` and evaluates
+`whole * bps + (remainder * bps) / 10_000`, in which neither product can overflow.
+
+The two forms are equal rather than approximately equal, because `whole` and
+`remainder` together carry every bit of `received`. That claim is not left to this
+paragraph: `packages/sdk/src/agents/vectors/allocation.json` carries the naive
+form's answer at 4 716 totals across 159 allocations, computed in
+arbitrary-precision arithmetic by a generator that does not import either
+implementation, and both
+[`RevenueAllocationLib.vectors.t.sol`](../../packages/contracts/test/agents/RevenueAllocationLib.vectors.t.sol)
+and the SDK's own suite assert against it — including at `type(uint256).max`,
+where the naive form cannot be evaluated on chain at all.
+
+Suppressed with a targeted `// slither-disable-next-line divide-before-multiply`.
+
+### `incorrect-equality` — eight comparisons in the agent layer
+
+**Acknowledged, not suppressed.**
+
+Every one is a comparison against zero used as a sentinel: `lastActionAt == 0`
+meaning "this agent has never acted", `startedAt == 0` meaning "this asset's
+period has never begun", `amount == 0` meaning "there is nothing to do", and
+`agentId == bytes32(0)` meaning "no such record".
+
+The detector exists for strict equality against a *balance* or a *timestamp*,
+where an attacker can arrange the exact value. None of these are that: they
+distinguish an unwritten storage slot from a written one, and the distinction is
+load-bearing — treating "never acted" as "acted at the epoch" would make a mandate
+with a long interval unusable exactly once, and treating "period never started" as
+"period started in 1970" would give every agent's first action a stale period.
+
+Left visible. Suppressing eight lines to remove a detector's default opinion about
+zero would be a worse trade than the noise.
+
+### `uninitialized-local` — `AgentRevenueRouter.allocate.delta`
+
+**Acknowledged, not suppressed.**
+
+`uint256[4] memory delta` is a fixed-size memory array, which Solidity
+zero-initialises. There is nothing to write that is not already there, and
+assigning four zeros to say so would be code that exists to satisfy a detector.
+
+### `unused-return` — `AgentLaunchFactory._register`
+
+**Acknowledged, not suppressed.**
+
+`AgentIdentityRegistry.register` returns `(agentId, index)`. The factory uses the
+first — it asserts the registry derived the same id the components were built
+with — and ignores the second, which is a position in creation order that nothing
+at launch time needs. Slither reports the tuple as ignored because one element is.
+
 ## Low and informational
 
-### `reentrancy-events` — five functions
+### `reentrancy-events` — seven functions
 
 **Acknowledged, not suppressed.**
 
 Reported for `PositionLocker.collect`, `VerdantHook.afterInitialize`,
-`FeeForwarder.pull` and `FeeForwarder._sweep` (twice).
+`FeeForwarder.pull`, `FeeForwarder._sweep` (twice), and in the agent layer for
+`AgentLaunchFactory.createAgent` and `_register`, where the launch event is
+emitted after four deployments and a registry write.
 
 This detector fires when an event is emitted after an external call, meaning a
 reentrant call could observe events in an order that does not match the order

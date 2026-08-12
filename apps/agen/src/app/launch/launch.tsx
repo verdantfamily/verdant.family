@@ -1,0 +1,344 @@
+"use client";
+
+/**
+ * The last screen: five decisions and a button.
+ *
+ * Everything a generated market is — how many contracts, which of them holds value, what
+ * the hook's permission bits have to spell, where CREATE2 will put each one — has already
+ * been decided by the time anybody reaches this page, and none of it is a decision a
+ * creator makes. So none of it is here. What is left is genuinely theirs: what the token
+ * looks like, what it should be worth when it opens, whether they want the first buy, and
+ * where the fees go.
+ *
+ * ## What is deliberately absent
+ *
+ * No tick. No liquidity range, position, or pool terminology. No manifest, no salt, no
+ * component list. A creator launching a token is not choosing a price curve, and a form
+ * that asked them to would be asking them to ratify a decision they have no way to
+ * evaluate — which is worse than not asking, because it moves the responsibility without
+ * moving the understanding.
+ *
+ * The one number that is shown back is the valuation the market will *actually* open at.
+ * It differs slightly from the one typed, because opening prices land on a grid, and
+ * showing the typed number while launching a different one is the small dishonesty that
+ * gets found by whoever checks.
+ *
+ * ## The initial buy is not always offered
+ *
+ * Some markets refuse trades that do not arrive through their own route — it is how they
+ * know who is trading — and the factory's buy comes from the factory. The build works
+ * this out from the compiled contract and says so; the field is absent rather than
+ * present and failing. See `supportsAtomicDevBuy` in the compiler.
+ */
+
+import { useCallback, useMemo, useState } from "react";
+import { formatEther, isAddress } from "viem";
+import { useAccount, useSendTransaction, useSwitchChain, useWaitForTransactionReceipt } from "wagmi";
+
+import { AGEN_ADDRESSES, CHAIN_ID, EXPLORER_URL, chain, shortAddress } from "../lib/chain";
+import type { PublicJob } from "../lib/builds";
+
+interface Prepared {
+  readonly transaction: { readonly to: string; readonly data: string; readonly value: string };
+  readonly market: {
+    readonly token: string;
+    readonly hook: string;
+    readonly initialTick: number;
+    readonly valuationWei: string;
+    readonly contracts: number;
+  };
+}
+
+/** Three or four significant figures of ether, which is all this needs to say. */
+function ether(wei: string): string {
+  const value = Number(formatEther(BigInt(wei)));
+  if (value >= 100) return value.toFixed(0);
+  if (value >= 1) return value.toFixed(2);
+  return value.toPrecision(3);
+}
+
+export function Launch({ job }: { readonly job: PublicJob }) {
+  const { address, chainId, status } = useAccount();
+  const switchChain = useSwitchChain();
+  const send = useSendTransaction();
+  const receipt = useWaitForTransactionReceipt({ hash: send.data });
+
+  const [marketCap, setMarketCap] = useState("10");
+  const [devBuy, setDevBuy] = useState("");
+  const [image, setImage] = useState("");
+  const [feeReceiver, setFeeReceiver] = useState("");
+  const [preparing, setPreparing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [prepared, setPrepared] = useState<Prepared | null>(null);
+
+  const launch = job.launch;
+  const connected = status === "connected" && address !== undefined;
+  const wrongNetwork = connected && chainId !== CHAIN_ID;
+
+  // Where the fees go, defaulted to whoever is launching. Typed only by somebody who
+  // wants it elsewhere, which is a real case — a multisig, a splitter — and a rare one.
+  const payTo = feeReceiver.trim() === "" ? (address ?? "") : feeReceiver.trim();
+  const payToIsAddress = payTo !== "" && isAddress(payTo, { strict: false });
+
+  const capIsAmount = /^\d*\.?\d+$/.test(marketCap.trim()) && Number(marketCap) > 0;
+  const buyIsAmount = devBuy.trim() === "" || /^\d*\.?\d+$/.test(devBuy.trim());
+
+  const blocked = useMemo(() => {
+    if (!AGEN_ADDRESSES.ok) {
+      return `Agen is not deployed on ${chain.name} yet, so there is nothing to launch through.`;
+    }
+    if (launch === null) return "This build was not cleared, so it cannot be launched.";
+    if (!connected) return "Connect a wallet to launch.";
+    if (wrongNetwork) return null;
+    if (!capIsAmount) return "Set a starting market cap.";
+    if (!buyIsAmount) return "The initial buy is not an amount.";
+    if (!payToIsAddress) return "The fee receiver is not an address.";
+    return null;
+  }, [launch, connected, wrongNetwork, capIsAmount, buyIsAmount, payToIsAddress]);
+
+  const go = useCallback(async () => {
+    setPreparing(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`/api/markets/${job.id}/launch`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          creator: address,
+          feeReceiver: payTo,
+          valuation: marketCap.trim(),
+          devBuy: devBuy.trim() === "" ? "0" : devBuy.trim(),
+          ...(image.trim() === "" ? {} : { metadataURI: image.trim() }),
+        }),
+      });
+
+      const body = (await response.json()) as Prepared & { error?: string };
+
+      if (!response.ok) {
+        setError(body.error ?? "The launch could not be prepared.");
+        return;
+      }
+
+      // The one thing worth re-checking in the browser. Everything else in the response
+      // is opaque bytes either way, but the destination is not, and a launch sent
+      // somewhere other than the factory this page is configured for is a launch that
+      // has gone wrong between here and the server.
+      if (
+        !AGEN_ADDRESSES.ok ||
+        body.transaction.to.toLowerCase() !== AGEN_ADDRESSES.addresses.factory.toLowerCase()
+      ) {
+        setError("The prepared launch is addressed somewhere other than Agen's factory.");
+        return;
+      }
+
+      setPrepared(body);
+
+      send.sendTransaction({
+        to: body.transaction.to as `0x${string}`,
+        data: body.transaction.data as `0x${string}`,
+        value: BigInt(body.transaction.value),
+        chainId: CHAIN_ID,
+      });
+    } catch {
+      setError("The launch could not be prepared. The server did not answer.");
+    } finally {
+      setPreparing(false);
+    }
+  }, [job.id, address, payTo, marketCap, devBuy, image, send]);
+
+  if (receipt.isSuccess && prepared !== null) {
+    return <Launched job={job} prepared={prepared} hash={send.data!} />;
+  }
+
+  const waiting = preparing || send.isPending || receipt.isLoading;
+
+  return (
+    <section className="launch-panel">
+      <h2>launch {job.symbol}</h2>
+
+      <div className="launch-fields">
+        <div className="field">
+          <label htmlFor="image">token image</label>
+          <input
+            id="image"
+            value={image}
+            placeholder="link to an image"
+            onChange={(event) => {
+              setImage(event.currentTarget.value);
+            }}
+          />
+          <p className="field-note">
+            Recorded with the market when it is created. Optional, and cannot be changed
+            afterwards.
+          </p>
+        </div>
+
+        <div className="field">
+          <label htmlFor="cap">starting market cap</label>
+          <div className="field-amount">
+            <input
+              id="cap"
+              value={marketCap}
+              inputMode="decimal"
+              onChange={(event) => {
+                setMarketCap(event.currentTarget.value);
+              }}
+            />
+            <span>{chain.nativeCurrency.symbol}</span>
+          </div>
+          <p className="field-note">
+            What {job.symbol} is worth in total the moment it opens. Every token exists
+            from the start and is bought from the market rather than handed out.
+          </p>
+        </div>
+
+        {launch?.supportsAtomicDevBuy === true ? (
+          <div className="field">
+            <label htmlFor="buy">your first buy</label>
+            <div className="field-amount">
+              <input
+                id="buy"
+                value={devBuy}
+                inputMode="decimal"
+                placeholder="0"
+                onChange={(event) => {
+                  setDevBuy(event.currentTarget.value);
+                }}
+              />
+              <span>{chain.nativeCurrency.symbol}</span>
+            </div>
+            <p className="field-note">
+              Bought in the same transaction that creates the market, so nobody can take
+              the opening price first. Optional.
+            </p>
+          </div>
+        ) : (
+          <div className="field field-pending">
+            <label htmlFor="buy-off">your first buy</label>
+            <input id="buy-off" disabled placeholder="unavailable for this market" />
+            <p className="field-note">
+              {launch?.devBuyUnavailableReason ??
+                "Initial buy unavailable for this market mechanic."}{" "}
+              You can buy from {job.symbol} as soon as it is live, the same way anybody
+              else does.
+            </p>
+          </div>
+        )}
+
+        <div className="field">
+          <label htmlFor="fees">fee receiver</label>
+          <input
+            id="fees"
+            value={feeReceiver}
+            placeholder={address ?? "your wallet"}
+            onChange={(event) => {
+              setFeeReceiver(event.currentTarget.value);
+            }}
+          />
+          <p className="field-note">
+            Where this market&apos;s trading fees are paid. Fixed for the life of the
+            market. Defaults to your wallet.
+          </p>
+        </div>
+
+        <div className="field field-static">
+          <span className="field-label">network</span>
+          <span className="field-value">{chain.name}</span>
+        </div>
+      </div>
+
+      {wrongNetwork ? (
+        <button
+          type="button"
+          className="primary primary-large"
+          disabled={switchChain.isPending}
+          onClick={() => {
+            switchChain.mutate({ chainId: CHAIN_ID });
+          }}
+        >
+          {switchChain.isPending ? "waiting for your wallet…" : `switch to ${chain.name}`}
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="primary primary-large"
+          disabled={blocked !== null || waiting}
+          onClick={() => void go()}
+        >
+          {send.isPending
+            ? "confirm in your wallet…"
+            : receipt.isLoading
+              ? "creating the market…"
+              : preparing
+                ? "preparing…"
+                : "launch token"}
+        </button>
+      )}
+
+      {blocked === null ? null : <p className="build-blocked">{blocked}</p>}
+      {error === null ? null : <p className="notice">{error}</p>}
+
+      {send.error !== null && !isRejection(send.error) ? (
+        <p className="notice">{send.error.message}</p>
+      ) : null}
+      {receipt.isError ? (
+        <p className="notice">
+          The transaction was sent but did not go through. Nothing was created, and the
+          market can be launched again.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+function Launched({
+  job,
+  prepared,
+  hash,
+}: {
+  readonly job: PublicJob;
+  readonly prepared: Prepared;
+  readonly hash: `0x${string}`;
+}) {
+  return (
+    <section className="launch-panel launch-done">
+      <h2>
+        {job.name} is live <span className="ticker">${job.symbol}</span>
+      </h2>
+
+      <dl className="launch-summary">
+        <div>
+          <dt>opened at</dt>
+          <dd>
+            {ether(prepared.market.valuationWei)} {chain.nativeCurrency.symbol}
+          </dd>
+        </div>
+        <div>
+          <dt>token</dt>
+          <dd className="mono">{shortAddress(prepared.market.token)}</dd>
+        </div>
+        <div>
+          <dt>contracts deployed</dt>
+          <dd>{String(prepared.market.contracts + 1)}</dd>
+        </div>
+      </dl>
+
+      {EXPLORER_URL === undefined ? null : (
+        <p className="launch-links">
+          <a href={`${EXPLORER_URL}/tx/${hash}`} target="_blank" rel="noreferrer">
+            transaction
+          </a>
+          <a href={`${EXPLORER_URL}/address/${prepared.market.token}`} target="_blank" rel="noreferrer">
+            token
+          </a>
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** A declined request is not an error worth reporting: they did it a second ago. */
+function isRejection(error: Error): boolean {
+  return /user rejected|user denied|rejected the request/i.test(error.message);
+}

@@ -77,6 +77,41 @@ protocol's share of fees — and cannot touch any existing market's schedule,
 liquidity, supply or creator share. Moving this to a multisig is an open item
 below.
 
+## The agent layer has a guardian. Markets still have nobody
+
+Agent Launch adds contracts that sit above the market layer, and they break the
+symmetry above in one place. Each agent has a `guardian`, fixed when the agent is
+created, and it can do exactly two things: **stop the agent acting**, and **stop
+it permanently**.
+
+It cannot move funds, change a mandate, change a revenue split, redirect a
+payment, or reach any market contract. Those are not policies — there is no
+guardian-callable function that does any of them, and the mandate and the split
+have no setters at all. The stop exists redundantly on three contracts
+(`AgentIdentityRegistry`, `AgentMandate`, `AgentTreasury`) so that a kill switch
+does not depend on one contract being read correctly, and every one of the three
+only ever stops something.
+
+A stopped agent still earns. Its market keeps trading, fees keep accruing,
+`PositionLocker.collect()` and `FeeSplitter.claim()` keep working, and revenue
+keeps arriving and allocating. A guardian who could stop money *arriving* could
+starve the developer and the protocol; this one can stop the agent *spending*.
+
+Revocation is terminal, for everyone including the guardian, so "we paused it and
+quietly turned it back on" is not available.
+
+The reasoning is recorded in
+[ADR-012](docs/decisions/012-the-agent-guardian.md), which also carries the MVP
+threat model and the list of who is trusted and who is assumed hostile. The
+operator key that submits an agent's actions is in the second list.
+
+Two things this **does not** defend against, stated rather than discovered: a
+developer who configures a permissive mandate and finds a buyer for it afterwards
+— every limit is public before anyone pays, but a bad configuration chosen openly
+is disclosed rather than prevented — and the agent runtime itself, which is
+untrusted software whose worst case is bounded by the mandate rather than
+excluded by it.
+
 ## Trust boundaries
 
 Things Verdant depends on and does not control:
@@ -106,10 +141,10 @@ Verdant uses `block.timestamp` everywhere; the measurement is recorded as V7 in
 
 | Check | What it covers | How to run it |
 | --- | --- | --- |
-| Unit and integration tests | 422 contract tests across 26 files | `pnpm contracts:test` |
-| | 352 TypeScript tests across the SDK, formatting and interface | `pnpm test` |
+| Unit and integration tests | 559 contract tests across 34 files | `pnpm contracts:test` |
+| | 403 TypeScript tests across the SDK, formatting and interface | `pnpm test` |
 | Fuzzing | 10 000 runs per property | included above |
-| Invariants | 2 invariants, 256 runs at depth 20 | included above |
+| Invariants | 13 invariants, 256 runs at depth 20 | included above |
 | Differential tests | Every value computed in both Solidity and TypeScript is asserted against shared vectors, with expected values from a third naive implementation so a shared misconception cannot pass | `pnpm vectors:generate` |
 | Gas regression | Committed snapshot, enforced in CI | `pnpm contracts:snapshot` |
 | Coverage floor | 95% | `bash scripts/check-coverage.sh` |

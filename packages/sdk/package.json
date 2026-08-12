@@ -11,9 +11,10 @@
       "default": "./dist/index.js"
     },
     "./vectors/schedule.json": "./src/models/vectors/schedule.json",
-    "./vectors/pool.json": "./src/models/vectors/pool.json"
+    "./vectors/pool.json": "./src/models/vectors/pool.json",
+    "./vectors/allocation.json": "./src/agents/vectors/allocation.json"
   },
-  "files": ["dist", "src/models/vectors"],
+  "files": ["dist", "src/models/vectors", "src/agents/vectors"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -22,6 +23,9 @@
     "vectors:generate": "node scripts/generate-schedule-vectors.ts",
     "vectors:generate:pool": "node scripts/generate-pool-vectors.ts",
     "vectors:generate:swap": "pnpm build && node scripts/generate-swap-vectors.ts",
+    "vectors:generate:allocation": "node scripts/generate-allocation-vectors.ts",
+    "vectors:generate:identity": "node scripts/generate-agent-identity-vectors.ts",
+    "vectors:generate:lifecycle": "node scripts/generate-lifecycle-vectors.ts",
     "abis:emit": "node scripts/emit-abis.ts"
   },
   "dependencies": {

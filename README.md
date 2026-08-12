@@ -55,7 +55,8 @@ clean clone with no install step.
 | The preview equals the transaction | shared vectors, with expected values from a third naive implementation so a shared misconception cannot pass |
 | The displayed market data equals the chain | `pnpm proof` — a real chain, six launches, an indexer, and the assertion that they agree |
 | Static analysis is clean, and every suppression is argued for | [`docs/security/slither.md`](docs/security/slither.md) |
-| All of the above, and 422 other things | `pnpm contracts:test` — plus 352 TypeScript tests under `pnpm test` |
+| An agent cannot spend outside its mandate, and its guardian cannot spend at all | [`test/agents/`](packages/contracts/test/agents/) — and [ADR-012](docs/decisions/012-the-agent-guardian.md) states what that key can and cannot reach |
+| All of the above, and 559 other things | `pnpm contracts:test` — plus 403 TypeScript tests under `pnpm test` |
 
 Two of those run daily against the live chain, so if Robinhood moves something or
 a published hash stops matching, the
@@ -174,7 +175,8 @@ fresh clone before `pnpm install` has ever run.
 ```text
 models/         The model library, generated from the interface's own config
 deployments/    Addresses, runtime code hashes, and the settings that reproduce them
-docs/           The verification record, the runbook, and nine decision records
+docs/           The verification record, the runbook, the agent layer, and thirteen
+                decision records
 packages/
   contracts/    Foundry — Solidity 0.8.26, optimizer 1_000_000, cancun
   sdk/          TypeScript twins of the on-chain math, generated ABIs, the read layer
@@ -190,6 +192,9 @@ scripts/        The probe, the verifiers, the proof rig
 Start with [`docs/verification.md`](docs/verification.md) if you want the chain
 facts and how each was established, or [`docs/decisions/`](docs/decisions/) if
 you want to know why something is built the way it is.
+[`docs/agents.md`](docs/agents.md) is the operational account of the agent layer:
+what an agent can do, who can stop it, and how an off-chain runtime drives one
+without holding a key that matters.
 
 ## Licence
 
@@ -202,6 +207,15 @@ these contracts carried exactly that until this repository was made public. Unde
 MIT anyone may take the factory, the hook and the schedule library and run their
 own launchpad with them, and that is allowed. The name and the artwork are not
 included — see [`assets/README.md`](assets/README.md).
+
+Two files — `VerdantFactory.sol` and `FeeForwarder.sol` — still carry a stale
+`BUSL-1.1` SPDX header. They are MIT like everything else, and [`NOTICE`](NOTICE)
+grants that in explicit terms. The header cannot be corrected without changing
+those contracts' bytecode, because solc compiles the identifier into the metadata
+hash, and both are deployed and verified byte-for-byte on Blockscout. Fixing a
+comment is not worth breaking the first receipt in the table above;
+[ADR-013](docs/decisions/013-the-repository-is-mit.md) shows the measurement and
+`pnpm verify:licenses` stops the exception spreading or being tidied away.
 
 The Solidity dependencies are not distributed here.
 `packages/contracts/vendor/` is fetched at pinned commits by

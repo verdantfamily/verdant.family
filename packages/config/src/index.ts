@@ -17,6 +17,7 @@ export {
   OVERRIDE_FEE_FLAG,
   TICK_BOUNDS,
   TICK_SPACING,
+  AGEN_BAND_WIDTHS,
   MAX_TICK_ABSOLUTE,
   MIN_USABLE_TICK,
   MAX_USABLE_TICK,
@@ -36,9 +37,11 @@ export {
   ADDONS,
   DEPLOYMENTS,
   addonsFor,
+  agentsFor,
   deploymentFor,
   isDeployed,
   type VerdantAddons,
+  type VerdantAgentLayer,
   type VerdantDeployment,
 } from "./deployments.js";
 

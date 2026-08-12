@@ -1,0 +1,41 @@
+# What must not go into the image.
+#
+# The working tree carries roughly 2.5G of build output — compiled Solidity, Next
+# bundles, turbo's cache, and every market generated during development. None of it is
+# input to the build, all of it would be uploaded to the builder, and the generated jobs
+# in particular are other people's markets.
+
+node_modules
+**/node_modules
+
+# Build output, all of which is regenerated inside the image.
+.next
+**/.next
+out
+**/out
+dist
+**/dist
+.turbo
+**/.turbo
+
+# Foundry's artefacts and its cache. The vendored sources are kept; these are not.
+packages/contracts/out
+packages/contracts/cache
+packages/contracts/broadcast
+
+# Generated markets. Runtime state, held on a volume rather than baked in.
+generated
+
+.git
+.github
+.vercel
+.railway
+.research
+.proof
+docs
+assets
+
+**/.env
+**/.env.local
+**/*.log
+.DS_Store

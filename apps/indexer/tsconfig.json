@@ -12,7 +12,15 @@
     // fails with TS2742 on every table — a portability complaint about types that
     // are never exported.
     "declaration": false,
-    "declarationMap": false
+    "declarationMap": false,
+
+    // `scripts/assert-agents.ts` imports `../src/agent-events.ts` *with* the
+    // extension, because node runs it directly and node's type stripping resolves the
+    // specifier literally: an extensionless relative import is ERR_MODULE_NOT_FOUND,
+    // and `.js` names a file that does not exist. Legal here only because `noEmit` is
+    // on, which it is — nothing in this app is compiled, so no output ever refers to a
+    // path TypeScript would have had to rewrite.
+    "allowImportingTsExtensions": true
   },
   // `scripts/` is included, and was not until the SDK's `poolIdFor` gained an
   // argument. `assert-feed.ts` went on calling it with the old two, node ran it

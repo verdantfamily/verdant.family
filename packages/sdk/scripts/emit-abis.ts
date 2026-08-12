@@ -65,6 +65,30 @@ const OWN: readonly { readonly contract: string; readonly binding: string }[] = 
   { contract: "FeeForwarderFactory", binding: "feeForwarderFactoryAbi" },
   { contract: "TokenVesting", binding: "tokenVestingAbi" },
   { contract: "FactoryOrigin", binding: "factoryOriginAbi" },
+
+  // The agent layer. Every one of these is here because something off chain has
+  // to either call it or read its logs: the launch factory and the identity
+  // registry to create and bind an agent, the service registry to resolve what a
+  // quote will actually pay, the mandate and treasury to show what an agent is
+  // allowed to do and how much room is left, the execution module to submit a
+  // quote, and the revenue router for the whole income statement.
+  { contract: "AgentLaunchFactory", binding: "agentLaunchFactoryAbi" },
+  { contract: "AgentIdentityRegistry", binding: "agentIdentityRegistryAbi" },
+  { contract: "AgentServiceRegistry", binding: "agentServiceRegistryAbi" },
+  { contract: "AgentMandate", binding: "agentMandateAbi" },
+  { contract: "AgentTreasury", binding: "agentTreasuryAbi" },
+  { contract: "AgentExecutionModule", binding: "agentExecutionModuleAbi" },
+  { contract: "AgentRevenueRouter", binding: "agentRevenueRouterAbi" },
+
+  // Agen, which launches generated markets rather than modelled ones. The factory is
+  // here because a creator's wallet has to encode `deployMarket` against it, and the
+  // struct it takes is thirteen fields deep — the exact case where a hand-written ABI
+  // drifts and encodes a launch nobody asked for. The registry is here because it is
+  // the only complete record of what a launch deployed, and the locker because a market
+  // page has to be able to show that the liquidity really cannot be withdrawn.
+  { contract: "AgenFactory", binding: "agenFactoryAbi" },
+  { contract: "AgenMarketRegistry", binding: "agenMarketRegistryAbi" },
+  { contract: "AgenPositionLocker", binding: "agenPositionLockerAbi" },
 ];
 
 /**

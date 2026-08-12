@@ -67,6 +67,17 @@ export * as schedule from "./models/schedule.js";
 export * as launch from "./launch/index.js";
 
 /**
+ * Launching a generated market through `AgenFactory`.
+ *
+ * The second write path into a launch, and a separate one on purpose: `launch` above
+ * builds a market whose shape the protocol already knows, and this builds whatever
+ * contracts a generated mechanic turned out to need. The addresses in the manifest are
+ * predicted by `@verdant/market-compiler` — nothing here decides them — and this turns
+ * the result into the one call a creator signs.
+ */
+export * as agen from "./agen/index.js";
+
+/**
  * Quoting and building a swap, through the Universal Router already deployed on
  * 4663.
  *
@@ -83,3 +94,13 @@ export * as trade from "./trade/index.js";
  * recipient's share out of the splitter. The order matters and the module says why.
  */
 export * as fees from "./fees/index.js";
+
+/**
+ * The agent layer: how an agent's revenue divides, and whether an action it
+ * proposes would be accepted.
+ *
+ * Separate from `markets` because an agent is not a market — it is a party that
+ * happens to own one. Nothing here can move money; `simulate` answers a question
+ * and the chain remains the authority for it.
+ */
+export * as agents from "./agents/index.js";

@@ -73,6 +73,40 @@ a creator's fees be pushed by anyone rather than claimed by the creator. The
 factory exists on chain; the switch in config is off. See
 [SECURITY.md](SECURITY.md#open-gaps).
 
+## The agent layer
+
+**Written, tested, and not deployed.** Agent Launch adds an owner, a treasury and
+a spending policy on top of a market, without changing anything above. It is a
+separate directory, `packages/contracts/src/agents/`, and no contract in it is
+imported by any contract outside it.
+
+The relationship runs one way: the agent layer reads the market layer and the
+market layer has never heard of it. A launch is two transactions — create the
+agent, then call the existing, unmodified `VerdantFactory.create` with
+`feeRecipient` set to the agent's revenue router — and a third permissionless call
+proves the two belong together by reading the market's own splitter.
+[ADR-010](docs/decisions/010-the-agent-layer-sits-above-the-market.md) records why
+wrapping `create` was rejected: it reads `msg.sender` six times and means
+something different by it each time.
+
+| Contract | What it is for |
+| --- | --- |
+| [`AgentLaunchFactory`](packages/contracts/src/agents/AgentLaunchFactory.sol) | Deploys one agent's contracts in one transaction. Does not touch the market layer. |
+| [`AgentIdentityRegistry`](packages/contracts/src/agents/AgentIdentityRegistry.sol) | Append-only record of every agent, and the only agent contract that reads a market. `bindMarket` is permissionless because it verifies rather than trusts. |
+| [`AgentMandate`](packages/contracts/src/agents/AgentMandate.sol) | What an agent may spend, of what, to whom, how often and until when. Written once, at construction, with no setter for anyone. |
+| [`AgentTreasury`](packages/contracts/src/agents/AgentTreasury.sol) | Where the money sits. One way out, callable only by the execution module, with per-asset period accounting. |
+| [`AgentRevenueRouter`](packages/contracts/src/agents/AgentRevenueRouter.sol) | Where revenue arrives and how it divides between four legs. Receiving, allocating and settling are separate calls that fail independently. |
+| [`AgentExecutionModule`](packages/contracts/src/agents/AgentExecutionModule.sol) | The only path from a proposed action to money moving. Three typed entry points, no function taking `bytes`. |
+| [`AgentServiceRegistry`](packages/contracts/src/agents/AgentServiceRegistry.sol) | What each agent sells. The only mutable part of an agent, and it cannot widen a permission. |
+| [`AgentDeployer`](packages/contracts/src/agents/AgentDeployer.sol), [`AgentExecutionDeployer`](packages/contracts/src/agents/AgentExecutionDeployer.sol) | Hold the agent contracts' creation code, for the same size reason `VerdantDeployer` exists. |
+| [`RevenueAllocationLib`](packages/contracts/src/agents/RevenueAllocationLib.sol) | How revenue divides. Cumulative rather than per-arrival, so the split does not depend on how the money came in. Twinned with `packages/sdk/src/agents/allocation.ts`. |
+| [`AgentActionLib`](packages/contracts/src/agents/AgentActionLib.sol) | The typed actions an agent may propose. An agent never supplies calldata — [ADR-011](docs/decisions/011-agents-propose-typed-actions.md). |
+
+The one asymmetry with the rest of the protocol is a guardian that can stop an
+agent and do nothing else. It is described in [SECURITY.md](SECURITY.md) and
+argued in [ADR-012](docs/decisions/012-the-agent-guardian.md) rather than left to
+be discovered.
+
 ## Four properties the design is built around
 
 **Bounds live in contracts, not in the interface.** Every limit is enforced on

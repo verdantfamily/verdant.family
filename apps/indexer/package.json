@@ -9,7 +9,7 @@
     "codegen": "ponder codegen",
     "build": "echo \"@verdant/indexer has no build step; ponder-env.d.ts is committed\" && exit 0",
     "typecheck": "ponder codegen && tsc -p tsconfig.json --noEmit",
-    "test": "echo \"the indexer is tested end to end by 'pnpm proof:feed', which needs anvil\" && exit 0",
+    "test": "vitest run",
     "proof": "bash ../../scripts/indexer-proof.sh"
   },
   "dependencies": {
@@ -22,6 +22,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
   }
 }

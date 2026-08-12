@@ -20,6 +20,10 @@ original design intent, and these files are the diff.
 | [007](007-the-factory-address-is-anchored.md) | The factory's address is anchored to a contract, not predicted from a nonce | ?21.1 deployment order |
 | [008](008-the-quote-asset-is-a-parameter.md) | A market's quote asset is a parameter; the launch token is always `currency1` | extends 003 |
 | [009](009-the-first-buy-is-part-of-the-launch.md) | The creator's first buy happens inside `create`, which is `payable` | extends 008 |
+| [010](010-the-agent-layer-sits-above-the-market.md) | The agent layer binds to a market rather than wrapping `create` | introduces Agent Launch |
+| [011](011-agents-propose-typed-actions.md) | An agent proposes a typed action; it never supplies calldata | extends 010 |
+| [012](012-the-agent-guardian.md) | Agent contracts have a guardian; market contracts still have nobody | extends 010 |
+| [013](013-the-repository-is-mit.md) | The repository is MIT; two SPDX headers are frozen by a deployment | resolves the `LICENSE` conflict |
 
 ## Format
 

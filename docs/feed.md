@@ -346,6 +346,87 @@ discovered:
   this repository's optimizer settings, which produces a larger PoolManager than the one
   on 4663. That is the fork suite's job, and it does it.
 
+## The agent layer, end to end
+
+The agent layer is indexed by the same rig, in the same run, and the reason is the same
+one that put the SDK's first `create` in it: an agent is a set of contracts whose events
+are the only public record of what it did, and a feed that mis-indexes them is a feed
+that lies about an autonomous thing spending money.
+
+`packages/contracts/script/AgentSeed.s.sol` creates three agents and then drives them
+until **every state-changing event in the agent layer has been emitted at least once**.
+Three, because they fail differently: a provider that sells a service and earns from a
+market, a payer that buys one, and a third that is revoked without ever trading, which
+is the only way to reach the terminal states. It runs in two phases either side of the
+rig's existing time warp, so the payer buys twice in two different spend periods — a
+handler that assigned a running total rather than accumulating it passes the first phase
+and fails the second.
+
+`apps/indexer/scripts/assert-agents.ts` then asks the contracts what the indexer just
+answered, in the shape of the six claims that would each be a shipped bug:
+
+1. **Identity.** Every agent the registry counts is served, under the id the registry
+   files it under, with the developer, operator, guardian, treasury, mandate, router,
+   execution module, metadata URI and lifecycle state the registry reports — and the
+   API's `stateName` is derived from the SDK's lifecycle mirror rather than from a
+   second table of strings.
+2. **Money.** Every asset's recognised, allocated and settled totals equal the router's,
+   per leg; the treasury's spend, receipt and period figures equal the treasury's, asked
+   about the same instant. This is the check that makes the revenue numbers on an agent
+   page a statement about the chain rather than about the database.
+3. **The activity feed.** Every one of the 18 activity types appears, nothing appears
+   that no event produces, the ordering is the chain's, and paging one row at a time
+   reassembles the same feed. Every row is also keyed by the log it came from —
+   `txHash-logIndex` — which is what makes reindexing idempotent: replaying a log
+   rewrites its row rather than adding a second one, so the feed cannot grow duplicates
+   from a restart or a reorg. The manifest
+   in `apps/indexer/src/agent-events.ts` is what makes "every type" checkable: it maps
+   each event in the seven ABIs to an activity type or records why it produces none, and
+   `agent-events.test.ts` fails if an ABI grows an event the manifest has not been told
+   about.
+4. **The rows and the counters agree.** The spend rows for an asset sum to that asset's
+   spend counter, and there are as many as the counter counted. Both are maintained by
+   one handler from one event, and the two checks above would each pass if that handler
+   wrote one and forgot the other — leaving a payment visible in the feed that no total
+   accounts for.
+5. **Attribution both ways.** An agent's market is served under that agent, and a market
+   no agent launched is attributed to no agent. The second is handed the human market's
+   pool id by the rig rather than inferred, because "no agent claims this" is a claim
+   about a particular market that a loop cannot make.
+6. **Refusals.** An unknown agent is a 404 on all four of its routes, a lifecycle state
+   that does not exist is a 400, and a developer with no agents gets an empty list rather
+   than everybody's.
+
+### What indexing against a real chain caught
+
+Four bugs, none of which a unit test was ever going to find, and all of which would have
+reached an interface:
+
+- **Every new agent's metadata was empty.** The launch handler read `agentOf` from the
+  event's own emitter — the launch factory — rather than from the identity registry. It
+  returned nothing, so the field was blank. It was invisible for two of the three agents
+  because a later `MetadataUpdated` filled it in, which is exactly the kind of bug that
+  ships: it only shows on the agents nobody touched after creating them.
+- **Agent markets' fees were unclaimable in the seed.** The market seed claimed every
+  market's fees by calling `FeeSplitter.claim` as the creator, and an agent's creator is
+  its router, so the call reverted. The fix is in `Seed.s.sol` — it claims only what it
+  created — and the agent seed claims the rest through `AgentRevenueRouter.claimMarketFees`,
+  which is the path a real agent's income actually takes and had never been executed
+  outside a unit test.
+- **The SDK asked the treasury the wrong question.** `readTreasury` called
+  `spentInPeriod`, `receivedInPeriod` and `remainingInPeriod` without the timestamp they
+  take, which is an encoding error on the first real call and a typecheck that passes.
+- **The SDK's agent listing could never have worked.** `readAgentPage` fed `agentAt`'s
+  return value into `agentOf`, believing it was an id; it is the whole `Agent` struct,
+  which does not carry its own id. `packages/sdk/src/agents/read.test.ts` now encodes
+  every call in every read helper against the ABI, so a wrong argument count or a wrong
+  type fails offline instead of on a chain.
+
+The last two are the same shape and worth naming: viem cannot infer the element type of
+a mapped `contracts` array in a `multicall`, so the code casts, and a cast is a place
+where a wrong call compiles. Every multicall in the SDK's agent reads is therefore
+covered by a test that actually encodes it.
+
 ## Running the indexer
 
 ```bash
@@ -364,10 +445,22 @@ is recorded there it needs them in the environment:
 | `VERDANT_START_BLOCK` | Where to start reading. Defaults to the recorded deployment block. |
 | `PONDER_RPC_URL_4663` | The RPC. Defaults to Robinhood's public endpoint. |
 | `DATABASE_URL` | Postgres. Omit it and Ponder uses an embedded PGlite, which is what the proof does. |
+| `VERDANT_AGENT_FACTORY` | `AgentLaunchFactory`. The three agent addresses go together: set one and the other two are required. |
+| `VERDANT_AGENT_IDENTITY_REGISTRY` | `AgentIdentityRegistry`. |
+| `VERDANT_AGENT_SERVICE_REGISTRY` | `AgentServiceRegistry`. |
+| `VERDANT_AGENT_START_BLOCK` | Where to start reading the agent layer. Defaults to `VERDANT_START_BLOCK`. |
 
 A missing address is a refusal rather than a default, because an indexer pointed at
 `undefined` starts cleanly, reports healthy, serves an empty API, and looks exactly
 like a chain on which nothing has launched.
+
+The agent layer is the one exception, and for the opposite reason: it may genuinely not
+be deployed on a chain that has markets. When no agent addresses are configured the
+indexer registers the agent contracts at an address nothing will ever match, indexes no
+agent events, and serves the agent routes as empty — while the market feed works
+exactly as before. What it does not do is tolerate *half* an agent layer: two of the
+three addresses is a configuration mistake, and it refuses to start rather than index a
+registry whose launches it will never see.
 
 ## The endpoints
 
@@ -380,6 +473,18 @@ the derivation happens.
 | `GET /markets/:id` | One market, addressed by pool id **or** token address. |
 | `GET /markets/:id/swaps` | Trades, newest first, each with the rate it was charged. |
 | `GET /markets/:id/fees` | Collections and claims, kept apart: money arriving at the splitter is not money paid out. |
+| `GET /agents` | Newest first. Filterable by `developer`, `operator`, `state`, `active`, `launched`. |
+| `GET /agents/:id` | One agent: identity, lifecycle, mandate, treasury per asset, revenue per asset, its market, its services, and its most recent activity. |
+| `GET /agents/:id/activity` | Structured activity, newest first, filterable by `type`. |
+| `GET /agents/:id/markets` | The market it launched, in the same shape `GET /markets` uses. |
+| `GET /agents/:id/revenue` | Revenue per asset, split into recognised, allocated and settled. |
+
+`GET /markets/:id` grew one field: `launchedByAgent`, which is `null` for a market a
+person launched, and for one an agent launched carries the agent's id, its developer, its
+metadata URI and its lifecycle state. It is a join rather than a copy — the market row
+stores nothing about agents, so an agent being paused does not require a market to be
+rewritten, and a market cannot end up claiming an attribution the registry disagrees
+with.
 
 Every response carries the chain block it was computed at, so a client can advance its
 own countdown from that anchor. The clock is the chain's, not the server's — on an

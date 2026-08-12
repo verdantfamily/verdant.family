@@ -60,6 +60,13 @@ jobs:
       - name: documentation links resolve
         run: pnpm verify:docs
 
+      # What the repository claims about its licence and what its files declare
+      # cannot be allowed to drift. Runs in both directions: no file may introduce
+      # a non-MIT header, and the two headers frozen by a verified deployment may
+      # not be "corrected" without the deployment being redone — see ADR-013.
+      - name: licensing is consistent
+        run: pnpm verify:licenses
+
       # Last rather than first, deliberately: a type error or a failing test is a more
       # useful thing to be told about than a lint finding, and a job that stops at its
       # first failure should stop at the most informative one.
@@ -95,6 +102,13 @@ jobs:
       - name: forge fmt
         working-directory: packages/contracts
         run: forge fmt --check
+
+      # Before the run, not after: a suite Foundry has stopped discovering passes
+      # silently, and the only number that moves is a total nobody reads. It happened
+      # once — `forge fmt` rewrote two files and seven differential vector tests over
+      # the agent identity hashing vanished from a green run.
+      - name: every test suite is runnable
+        run: bash scripts/check-test-discovery.sh
 
       - name: forge test
         working-directory: packages/contracts

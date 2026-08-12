@@ -9,10 +9,21 @@ out/
 # CLI and neither is source.
 .vercel/
 
+# Generated markets. Each build gets a directory under here holding model output,
+# compiler artefacts and diagnostics: reproducible from the specification, large, and
+# frequently thousands of files after a day of testing. A market that reaches
+# deployment is recorded by its manifest and its verified source, not by this scratch.
+generated/
+
 # Foundry
 packages/contracts/out/
 packages/contracts/cache/
 packages/contracts/broadcast/*/dry-run/
+# Every broadcast forge has ever made, one file per run. A local rig re-run twenty
+# times leaves twenty of these, none of which describes the deployment anybody cares
+# about. `run-latest.json` is committed and is the record; these are the noise around
+# it, and they arrive in their dozens if nothing says otherwise.
+packages/contracts/broadcast/*/*/run-[0-9]*.json
 # Vendored by scripts/vendor-contracts-deps.sh at pinned commits; never edited
 # by hand and never committed (39 MB). Run `pnpm contracts:deps` after a clone.
 packages/contracts/vendor/

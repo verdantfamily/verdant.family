@@ -71,6 +71,33 @@ export const TICK_BOUNDS = {
   max: MAX_USABLE_TICK,
 } as const;
 
+/**
+ * Where the boundaries of an Agen launch's three bands fall, in ticks below the
+ * opening price.
+ *
+ * Agen launches on the same grid as Verdant — same spacing, same usable bounds —
+ * but it spreads the supply over three one-sided ranges rather than one, and
+ * these are the two boundaries between them. 18 000 ticks is 6.049x of price and
+ * 36 800 is 39.65x; both are multiples of `TICK_SPACING`, so the boundaries are
+ * exactly representable rather than nearly.
+ *
+ * The Solidity definition is `AgenCurve.sol`, and this is the TypeScript one, for
+ * the same reason `VerdantConstants.sol` and this file both exist: Solidity cannot
+ * import from TypeScript. The geometry itself was chosen by simulation in
+ * `apps/agen/scripts/curve.ts`, which remains the place to change it — a boundary
+ * moved without recomputing the allocations that go with it silently changes the
+ * depth of all three bands.
+ *
+ * The allocations are not here because nothing off chain needs them: the factory
+ * splits the supply, and no interface has cause to say which fraction went where.
+ */
+export const AGEN_BAND_WIDTHS = {
+  /** The fast opening band, which the pool opens at the top of. */
+  opening: 18_000,
+  /** The middle band. Its floor must stay strictly above the tail's. */
+  middle: 36_800,
+} as const;
+
 /** Native ETH is always currency0, so no address sorting is ever required (D4). */
 export const NATIVE_CURRENCY = "0x0000000000000000000000000000000000000000" as const;
 

@@ -88,7 +88,42 @@ export const DEPLOYMENTS = {
  * that as "this build cannot offer the feature" rather than substituting an address
  * from somewhere else.
  */
+/**
+ * The Agen agent layer, which sits above a market deployment.
+ *
+ * One object rather than four nullable fields, because the four are all-or-nothing:
+ * `AgentLaunchFactory` deploys the identity and service registries in its own
+ * constructor, so a build that had two of the three addresses would be describing a
+ * deployment that cannot exist. Making it one decision means a consumer asks "is the
+ * agent layer here" once, rather than checking three addresses and hoping they came
+ * from the same broadcast.
+ *
+ * It is an addon rather than part of `VerdantDeployment` for the reason ADR-010
+ * gives: the agent layer names the market layer and the market layer names nothing
+ * back. A market cannot tell whether agents exist, so agents can arrive — or be
+ * replaced — without any market noticing.
+ */
+export interface VerdantAgentLayer {
+  /** Creates an agent and its four contracts. Does not create markets. */
+  readonly launchFactory: `0x${string}`;
+  /** The canonical record of every agent. Deployed by the factory. */
+  readonly identityRegistry: `0x${string}`;
+  /** What agents sell. Deployed by the factory. */
+  readonly serviceRegistry: `0x${string}`;
+  /** The block the launch factory was created in, for indexers to start from. */
+  readonly deployedAtBlock: number;
+}
+
 export interface VerdantAddons {
+  /**
+   * The Agen agent layer, or `null` where it has not been deployed.
+   *
+   * `null` must read as "this build has no agent surface", not as a reason to fall
+   * back to another chain's registry: an agent id is bound to one registry on one
+   * chain by construction, so an address from elsewhere resolves to nothing.
+   */
+  readonly agents: VerdantAgentLayer | null;
+
   /**
    * Deploys the per-creator contract that lets a market's fees be delivered by
    * anyone instead of claimed by the creator.
@@ -117,9 +152,27 @@ export const ADDONS = {
   // Nothing points at the factory and it points at nothing, so leaving it deployed
   // and unused costs nothing and strands nobody. No market has ever named a
   // forwarder as its fee recipient.
-  [ROBINHOOD_MAINNET_ID]: { feeForwarderFactory: null },
-  [ROBINHOOD_TESTNET_ID]: { feeForwarderFactory: null },
+  //
+  // The agent layer is null on both chains because it has not been broadcast. Its
+  // contracts, tests and deployment script phase are in this repository; what does
+  // not exist yet is a transaction. Setting `agents` to a real record is the switch,
+  // and until it is set the indexer declines to watch agent contracts and the
+  // interface has no agent surface — which is the correct behaviour for a chain where
+  // no agent exists, rather than an empty list that implies one could.
+  [ROBINHOOD_MAINNET_ID]: { agents: null, feeForwarderFactory: null },
+  [ROBINHOOD_TESTNET_ID]: { agents: null, feeForwarderFactory: null },
 } as const satisfies Record<VerdantChainId, VerdantAddons>;
+
+/**
+ * The agent layer for a chain, or `null` where it is not deployed.
+ *
+ * A named accessor for the same reason `deploymentFor` is one: the "not deployed"
+ * case gets handled at one call site per consumer instead of becoming a `null` that
+ * flows onward into an address.
+ */
+export function agentsFor(chainId: VerdantChainId): VerdantAgentLayer | null {
+  return ADDONS[chainId].agents;
+}
 
 export function addonsFor(chainId: VerdantChainId): VerdantAddons {
   return ADDONS[chainId];

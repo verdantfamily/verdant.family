@@ -311,12 +311,463 @@ export const holder = onchainTable(
   }),
 );
 
-export const marketRelations = relations(market, ({ many }) => ({
+// --- the agent layer ------------------------------------------------------
+//
+// Agen's agents sit above the market layer and are indexed beside it rather than
+// inside it. The two rules at the top of this file still hold, and a third joins them
+// for agents specifically:
+//
+// **Relate to the market layer; do not restate it.** An agent-created market is an
+// ordinary `market` row — the same factory made it, with the same fee schedule and the
+// same splitter. So `agent.poolId` points at it and nothing about it is copied. A
+// second `name`, `symbol` or `volumeQuote` on the agent side would be a second answer
+// to a question the market table already answers, and the two would diverge the first
+// time one handler ran and the other did not.
+//
+// The same applies to the mandate. Every permission an agent has is fixed at launch
+// and readable from `AgentMandate` forever, and none of it is in an event. Copying it
+// here would put a permission the interface displays behind an indexer that may be
+// behind the chain, so the mandate is read from the chain by the SDK at the moment it
+// matters and appears in no table.
+
+/**
+ * One agent, keyed by the id the registry assigns.
+ *
+ * The id rather than any of its four addresses, because it is what every agent event
+ * that knows its own agent carries, and because the SDK derives it locally from the
+ * developer and a salt — so an interface can address a row before the agent exists.
+ *
+ * ## Why the market fields are nullable
+ *
+ * Because an agent exists before its market is proved. `createAgent` produces an agent
+ * in `Created` holding a commitment to a market that has not launched; `bindMarket`
+ * fills these in. An agent that never binds stays here with them null forever, which
+ * is a real and visible state — "created, never launched" — and not an error.
+ *
+ * There is at most one market per agent, enforced on chain: `bindMarket` reverts once
+ * `poolId` is set. That is why this is a column and not a join table. A launch count
+ * is `poolId === null ? 0 : 1`, and a table would invite the idea that it could be
+ * more.
+ */
+export const agent = onchainTable(
+  "agent",
+  (t) => ({
+    /** `keccak256(abi.encode(chainId, registry, developer, salt))`. */
+    id: t.hex().primaryKey(),
+
+    /** Who created it and who its revenue's developer leg pays. */
+    developer: t.hex().notNull(),
+    /** Who may pause, resume, revoke, and kill the mandate. */
+    guardian: t.hex().notNull(),
+    /** The only address that may submit an action. Immutable on chain. */
+    operator: t.hex().notNull(),
+
+    // --- the agent's four contracts ------------------------------------------
+    mandate: t.hex().notNull(),
+    treasury: t.hex().notNull(),
+    router: t.hex().notNull(),
+    executionModule: t.hex().notNull(),
+
+    /**
+     * A pointer to a description, and the only mutable field on the record.
+     *
+     * Safe to be mutable precisely because nothing the contracts enforce reads it, so
+     * changing it cannot change what the agent may do.
+     */
+    metadataURI: t.text().notNull(),
+
+    // --- lifecycle -----------------------------------------------------------
+    /**
+     * `AgentLifecycle.State` as its ordinal: 0 created, 1 market bound, 2 active,
+     * 3 paused, 4 revoked.
+     *
+     * The number and not a string, because the number is what `AgentStateChanged`
+     * carries. `@verdant/sdk`'s `agents.lifecycle` maps it to a name and answers what
+     * it permits, so there is one such table and it is not this one.
+     */
+    state: t.integer().notNull(),
+    stateChangedAt: t.integer().notNull(),
+
+    /**
+     * The two stops that are not the lifecycle.
+     *
+     * Separate from `state` because they are separate contracts and either can be
+     * pulled without the other. An agent can read as `Active` while its mandate is
+     * dead or its treasury is frozen, and the execution module checks all three — so
+     * an interface that showed only `state` would say an agent was running when
+     * nothing it proposed could execute.
+     */
+    mandateRevoked: t.boolean().notNull(),
+    treasuryPaused: t.boolean().notNull(),
+
+    // --- the market it committed to, and the one it proved -------------------
+    /** The commitment made at creation. What `bindMarket` checks a market against. */
+    marketCommitment: t.hex().notNull(),
+    /** The bound market's pool id. Null until `bindMarket`. Joins `market.id`. */
+    poolId: t.hex(),
+    /** The launch token. Null until bound. Also on the market row; kept for the join. */
+    token: t.hex(),
+    /** The market's fee splitter, which the router claims from. Null until bound. */
+    splitter: t.hex(),
+    marketBoundAt: t.integer(),
+
+    // --- the revenue split, fixed at launch ----------------------------------
+    // In `AgentLaunched` and in the router's immutables, and it never changes. Stored
+    // because it is disclosure: what share of an agent's earnings goes where is the
+    // first thing anyone deciding whether to buy from it wants to know.
+    operationsBps: t.integer().notNull(),
+    buybacksBps: t.integer().notNull(),
+    developerBps: t.integer().notNull(),
+    protocolBps: t.integer().notNull(),
+
+    // --- creation ------------------------------------------------------------
+    createdAt: t.integer().notNull(),
+    createdAtBlock: t.bigint().notNull(),
+    createdTx: t.hex().notNull(),
+  }),
+  (table) => ({
+    // The listings that exist: newest agents, one developer's agents, agents in a
+    // given state, and the reverse lookup from a market to the agent that launched it.
+    createdAtIdx: index().on(table.createdAt),
+    developerIdx: index().on(table.developer),
+    stateIdx: index().on(table.state),
+    poolIdIdx: index().on(table.poolId),
+  }),
+);
+
+/**
+ * Which agent a per-agent contract belongs to.
+ *
+ * The same problem `marketContract` solves, and worse. An agent's mandate, treasury,
+ * execution module and router are four contracts deployed per agent, and their events
+ * mostly do not carry an agent id: `AgentTreasury.Spent` reports an asset, a
+ * destination and an amount, and the only thing tying it to an agent is which treasury
+ * emitted it. That link is knowable from `AgentLaunched` and from nowhere else.
+ *
+ * Keyed by address, so every child handler resolves its agent with a primary-key
+ * lookup rather than a scan.
+ */
+export const agentContract = onchainTable("agent_contract", (t) => ({
+  id: t.hex().primaryKey(),
+  agentId: t.hex().notNull(),
+  /** `mandate`, `treasury`, `router` or `executionModule`. */
+  kind: t.text().notNull(),
+}));
+
+/**
+ * A service an agent offers, keyed by the id the registry derives.
+ *
+ * `version` is the field that matters most: it is bumped on every update, and a quote
+ * written against an older version is refused rather than repriced. So a stale
+ * version in this table is not a cosmetic lag — it is an interface offering to pay a
+ * price the chain will reject.
+ *
+ * Retired services stay here with `active` false and `retiredAt` set. Deleting them
+ * would erase the history of what an agent used to sell, which is exactly what
+ * someone auditing a past payment needs.
+ */
+export const agentService = onchainTable(
+  "agent_service",
+  (t) => ({
+    id: t.hex().primaryKey(),
+    agentId: t.hex().notNull(),
+
+    /** Fixed at registration; `update` cannot change it. */
+    paymentAsset: t.hex().notNull(),
+    price: t.bigint().notNull(),
+    /** Bumped on every write. A quote must carry the current one. */
+    version: t.integer().notNull(),
+    /**
+     * The service's own flag, not the effective answer.
+     *
+     * A service flagged active still cannot be paid if its agent is paused or
+     * revoked. The registry's `isActive` combines the two and the execution module
+     * checks that; this column is only half of it, which is why the API joins the
+     * agent's state rather than serving this alone.
+     */
+    active: t.boolean().notNull(),
+
+    registeredAt: t.integer().notNull(),
+    updatedAt: t.integer().notNull(),
+    /** Null until retired. */
+    retiredAt: t.integer(),
+  }),
+  (table) => ({
+    agentIdx: index().on(table.agentId),
+  }),
+);
+
+/**
+ * What an agent has earned in one asset, and what has been paid out of it.
+ *
+ * Keyed by agent and asset, because every figure is per asset: revenue arrives in
+ * ether and in whatever the market is quoted in, and there is no rate on chain to
+ * total them with. A single "lifetime revenue" number would require inventing one.
+ *
+ * The four legs are columns rather than rows for once, and the reason is that there
+ * are exactly four of them, fixed in `RevenueAllocationLib`, forever. A leg table
+ * would make "which legs exist" a data question when it is a code question, and every
+ * read would need four joins or a pivot.
+ */
+export const agentRevenue = onchainTable(
+  "agent_revenue",
+  (t) => ({
+    agentId: t.hex().notNull(),
+    /** The zero address is ether. */
+    asset: t.hex().notNull(),
+
+    /** Recognised, cumulative. The base every allocation is a share of. */
+    received: t.bigint().notNull(),
+
+    // Divided to each leg, cumulatively. Not derived from `received` and the basis
+    // points: the router allocates in whole units and keeps up to three units of dust
+    // unallocated, so the sum of these is at or just below the share of `received`,
+    // and recomputing it here would disagree with the chain by that dust.
+    operationsAllocated: t.bigint().notNull(),
+    buybacksAllocated: t.bigint().notNull(),
+    developerAllocated: t.bigint().notNull(),
+    protocolAllocated: t.bigint().notNull(),
+
+    // Actually paid out. The difference from allocated is what `settle` would move.
+    operationsSettled: t.bigint().notNull(),
+    buybacksSettled: t.bigint().notNull(),
+    developerSettled: t.bigint().notNull(),
+    protocolSettled: t.bigint().notNull(),
+
+    lastEventAt: t.integer().notNull(),
+  }),
+  (table) => ({
+    pk: primaryKey({ columns: [table.agentId, table.asset] }),
+    agentIdx: index().on(table.agentId),
+  }),
+);
+
+/**
+ * What an agent's treasury has taken in and paid out, per asset.
+ *
+ * Separate from `agentRevenue` because they are separate contracts holding separate
+ * money for separate purposes: the router receives earnings and divides them, and the
+ * treasury holds the operations leg and spends it. Summing them would double-count
+ * every unit that passed through both.
+ *
+ * Deliberately not a balance. A balance is the chain's to report — the treasury can be
+ * sent assets by anyone at any time, in a transfer that emits `Transfer` on the token
+ * and nothing here — so a balance maintained by addition would drift the first time
+ * that happened. These are the flows that were observed; the balance is read from the
+ * chain.
+ */
+export const agentTreasuryAsset = onchainTable(
+  "agent_treasury_asset",
+  (t) => ({
+    agentId: t.hex().notNull(),
+    asset: t.hex().notNull(),
+
+    /** Announced arrivals, from `Received`. Not every arrival announces itself. */
+    received: t.bigint().notNull(),
+    /** Left through `spend`, which is the only exit the treasury has. */
+    spent: t.bigint().notNull(),
+    spendCount: t.integer().notNull(),
+
+    /** When the current spending period began, from `PeriodRolled`. */
+    periodStartedAt: t.integer(),
+    lastEventAt: t.integer().notNull(),
+  }),
+  (table) => ({
+    pk: primaryKey({ columns: [table.agentId, table.asset] }),
+    agentIdx: index().on(table.agentId),
+  }),
+);
+
+/**
+ * Everything an agent has ever done, as one ordered stream.
+ *
+ * The table the profile page's feed is built from, and the reason it exists rather
+ * than the page querying eight tables and merging them: "what has this agent been
+ * doing" is one question, asked in time order, and answering it by union across tables
+ * with different shapes puts the ordering logic in every consumer.
+ *
+ * ## Structured, not phrased
+ *
+ * `type` is a machine constant and `data` is the fields that type carries. Nothing here
+ * is a sentence. An indexer that stored "Executor 0x… granted until Aug 14" would have
+ * decided the wording, the date format and the language for every consumer forever,
+ * and changing any of them would mean a resync. So the frontend formats and this
+ * stores what happened.
+ *
+ * `data` is JSON rather than a wide nullable table because the seventeen types share
+ * almost no fields: a service payment has a request id and a nonce, a settlement has a
+ * leg index, a state change has two states. Columns for all of them would be a row of
+ * nulls with three values in it.
+ */
+export const agentActivity = onchainTable(
+  "agent_activity",
+  (t) => ({
+    /** Transaction hash and log index: unique, and stable across a reorg replay. */
+    id: t.text().primaryKey(),
+    agentId: t.hex().notNull(),
+
+    /** One of `AgentActivityType`. A constant, never a phrase. */
+    type: t.text().notNull(),
+    /**
+     * Who caused it, where the event says. Null where nothing did — an allocation is
+     * arithmetic anyone may trigger and the actor is not meaningful.
+     */
+    actor: t.hex(),
+    /** The asset involved, where there is one. */
+    asset: t.hex(),
+    /**
+     * The amount involved, where there is one, in the asset's own smallest unit.
+     *
+     * A column rather than a field in `data` because it is the one number a feed
+     * renders for most types, and because filtering or summing a JSON field is
+     * something a query planner cannot help with.
+     */
+    amount: t.bigint(),
+
+    /** The fields specific to this type. See `AgentActivityData`. */
+    data: t.json().$type<AgentActivityData>().notNull(),
+
+    timestamp: t.integer().notNull(),
+    blockNumber: t.bigint().notNull(),
+    /**
+     * Where in the block this sat.
+     *
+     * Kept for the same reason `swap` keeps it: a block number alone does not order
+     * two events in one block, and an agent's creation, its market binding and its
+     * activation can all be in one. The primary key contains it, but as text — `"…-10"`
+     * sorts below `"…-2"` — so it cannot be ordered by.
+     */
+    logIndex: t.integer().notNull(),
+    transactionHash: t.hex().notNull(),
+  }),
+  (table) => ({
+    // The feed: one agent, newest first, by position in the chain.
+    agentIdx: index().on(table.agentId, table.blockNumber, table.logIndex),
+    typeIdx: index().on(table.agentId, table.type),
+  }),
+);
+
+/**
+ * The kinds of thing an agent does.
+ *
+ * One constant per state-changing agent event that a person would want to see, which
+ * is all nineteen of them minus the two that are bookkeeping: `AgentRegistered`
+ * duplicates `AgentLaunched` within the same transaction, and a self-transition to
+ * `Created` is not a transition.
+ *
+ * These strings are the API's contract with the frontend, so they are append-only.
+ * Renaming one would silently drop every historical row of that kind out of whatever
+ * the frontend knows how to render.
+ */
+export const AgentActivityType = {
+  Created: "AGENT_CREATED",
+  StateChanged: "AGENT_STATE_CHANGED",
+  MetadataUpdated: "AGENT_METADATA_UPDATED",
+  MarketLaunched: "AGENT_MARKET_LAUNCHED",
+  MandateRevoked: "AGENT_MANDATE_REVOKED",
+  TreasuryPauseChanged: "AGENT_TREASURY_PAUSE_CHANGED",
+  TreasuryFunded: "AGENT_TREASURY_FUNDED",
+  TreasurySpent: "AGENT_TREASURY_SPENT",
+  TreasuryPeriodRolled: "AGENT_TREASURY_PERIOD_ROLLED",
+  ServiceRegistered: "AGENT_SERVICE_REGISTERED",
+  ServiceUpdated: "AGENT_SERVICE_UPDATED",
+  ServiceRetired: "AGENT_SERVICE_RETIRED",
+  ServicePaid: "AGENT_SERVICE_PAID",
+  RevenueRecognised: "AGENT_REVENUE_RECOGNISED",
+  RevenueAllocated: "AGENT_REVENUE_ALLOCATED",
+  RevenueSettled: "AGENT_REVENUE_SETTLED",
+  MarketFeesClaimed: "AGENT_MARKET_FEES_CLAIMED",
+  MarketSplitterBound: "AGENT_MARKET_SPLITTER_BOUND",
+} as const;
+
+export type AgentActivityType =
+  (typeof AgentActivityType)[keyof typeof AgentActivityType];
+
+/**
+ * The type-specific half of an activity row.
+ *
+ * A union discriminated by nothing, because the discriminant is the row's own `type`
+ * column. Every member is optional so a consumer reads the fields its type has; the
+ * alternative — a tagged union in the JSON — would store the type twice and allow the
+ * two copies to disagree.
+ */
+export interface AgentActivityData {
+  /** `StateChanged`: the ordinals, so the frontend names them via the SDK. */
+  readonly previousState?: number;
+  readonly newState?: number;
+
+  /** `MetadataUpdated`. */
+  readonly metadataURI?: string;
+
+  /** `MarketLaunched`: the market this agent proved. Joins `market.id`. */
+  readonly poolId?: string;
+  readonly token?: string;
+  readonly splitter?: string;
+
+  /** `TreasuryPauseChanged`. */
+  readonly paused?: boolean;
+
+  /** `TreasuryFunded`: where it came from. `TreasurySpent`: where it went. */
+  readonly from?: string;
+  readonly to?: string;
+  /** `TreasurySpent`: the quote hash the spend was authorised by. */
+  readonly actionHash?: string;
+
+  /** `Service*`. */
+  readonly serviceId?: string;
+  readonly serviceVersion?: number;
+  readonly price?: string;
+  readonly active?: boolean;
+
+  /** `ServicePaid`: who was paid, and the replay fields. */
+  readonly providerAgentId?: string;
+  readonly requestId?: string;
+  readonly nonce?: string;
+
+  /** `RevenueRecognised`: the running total after this one. */
+  readonly totalReceived?: string;
+
+  /** `RevenueAllocated`: what each leg gained. Four numbers in one event. */
+  readonly operations?: string;
+  readonly buybacks?: string;
+  readonly developer?: string;
+  readonly protocol?: string;
+
+  /** `RevenueSettled`: which leg, by index into `RevenueAllocationLib`'s order. */
+  readonly leg?: number;
+
+  /** `MarketFeesClaimed`: both sides of the splitter's payout. */
+  readonly quoteAmount?: string;
+  readonly tokenAmount?: string;
+}
+
+export const marketRelations = relations(market, ({ many, one }) => ({
   swaps: many(swap),
   claims: many(claim),
   feeCollections: many(feeCollection),
+  /**
+   * The agent that launched this market, where one did.
+   *
+   * The join that makes attribution possible on a market page without a second
+   * query, and the direction that matters: most markets have no agent, so the
+   * question is asked of every market and answered by a null for nearly all of them.
+   */
+  agent: one(agent, { fields: [market.id], references: [agent.poolId] }),
 }));
 
 export const swapRelations = relations(swap, ({ one }) => ({
   market: one(market, { fields: [swap.poolId], references: [market.id] }),
+}));
+
+export const agentRelations = relations(agent, ({ many, one }) => ({
+  activity: many(agentActivity),
+  services: many(agentService),
+  revenue: many(agentRevenue),
+  treasuryAssets: many(agentTreasuryAsset),
+  /** The market it launched, where it has bound one. */
+  market: one(market, { fields: [agent.poolId], references: [market.id] }),
+}));
+
+export const agentActivityRelations = relations(agentActivity, ({ one }) => ({
+  agent: one(agent, { fields: [agentActivity.agentId], references: [agent.id] }),
 }));

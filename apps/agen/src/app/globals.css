@@ -1,0 +1,2814 @@
+/*
+ * agen.space
+ *
+ * Black, one headline, and a slow metallic thing behind it.
+ *
+ * The whole surface is built out of gradients and blur rather than an image or a canvas.
+ * That is not only a weight argument, though it is a weight argument: a soft radial
+ * gradient scaled past the viewport and moved slowly does something a rendered blob
+ * cannot, which is refuse to resolve into an object. It stays an edge of something. A
+ * 3D asset, however good, announces at every size exactly how big it is and where it
+ * ends.
+ *
+ * Depth here comes from four stacked layers, in order from the back:
+ *
+ *   .field       two masses of light, something much larger behind them, and a sheen
+ *   .vignette    drops the corners so the centre reads as lit rather than flat
+ *   content      the type
+ *   .grain       a single tiling noise tile over everything, tying it together
+ *
+ * Grain last is the part that matters. Noise under the type looks like a background
+ * texture; noise over the type is a property of the image the viewer is looking at, and
+ * that is the difference between a dark website and something photographed.
+ *
+ * The page also reacts to whoever is in front of it. Those states arrive as two data
+ * attributes on `<html>` — `data-moment` and `data-idle` — written by the coordinator in
+ * `lib/system.ts`. Anything that merely dims, brightens or shifts in response is a rule
+ * in this file keyed off those attributes rather than a prop threaded through the tree;
+ * see "reaction" near the bottom. The rule is that JavaScript decides *what is true* and
+ * CSS decides what that looks like.
+ */
+
+/*
+ * Aeonik, if it is here.
+ *
+ * These files are not committed — the face is licensed. Drop them into `public/fonts/`
+ * under exactly these names and the page picks them up on the next load; there is no
+ * build step and nothing to change in the code.
+ *
+ * Declaring it this way rather than through `next/font/local` is the whole reason it can
+ * be optional: a missing font file is a 404, and a 404 makes the browser fall through to
+ * the next family in the stack, which is Inter Tight. A `next/font/local` call names its
+ * files at build time and fails the build when they are absent.
+ *
+ * Both formats are listed per weight so either a woff2 or the raw OTF a foundry ships
+ * will work. woff2 first, because it is roughly half the bytes.
+ *
+ * Each weight is declared separately and `font-synthesis-weight` is off, so a partial
+ * drop degrades honestly: supply only Regular and the headline stays in the fallback
+ * rather than rendering as a smeared fake medium.
+ */
+@font-face {
+  font-family: "Aeonik";
+  src:
+    url("/fonts/Aeonik-Regular.woff2") format("woff2"),
+    url("/fonts/Aeonik-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  /* swap, not block: block hides the text for up to three seconds, and if the file is
+     never coming that is three seconds of blank page. The reveal below is timed slowly
+     enough that a local font almost always wins the race anyway. */
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Aeonik";
+  src:
+    url("/fonts/Aeonik-Medium.woff2") format("woff2"),
+    url("/fonts/Aeonik-Medium.otf") format("opentype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Aeonik";
+  src:
+    url("/fonts/Aeonik-Bold.woff2") format("woff2"),
+    url("/fonts/Aeonik-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --black: #000000;
+
+  --text: #f4f4f5;
+  --text-dim: #8d8d93;
+  --text-faint: #4a4a50;
+  --text-ghost: #2a2a2e;
+
+  /* Aeonik first and Inter Tight immediately behind it. Nothing else in the file needs
+     to know which one is actually being used. */
+  --font-display:
+    "Aeonik", var(--font-fallback), -apple-system, BlinkMacSystemFont, "Helvetica Neue",
+    Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  /* Written by the pointer handler in `lib/system.ts`, read by the layers below. Zero
+     until a pointer moves, which is also the value they keep forever on touch and when
+     motion is turned down. */
+  --px: 0;
+  --py: 0;
+
+  /*
+   * Two easings, and only two.
+   *
+   * Everything on this page is either arriving or settling, and both should feel like
+   * something heavy being moved deliberately. Neither curve overshoots, because a bounce
+   * is a friendly gesture and nothing here is being friendly.
+   *
+   * --curve  decelerates hard and stops dead. For things appearing.
+   * --slow   eases at both ends, weighted late. For things changing their mind.
+   */
+  --curve: cubic-bezier(0.16, 1, 0.3, 1);
+  --slow: cubic-bezier(0.4, 0, 0.15, 1);
+
+  /*
+   * The opening, as a score. Roughly two and a half seconds, black to finished.
+   *
+   * 300ms   the darkness stops being flat
+   * 600ms   a highlight crosses something large
+   * 900ms   the mark resolves out of a blur
+   * 1150ms  the headline begins typing itself (in `opening.tsx`, which owns that clock)
+   * 1900ms  the second line
+   * 2200ms  the date
+   * 2450ms  the footer and the one link
+   */
+  --in-field: 300ms;
+  --in-sweep: 600ms;
+  --in-mark: 900ms;
+  --in-answer: 1900ms;
+  --in-descriptor: 2200ms;
+  --in-foot: 2450ms;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--black);
+  color: var(--text);
+  font-family: var(--font-display);
+  font-synthesis-weight: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  /* The teaser was one viewport and locked scrolling to keep it that way. There is a
+     product below the fold now. */
+  overflow-x: hidden;
+}
+
+/*
+ * Read aloud, never drawn. Clipped to nothing rather than `display: none`, which would
+ * take it out of the accessibility tree along with everything else.
+ */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.mass {
+  position: absolute;
+  display: block;
+  border-radius: 50%;
+  /* Far bigger than the viewport on purpose — see the note at the top of the file. */
+  width: 95vmax;
+  height: 95vmax;
+  filter: blur(80px);
+  will-change: transform;
+}
+
+/*
+ * The larger, colder mass. Two stops rather than a fade to transparent: the shoulder at
+ * 42% is what gives it a body instead of a haze, and is the difference between polished
+ * metal and fog.
+ */
+.mass-a {
+  top: -34vmax;
+  left: -18vmax;
+  background: radial-gradient(
+    circle at 38% 34%,
+    rgba(228, 230, 236, 0.2) 0%,
+    rgba(150, 156, 168, 0.11) 42%,
+    rgba(30, 32, 38, 0) 68%
+  );
+  transform: translate3d(
+    calc(var(--px) * 26px),
+    calc(var(--py) * 20px),
+    0
+  );
+  animation: drift-a 74s var(--curve) infinite;
+}
+
+/* The smaller, warmer one, opposite corner and opposite parallax direction. Titanium
+   rather than chrome — a single hue across both would flatten them into one light. */
+.mass-b {
+  right: -30vmax;
+  bottom: -40vmax;
+  width: 78vmax;
+  height: 78vmax;
+  background: radial-gradient(
+    circle at 62% 58%,
+    rgba(214, 206, 198, 0.15) 0%,
+    rgba(126, 122, 120, 0.08) 45%,
+    rgba(24, 24, 26, 0) 70%
+  );
+  transform: translate3d(
+    calc(var(--px) * -34px),
+    calc(var(--py) * -24px),
+    0
+  );
+  animation: drift-b 96s var(--curve) infinite;
+}
+
+@keyframes drift-a {
+  0%,
+  100% {
+    translate: 0 0;
+    scale: 1;
+  }
+  50% {
+    translate: 6vmax 4vmax;
+    scale: 1.09;
+  }
+}
+
+@keyframes drift-b {
+  0%,
+  100% {
+    translate: 0 0;
+    scale: 1.05;
+  }
+  50% {
+    translate: -5vmax -3vmax;
+    scale: 1;
+  }
+}
+/*
+ * Film grain: one 140px tile of fractal noise, repeated.
+ *
+ * Inlined as a data URI because a request for four hundred bytes costs more than the
+ * bytes. `soft-light` rather than `overlay` keeps it off the black — overlay lifts the
+ * shadows into a visible grey wash — and 0.5 opacity on a 0.42-alpha turbulence lands
+ * around 3% actual, which is felt rather than seen and leaves the type untouched.
+ */
+.grain {
+  position: fixed;
+  inset: -50%;
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0.5;
+  mix-blend-mode: soft-light;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.42'/%3E%3C/svg%3E");
+  animation: shiver 0.9s steps(1) infinite;
+}
+
+/* Four positions, a beat each. Static grain reads as a dirty screen; moving grain reads
+   as film. Steps, not a smooth tween, or it slides. */
+@keyframes shiver {
+  0% {
+    transform: translate(0, 0);
+  }
+  25% {
+    transform: translate(-1.5%, 1%);
+  }
+  50% {
+    transform: translate(1%, -1.5%);
+  }
+  75% {
+    transform: translate(-1%, -1%);
+  }
+}
+/* --- the step rail ------------------------------------------------------ */
+
+.steps {
+  display: flex;
+  gap: clamp(1rem, 3vw, 2.2rem);
+  margin-bottom: clamp(2.6rem, 6vw, 4rem);
+  list-style: none;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  color: var(--text-ghost);
+  text-transform: lowercase;
+}
+
+.steps li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  transition: color 0.6s var(--slow);
+}
+
+.steps li span {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+}
+
+.steps li.on {
+  color: var(--text);
+}
+
+/* --- panels ------------------------------------------------------------- */
+
+.panel {
+  max-width: 34rem;
+  animation: rise 0.9s var(--curve) backwards;
+}
+
+.panel-wide {
+  max-width: none;
+}
+
+.panel h1 {
+  font-size: clamp(1.9rem, 5vw, 3.1rem);
+  font-weight: 500;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+}
+
+.lede {
+  margin-top: 1rem;
+  font-size: clamp(0.95rem, 1.6vw, 1.05rem);
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  color: var(--text-faint);
+  text-transform: lowercase;
+}
+
+/* --- fields ------------------------------------------------------------- */
+
+.field {
+  margin-top: clamp(1.8rem, 4vw, 2.6rem);
+}
+
+.field label,
+.refine label {
+  display: block;
+  margin-bottom: 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  color: var(--text-faint);
+}
+
+.field input,
+.refine input,
+.describe {
+  width: 100%;
+  padding: 0.85rem 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+  transition: border-color 0.5s var(--slow);
+}
+
+.field input:focus,
+.refine input:focus,
+.describe:focus {
+  outline: none;
+  border-bottom-color: rgba(255, 255, 255, 0.42);
+}
+
+.field input::placeholder,
+.describe::placeholder {
+  color: var(--text-ghost);
+}
+
+/* The one field the product is about. It gets room to be a paragraph. */
+.describe {
+  margin-top: clamp(1.8rem, 4vw, 2.6rem);
+  padding: 1.2rem 1.3rem;
+  min-height: 14rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.022), rgba(255, 255, 255, 0.006));
+  line-height: 1.65;
+  resize: vertical;
+}
+
+.example {
+  margin-top: 0.9rem;
+  font-size: 0.82rem;
+  color: var(--text-ghost);
+  transition: opacity 0.8s var(--slow);
+}
+
+.describe-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 1.6rem;
+}
+
+.count {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--text-ghost);
+}
+
+/* --- buttons ------------------------------------------------------------ */
+
+.primary,
+.secondary,
+.back,
+.tabs button,
+.refine button {
+  font-family: inherit;
+  font-size: 0.82rem;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition:
+    color 0.4s var(--slow),
+    background 0.4s var(--slow),
+    border-color 0.4s var(--slow),
+    opacity 0.4s var(--slow);
+}
+
+.primary {
+  margin-top: clamp(2.2rem, 5vw, 3rem);
+  padding: 0.85rem 1.9rem;
+  border: 0;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #f6f6f7, #c9ccd3 46%, #9a9ea8);
+  color: #08080a;
+  font-weight: 500;
+}
+
+.describe-foot .primary,
+.review-actions .primary {
+  margin-top: 0;
+}
+
+.primary:disabled {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-ghost);
+  cursor: not-allowed;
+}
+
+.secondary {
+  padding: 0.85rem 1.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.secondary:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.back {
+  display: block;
+  margin-top: 2rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-ghost);
+}
+
+.back:hover {
+  color: var(--text-dim);
+}
+
+.notice {
+  margin-top: 1.4rem;
+  padding: 0.9rem 1.1rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
+  font-size: 0.86rem;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+/* --- the build log ------------------------------------------------------ */
+
+.progress .stages {
+  margin-top: 2.4rem;
+  list-style: none;
+}
+
+.stage {
+  display: flex;
+  gap: 0.9rem;
+  align-items: baseline;
+  padding: 0.62rem 0;
+  font-size: 0.95rem;
+  color: var(--text-ghost);
+  transition: color 0.7s var(--slow);
+}
+
+.stage-mark {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+}
+
+.stage-running {
+  color: var(--text);
+}
+
+/* The only thing on the page that moves, so it reads as the live one. */
+.stage-running .stage-mark {
+  opacity: 1;
+  animation: breathe 1.8s ease-in-out infinite;
+}
+
+.stage-done {
+  color: var(--text-dim);
+}
+
+.stage-failed {
+  color: #d8d2cc;
+}
+
+/* A step the pipeline passed through without doing anything. Dimmer than done and its
+   mark is hollow, so it cannot be mistaken for a completed one at a glance. */
+.stage-skipped {
+  color: var(--text-ghost);
+}
+
+.stage-skipped .stage-mark {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px currentColor;
+  opacity: 0.6;
+}
+
+.stage-attempts {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.repairs,
+.deploy-note {
+  margin-top: 1.8rem;
+  max-width: 42rem;
+  font-size: 0.86rem;
+  line-height: 1.65;
+  color: var(--text-faint);
+}
+
+.failure {
+  margin-top: 2.4rem;
+  padding: 1.4rem 1.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.failure-code {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  color: var(--text-faint);
+}
+
+.failure-detail {
+  margin-top: 0.7rem;
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.failure-where {
+  margin-top: 0.6rem;
+  font-size: 0.82rem;
+  color: var(--text-faint);
+}
+
+details.failure-diagnostics,
+.raw,
+.files details {
+  margin-top: 1.2rem;
+}
+
+summary {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+summary:hover {
+  color: var(--text-dim);
+}
+
+pre {
+  margin-top: 0.9rem;
+  padding: 1rem 1.1rem;
+  max-height: 26rem;
+  overflow: auto;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.02);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.7;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* --- interpretation ----------------------------------------------------- */
+
+.interpretation-head h2 {
+  margin-top: 0.7rem;
+  font-size: clamp(1.5rem, 3.4vw, 2.2rem);
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+
+.base-fee {
+  margin-top: 0.8rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.base-fee strong {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.rules {
+  margin-top: clamp(2.4rem, 5vw, 3.4rem);
+  display: grid;
+  gap: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.rule {
+  padding: clamp(1.4rem, 3vw, 2rem);
+  background: #050505;
+}
+
+.rule header {
+  display: flex;
+  gap: 0.9rem;
+  align-items: baseline;
+  margin-bottom: 1.3rem;
+}
+
+.rule-number {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  color: var(--text-ghost);
+}
+
+.rule h3 {
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  color: var(--text);
+  text-transform: uppercase;
+}
+
+.rule-flag {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+}
+
+.clause {
+  display: grid;
+  grid-template-columns: 4.2rem 1fr;
+  gap: 1rem;
+  padding: 0.55rem 0;
+}
+
+.clause-label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  color: var(--text-faint);
+  padding-top: 0.2rem;
+}
+
+.clause p {
+  font-size: 0.98rem;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+.clause ul {
+  list-style: none;
+  display: grid;
+  gap: 0.8rem;
+}
+
+.route {
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--text-faint);
+}
+
+.route-label {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+  margin-right: 0.5rem;
+}
+
+.params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.2rem;
+  margin-top: 0.6rem;
+}
+
+.param dt {
+  font-family: var(--font-mono);
+  font-size: 0.56rem;
+  letter-spacing: 0.1em;
+  color: var(--text-ghost);
+}
+
+.param-value,
+.param-input {
+  display: inline-block;
+  margin-top: 0.25rem;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+.param-input {
+  width: 6.5rem;
+  padding: 0.2rem 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
+.param-input:focus {
+  outline: none;
+  border-bottom-color: rgba(255, 255, 255, 0.4);
+}
+
+/* --- assumptions, dependencies, refusals -------------------------------- */
+
+.assumptions,
+.dependencies,
+.unsupported,
+.architecture,
+.checks,
+.provenance,
+.advanced {
+  margin-top: clamp(2.6rem, 5vw, 3.6rem);
+}
+
+.assumptions h2,
+.dependencies h2,
+.unsupported h2,
+.architecture h2,
+.checks h2,
+.provenance h2 {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  color: var(--text-faint);
+  text-transform: lowercase;
+  margin-bottom: 1.2rem;
+}
+
+.assumptions-note {
+  margin-top: -0.6rem;
+  margin-bottom: 1.2rem;
+  font-size: 0.86rem;
+  color: var(--text-ghost);
+}
+
+.assumptions ul {
+  list-style: none;
+  display: grid;
+  gap: 0.9rem;
+}
+
+.assumptions li {
+  display: grid;
+  grid-template-columns: minmax(6rem, 12rem) 1fr;
+  gap: 1.2rem;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.term {
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.interpretation-head + .unsupported .request,
+.dependency-kind,
+.requested {
+  font-size: 0.92rem;
+  color: var(--text);
+}
+
+.interpretation,
+.assumptions .interpretation,
+.reason,
+.failure,
+.suggestion,
+.implemented,
+.why,
+.dependencies p {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.suggestion,
+.why {
+  color: var(--text-faint);
+}
+
+.refine {
+  margin-top: clamp(2.2rem, 4vw, 3rem);
+}
+
+.refine-row {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-end;
+}
+
+.refine button {
+  padding: 0.5rem 1.1rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* --- review ------------------------------------------------------------- */
+
+.review-head h1 {
+  margin-top: 0.6rem;
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+
+.ticker {
+  color: var(--text-faint);
+}
+
+.review-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.6rem;
+  margin-top: 1.4rem;
+  font-size: 0.82rem;
+  color: var(--text-faint);
+}
+
+.review-counts strong {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.components {
+  list-style: none;
+  display: grid;
+  gap: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.components li {
+  display: grid;
+  grid-template-columns: 6rem 11rem 1fr auto;
+  gap: 1.2rem;
+  align-items: baseline;
+  padding: 1rem 1.2rem;
+  background: #050505;
+  font-size: 0.88rem;
+}
+
+.component-role {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  color: var(--text-ghost);
+}
+
+.component-name {
+  color: var(--text);
+}
+
+.component-purpose {
+  color: var(--text-dim);
+}
+
+.component-flag {
+  font-family: var(--font-mono);
+  font-size: 0.56rem;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.approach {
+  margin-bottom: 1.4rem;
+  max-width: 46rem;
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: var(--text-dim);
+}
+
+.check {
+  display: grid;
+  grid-template-columns: 12rem 6rem 1fr;
+  gap: 1.2rem;
+  align-items: baseline;
+  padding: 0.95rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 0.9rem;
+}
+
+.check-label {
+  color: var(--text);
+}
+
+.check-verdict {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+}
+
+.check-passed .check-verdict {
+  color: #cfd3da;
+}
+
+.check-failed .check-verdict {
+  color: #e8ded4;
+}
+
+/* Not-run reads as absent rather than as a warning: nothing went wrong, a
+   thing simply has not happened, and dressing that in alarm would be as
+   misleading as dressing it in green. */
+.check-not-run .check-verdict {
+  color: var(--text-ghost);
+}
+
+.check-detail {
+  color: var(--text-faint);
+}
+
+.findings {
+  list-style: none;
+  margin-top: 1.6rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.finding {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.9rem 1.1rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.finding-title {
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.finding-detail {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.finding-where {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-ghost);
+}
+
+.provenance dl {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.provenance dl > div {
+  display: grid;
+  grid-template-columns: 12rem 1fr;
+  gap: 1.2rem;
+  font-size: 0.88rem;
+}
+
+.provenance dt {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  color: var(--text-ghost);
+}
+
+.provenance dd {
+  color: var(--text-dim);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.pending {
+  color: var(--text-faint);
+  font-style: normal;
+}
+
+.tabs {
+  display: flex;
+  gap: 1.4rem;
+  margin-bottom: 1.2rem;
+}
+
+.tabs button {
+  padding: 0 0 0.4rem;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: none;
+  color: var(--text-ghost);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+}
+
+.tabs button.on {
+  color: var(--text);
+  border-bottom-color: rgba(255, 255, 255, 0.3);
+}
+
+.outcomes {
+  list-style: none;
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 1.6rem;
+}
+
+.outcomes li {
+  display: grid;
+  gap: 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+.outcomes li.fail {
+  color: #e8ded4;
+}
+
+.outcomes .why {
+  font-size: 0.66rem;
+  color: var(--text-faint);
+}
+
+.review-actions {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin-top: clamp(2.6rem, 5vw, 3.6rem);
+  padding-top: 2rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.adaptations {
+  margin-top: 1.8rem;
+  display: grid;
+  gap: 1.2rem;
+}
+
+.adaptations h3 {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  color: var(--text-faint);
+  text-transform: lowercase;
+}
+
+@media (max-width: 720px) {
+  .clause,
+  .check,
+  .components li,
+  .provenance dl > div,
+  .assumptions li {
+    grid-template-columns: 1fr;
+    gap: 0.4rem;
+  }
+
+  .steps {
+    gap: 0.9rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-running .stage-mark {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+/* The review stacks the interpretation under its own header, and the two were
+   colliding: `.review-counts` has no bottom margin because on the interpretation
+   screen nothing follows it. Spacing the join here rather than there keeps the
+   standalone screen unchanged. */
+.review .interpretation {
+  margin-top: clamp(2.8rem, 6vw, 4rem);
+}
+
+/* ==========================================================================
+   the trader surfaces
+
+   A launchpad's density in Agen's vocabulary. The discipline that matters here
+   is that mechanics get the weight a price would get elsewhere: the card's
+   largest non-ticker element is the sentence describing what the market does,
+   and the figures sit under it in mono at the size a caption gets.
+   ========================================================================== */
+
+.markets,
+.market {
+  position: relative;
+  z-index: 2;
+  max-width: 76rem;
+  margin: 0 auto;
+  padding: clamp(3.5rem, 9vh, 6rem) clamp(1.4rem, 5vw, 3rem) 8rem;
+}
+
+.markets-head {
+  max-width: 42rem;
+  margin-bottom: clamp(3rem, 7vw, 5rem);
+}
+
+.markets-head h1 {
+  margin-top: 0.7rem;
+  font-size: clamp(2rem, 5vw, 3.2rem);
+  font-weight: 500;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+}
+
+.launch-cta {
+  display: inline-block;
+  margin-top: 2rem;
+  text-decoration: none;
+}
+
+.empty,
+.shelf-unavailable,
+.trades-empty,
+.prelaunch {
+  font-size: 0.92rem;
+  line-height: 1.65;
+  color: var(--text-faint);
+}
+
+.shelf {
+  margin-bottom: clamp(3rem, 6vw, 4.5rem);
+}
+
+.shelf > header {
+  display: flex;
+  gap: 0.9rem;
+  align-items: baseline;
+  margin-bottom: 1.4rem;
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.shelf h2,
+.mechanics h2,
+.trades h2,
+.contracts h2,
+.evidence h2 {
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  color: var(--text);
+  text-transform: uppercase;
+}
+
+.shelf-count {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--text-ghost);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+  gap: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+/* --- market card -------------------------------------------------------- */
+
+.card {
+  display: block;
+  padding: 1.3rem 1.4rem 1.5rem;
+  background: #050505;
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.5s var(--slow);
+}
+
+.card:hover {
+  background: #0a0a0b;
+}
+
+.card-head {
+  display: flex;
+  gap: 0.85rem;
+  align-items: center;
+}
+
+.card-mark,
+.market-mark {
+  display: grid;
+  place-items: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 50%;
+  background: linear-gradient(160deg, #e8e9ec, #a8acb4 45%, #6f737b);
+  color: #08080a;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+}
+
+.card-identity {
+  display: grid;
+  gap: 0.1rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.card-ticker {
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.card-name,
+.card-age {
+  font-size: 0.72rem;
+  color: var(--text-ghost);
+}
+
+.card-age {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+}
+
+/* The line the product exists for. Sized accordingly. */
+.card-mechanic {
+  margin-top: 1.1rem;
+  font-size: 0.98rem;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  color: var(--text-dim);
+}
+
+.card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.card-tags span {
+  padding: 0.22rem 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 0.56rem;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+
+.card-prelaunch {
+  margin-top: 1.2rem;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  color: var(--text-ghost);
+}
+
+.card-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.1rem;
+  margin-top: 1.2rem;
+}
+
+.card-figures dt {
+  font-family: var(--font-mono);
+  font-size: 0.54rem;
+  letter-spacing: 0.08em;
+  color: var(--text-ghost);
+}
+
+.card-figures dd {
+  margin-top: 0.15rem;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-dim);
+}
+
+/* --- token page --------------------------------------------------------- */
+
+.crumb {
+  display: inline-block;
+  margin-bottom: 2.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  color: var(--text-ghost);
+  text-decoration: none;
+}
+
+.crumb:hover {
+  color: var(--text-dim);
+}
+
+.market-head {
+  display: flex;
+  gap: 1.1rem;
+  align-items: center;
+}
+
+.market-mark {
+  width: 3rem;
+  height: 3rem;
+  font-size: 0.78rem;
+}
+
+.market-head h1 {
+  font-size: clamp(1.8rem, 4.4vw, 2.6rem);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+
+.market-name {
+  color: var(--text-faint);
+}
+
+.market-mechanic {
+  margin-top: 0.4rem;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.prelaunch {
+  margin-top: clamp(2.2rem, 5vw, 3rem);
+  padding: 1.3rem 1.5rem;
+  max-width: 44rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+}
+
+.prelaunch-state {
+  margin-bottom: 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+}
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(1.6rem, 4vw, 3rem);
+  margin-top: clamp(2.2rem, 5vw, 3rem);
+  padding-bottom: 1.6rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.stats span {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.56rem;
+  letter-spacing: 0.08em;
+  color: var(--text-ghost);
+}
+
+.stats strong {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 1.05rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.mechanics,
+.trades,
+.contracts,
+.evidence {
+  margin-top: clamp(3rem, 6vw, 4.5rem);
+}
+
+.mechanic-sections {
+  display: grid;
+  gap: 1px;
+  margin-top: 1.4rem;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.mechanic-section {
+  display: grid;
+  grid-template-columns: 11rem 1fr;
+  gap: 1.4rem;
+  padding: 1.3rem 1.5rem;
+  background: #050505;
+}
+
+.mechanic-section h3 {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  color: var(--text-faint);
+}
+
+.mechanic-section ul {
+  list-style: none;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.mechanic-section li {
+  font-size: 1rem;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+.market-state {
+  margin-top: 2rem;
+}
+
+.state-head {
+  display: flex;
+  gap: 1rem;
+  align-items: baseline;
+  margin-bottom: 1rem;
+}
+
+.state-head h3 {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  color: var(--text-faint);
+}
+
+.state-note {
+  font-size: 0.7rem;
+  color: var(--text-ghost);
+}
+
+.market-state dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
+  gap: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.state-row {
+  padding: 0.95rem 1.1rem;
+  background: #050505;
+}
+
+.state-row dt {
+  font-family: var(--font-mono);
+  font-size: 0.56rem;
+  letter-spacing: 0.08em;
+  color: var(--text-ghost);
+}
+
+.state-row dd {
+  margin-top: 0.35rem;
+  font-size: 1rem;
+  color: var(--text);
+}
+
+/* Unread state is dim rather than absent: the row is a real fact about the
+   market even when its value is not available yet. */
+.state-row.unread dd {
+  color: var(--text-ghost);
+}
+
+.state-bar {
+  margin-top: 0.6rem;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.state-bar span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #9a9ea8, #f2f3f5);
+}
+
+/* --- trades ------------------------------------------------------------- */
+
+.trade-list {
+  list-style: none;
+  display: grid;
+  gap: 1px;
+  margin-top: 1.4rem;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.trade {
+  padding: 0.9rem 1.2rem;
+  background: #050505;
+}
+
+.trade-line {
+  display: flex;
+  gap: 0.8rem;
+  align-items: baseline;
+  font-size: 0.92rem;
+}
+
+.trade-who {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+
+.trade-what {
+  flex: 1;
+  color: var(--text);
+}
+
+.trade-when {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--text-ghost);
+}
+
+/* The mechanic made visible while the market runs. Indented under the trade it
+   belongs to, in mono, so it reads as consequence rather than as another trade. */
+.trade-effects {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-top: 0.45rem;
+  padding-left: 0.1rem;
+}
+
+.trade-effects li {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+
+.effect-amount {
+  margin-left: 0.4rem;
+  color: var(--text-dim);
+}
+
+/* --- contracts and evidence --------------------------------------------- */
+
+.component-list {
+  list-style: none;
+  display: grid;
+  gap: 1px;
+  margin-top: 1.4rem;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.component-list li {
+  display: grid;
+  grid-template-columns: 5.5rem 11rem 1fr auto;
+  gap: 1.2rem;
+  align-items: baseline;
+  padding: 0.95rem 1.2rem;
+  background: #050505;
+  font-size: 0.88rem;
+}
+
+.component-address {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-ghost);
+}
+
+.addresses {
+  display: grid;
+  gap: 0.8rem;
+  margin-top: 1.6rem;
+}
+
+.addresses > div {
+  display: grid;
+  grid-template-columns: 8rem 1fr;
+  gap: 1.2rem;
+  font-size: 0.86rem;
+}
+
+.addresses dt {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  color: var(--text-ghost);
+}
+
+.addresses dd {
+  color: var(--text-faint);
+}
+
+.evidence-line {
+  margin-top: 1.2rem;
+  font-size: 0.92rem;
+  line-height: 1.65;
+  color: var(--text-dim);
+}
+
+@media (max-width: 720px) {
+  .mechanic-section,
+  .component-list li,
+  .addresses > div {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+}
+
+/* Low-level constructs, disclosed. Not styled as an alarm: Agen permits these and the
+   point is that a reader sees them, not that they are frightened by them. */
+.elevated {
+  margin-top: 1.8rem;
+  padding: 1.2rem 1.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+.elevated h3 {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  color: var(--text-faint);
+  text-transform: lowercase;
+}
+
+.elevated-note {
+  margin-top: 0.7rem;
+  max-width: 44rem;
+  font-size: 0.86rem;
+  line-height: 1.65;
+  color: var(--text-dim);
+}
+
+.elevated ul {
+  list-style: none;
+  display: grid;
+  gap: 0.9rem;
+  margin-top: 1.2rem;
+}
+
+.elevated li {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.elevated-title {
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.elevated-where {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-ghost);
+}
+
+.elevated-detail {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+/* ================================================================= the product
+
+   Everything above this line is the surface: type, the two masses of light behind it,
+   grain over the top. Everything below is the launchpad that sits on it.
+
+   The teaser that used to live here was one viewport with a sentence in the middle, and
+   the layout followed from that — fixed, centred, no scroll. A product is the opposite
+   shape: a wide column, dense shelves, and enough on screen at once that a visitor can
+   tell it is running. The rules below are that column.
+   ============================================================================= */
+
+:root {
+  /* Wide enough for four cards with air between them, narrow enough that a line of body
+     text never runs past what an eye can track back. */
+  --page: 1360px;
+  /* The composer is deliberately narrower than the shelves. It is one object and should
+     read as one, where a full-width textarea reads as a form. */
+  --composer: 940px;
+
+  --surface: rgb(255 255 255 / 2.6%);
+  --surface-lift: rgb(255 255 255 / 4.5%);
+  --line: rgb(255 255 255 / 8%);
+  --line-strong: rgb(255 255 255 / 16%);
+}
+
+/* The background, on every page. Dimmer than the teaser's: there is type over all of it
+   now, and light behind a paragraph is a legibility problem rather than atmosphere. */
+.canvas {
+  position: fixed;
+  inset: -20%;
+  z-index: 0;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  opacity: 0.55;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.page {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: clamp(1.6rem, 3vw, 2.6rem) clamp(1.2rem, 3vw, 2.4rem) 6rem;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.lede {
+  margin-top: 0.9rem;
+  font-size: clamp(0.95rem, 1.3vw, 1.05rem);
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+/* --- navigation --------------------------------------------------------- */
+
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  backdrop-filter: blur(18px);
+  background: rgb(0 0 0 / 62%);
+  border-bottom: 1px solid var(--line);
+}
+
+.nav-inner {
+  display: flex;
+  gap: clamp(1rem, 2.4vw, 2.2rem);
+  align-items: center;
+  width: 100%;
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: 0.85rem clamp(1.2rem, 3vw, 2.4rem);
+}
+
+.nav-brand {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  font-size: 0.98rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.nav-brand img {
+  width: 26px;
+  height: 26px;
+  /* The mark is a bright object on black. At nav size the reflections in it turn to
+     noise, so it is dimmed to sit level with the wordmark beside it. */
+  opacity: 0.92;
+}
+
+.nav-links {
+  display: flex;
+  gap: clamp(0.9rem, 1.8vw, 1.7rem);
+}
+
+.nav-links a {
+  font-size: 0.86rem;
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color 0.4s var(--curve);
+}
+
+.nav-links a:hover,
+.nav-links a.on {
+  color: var(--text);
+}
+
+.nav-search {
+  flex: 1;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.nav-search input {
+  width: min(280px, 100%);
+  padding: 0.5rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.84rem;
+  transition:
+    border-color 0.4s var(--curve),
+    background 0.4s var(--curve);
+}
+
+.nav-search input::placeholder {
+  color: var(--text-faint);
+}
+
+.nav-search input:focus {
+  outline: none;
+  border-color: var(--line-strong);
+  background: var(--surface-lift);
+}
+
+.nav-account {
+  position: relative;
+}
+
+.wallet {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.84rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.4s var(--curve);
+}
+
+.wallet:hover {
+  background: var(--surface-lift);
+}
+
+/*
+ * The wallet popover.
+ *
+ * Nearly opaque rather than translucent, which every other surface here is. What this
+ * has to separate itself from is type — the nav and a heading sit directly under it —
+ * and a blur does not do that: blurred text stays perfectly legible as shape and lands
+ * on top of the words in the menu.
+ */
+.wallet-panel {
+  position: absolute;
+  top: calc(100% + 0.6rem);
+  right: 0;
+  z-index: 20;
+  width: 300px;
+  padding: 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: #08080a;
+  box-shadow: 0 24px 60px rgb(0 0 0 / 70%);
+  text-align: left;
+}
+
+.wallet-warn {
+  border-color: rgb(226 170 90 / 45%);
+  color: #e2aa5a;
+}
+
+.wallet-title {
+  font-size: 0.86rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.wallet-address {
+  margin-top: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.5;
+  word-break: break-all;
+  color: var(--text-dim);
+}
+
+.wallet-help {
+  margin-top: 0.6rem;
+  font-size: 0.76rem;
+  line-height: 1.55;
+  color: var(--text-faint);
+}
+
+.wallet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.9rem;
+}
+
+.wallet-row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.35s var(--curve);
+}
+
+.wallet-list .wallet-row {
+  margin-top: 0;
+}
+
+.wallet-row:hover:not(:disabled) {
+  background: var(--surface-lift);
+}
+
+.wallet-row:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.wallet-hint {
+  font-size: 0.7rem;
+  color: var(--text-faint);
+}
+
+.wallet-error {
+  margin-top: 0.8rem;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: #d88a8a;
+}
+
+/* --- the composer ------------------------------------------------------- */
+
+.hero {
+  max-width: var(--composer);
+  margin: clamp(2.6rem, 6vw, 5rem) auto clamp(3rem, 6vw, 4.5rem);
+  text-align: center;
+  animation: rise 0.9s var(--curve) backwards;
+}
+
+.hero h1 {
+  font-size: clamp(2rem, 4.4vw, 3.1rem);
+  font-weight: 500;
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+}
+
+.hero-lede {
+  margin-top: 0.9rem;
+  font-size: clamp(0.95rem, 1.3vw, 1.06rem);
+  color: var(--text-dim);
+}
+
+/*
+ * The input, as one raised object rather than a bordered box with a button under it.
+ * The button lives inside the same surface so that the whole thing reads as a single
+ * control — which is what it is.
+ */
+.composer {
+  margin-top: clamp(1.8rem, 3vw, 2.6rem);
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgb(255 255 255 / 5%), rgb(255 255 255 / 2%));
+  text-align: left;
+  transition: border-color 0.45s var(--curve);
+}
+
+.composer:focus-within {
+  border-color: rgb(255 255 255 / 30%);
+}
+
+.composer-field {
+  display: block;
+  width: 100%;
+  padding: 1.25rem 1.4rem 0.6rem;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 1.02rem;
+  line-height: 1.6;
+  resize: none;
+}
+
+.composer-field:focus {
+  outline: none;
+}
+
+.composer-field::placeholder {
+  color: var(--text-faint);
+}
+
+.composer-tall {
+  min-height: 210px;
+}
+
+.composer-foot {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 0.9rem 0.9rem 1.4rem;
+}
+
+.composer-hint {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+/* The composer's own button sits inside it, so it cannot carry the page-level margin the
+   shared `.primary` adds. */
+.composer .primary {
+  margin: 0;
+}
+
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1.1rem;
+}
+
+.suggestions button {
+  padding: 0.42rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition:
+    color 0.4s var(--curve),
+    border-color 0.4s var(--curve);
+}
+
+.suggestions button:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.suggestions-note {
+  font-size: 0.8rem;
+  color: var(--text-faint);
+}
+
+/* --- shelves ------------------------------------------------------------ */
+
+.shelf {
+  margin-top: clamp(2.4rem, 4vw, 3.4rem);
+}
+
+.shelf-head {
+  display: flex;
+  gap: 0.9rem;
+  align-items: baseline;
+  padding-bottom: 0.9rem;
+  margin-bottom: 1.3rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.shelf-head h2 {
+  font-size: 1.05rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.shelf-note-inline {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+
+.shelf-more {
+  margin-left: auto;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.shelf-more:hover {
+  color: var(--text);
+}
+
+.shelf-note {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+/* --- a market, as a card ------------------------------------------------ */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1.15rem 1.2rem 1.05rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: inherit;
+  text-decoration: none;
+  transition:
+    background 0.45s var(--curve),
+    border-color 0.45s var(--curve),
+    transform 0.45s var(--curve);
+}
+
+.card:hover {
+  background: var(--surface-lift);
+  border-color: var(--line-strong);
+  transform: translateY(-2px);
+}
+
+.card-head {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.card-mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
+  background: linear-gradient(150deg, rgb(255 255 255 / 16%), rgb(255 255 255 / 4%));
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+
+.card-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.card-ticker {
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+
+.card-name {
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+
+.card-age {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+/* The point of the card. Bigger than the ticker on purpose: on Agen the interesting
+   thing about a token is what its market does, not what it is called. */
+.card-mechanic {
+  font-size: 0.95rem;
+  line-height: 1.45;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.card-tags span {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.card-foot {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--line);
+}
+
+.card-figures {
+  display: flex;
+  gap: 1rem;
+}
+
+.card-figures dt {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.card-figures dd {
+  font-size: 0.82rem;
+  color: var(--text);
+}
+
+.status {
+  display: inline-flex;
+  gap: 0.42rem;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+.status-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status-live {
+  color: #7fd1a8;
+}
+
+.status-ready {
+  color: var(--text-dim);
+}
+
+/* --- a market, as a row ------------------------------------------------- */
+
+.rows {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 34px 150px 1fr 130px 80px 92px;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.8rem 1.1rem;
+  border-bottom: 1px solid var(--line);
+  color: inherit;
+  text-decoration: none;
+  transition: background 0.35s var(--curve);
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+.row:hover {
+  background: var(--surface-lift);
+}
+
+.row-headings {
+  background: rgb(255 255 255 / 1.5%);
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.row-headings:hover {
+  background: rgb(255 255 255 / 1.5%);
+}
+
+.row-mark {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: linear-gradient(150deg, rgb(255 255 255 / 14%), rgb(255 255 255 / 4%));
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+}
+
+.row-headings .row-mark {
+  background: none;
+}
+
+.row-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.row-ticker {
+  font-size: 0.86rem;
+  font-weight: 500;
+}
+
+.row-name {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+
+.row-mechanic {
+  font-size: 0.86rem;
+  line-height: 1.4;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.row:hover .row-mechanic {
+  color: var(--text);
+}
+
+.row-rules,
+.row-age {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+/* --- the launch page ---------------------------------------------------- */
+
+.flow {
+  max-width: var(--composer);
+  margin: 0 auto;
+  padding-top: clamp(1.6rem, 3vw, 2.6rem);
+}
+
+/* The build and review screens are wider than the composer: they hold source code and
+   test output, and folding those into a reading column wastes the screen. */
+.flow:has(.panel-wide) {
+  max-width: none;
+}
+
+.compose {
+  animation: rise 0.8s var(--curve) backwards;
+}
+
+.compose h1 {
+  font-size: clamp(1.9rem, 4vw, 2.8rem);
+  font-weight: 500;
+  line-height: 1.06;
+  letter-spacing: -0.035em;
+}
+
+.compose .suggestions {
+  justify-content: flex-start;
+}
+
+/* Name and ticker: required, and deliberately not the first thing on the page. */
+.identity {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1.4rem;
+  margin-top: clamp(1.8rem, 3vw, 2.4rem);
+  padding-top: clamp(1.6rem, 3vw, 2rem);
+  border-top: 1px solid var(--line);
+}
+
+.field-pending input {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.build {
+  display: flex;
+  gap: 1.1rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: clamp(1.8rem, 3vw, 2.4rem);
+}
+
+.primary-large {
+  margin: 0;
+  padding: 1rem 2.4rem;
+  font-size: 0.95rem;
+}
+
+.build-blocked {
+  font-size: 0.84rem;
+  color: var(--text-faint);
+}
+
+.next {
+  margin-top: clamp(2.2rem, 4vw, 3rem);
+  padding-top: 1.2rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.8rem;
+  line-height: 1.7;
+  color: var(--text-faint);
+}
+
+/* --- the launch screen ---------------------------------------------------
+ *
+ * Five fields and a button, sitting under the review. Deliberately plain: this is
+ * the last thing between a creator and a transaction, and anything decorative here
+ * competes with the four numbers they are actually deciding.
+ */
+
+.launch-panel {
+  margin-top: clamp(2.6rem, 5vw, 3.6rem);
+  padding: clamp(1.6rem, 3vw, 2.2rem);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.026), rgba(255, 255, 255, 0.006));
+}
+
+.launch-panel h2 {
+  font-size: clamp(1.2rem, 2.4vw, 1.5rem);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.launch-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0 2rem;
+  margin-bottom: clamp(1.8rem, 3vw, 2.4rem);
+}
+
+.field-note {
+  margin-top: 0.6rem;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+/* The unit sits beside the number rather than inside the label, so the field reads
+   as an amount rather than as a quantity of something unstated. */
+.field-amount {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  transition: border-color 0.5s var(--slow);
+}
+
+.field-amount:focus-within {
+  border-bottom-color: rgba(255, 255, 255, 0.42);
+}
+
+.field-amount input {
+  border-bottom: 0;
+}
+
+.field-amount span {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+}
+
+/* Not a field at all: a fact, shown where a field would be because the reader is
+   entitled to know which chain is about to be written to. */
+.field-static {
+  margin-top: clamp(1.8rem, 4vw, 2.6rem);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.field-static .field-label {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  color: var(--text-faint);
+}
+
+.launch-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1.4rem;
+  margin-top: 1.8rem;
+}
+
+.launch-summary dt {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  color: var(--text-faint);
+}
+
+.launch-summary dd {
+  margin-top: 0.4rem;
+  font-size: 1.05rem;
+}
+
+.launch-links {
+  display: flex;
+  gap: 1.4rem;
+  margin-top: 1.8rem;
+  font-size: 0.86rem;
+}
+
+.progress-title {
+  font-size: clamp(1.4rem, 3vw, 2rem);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+
+.progress-title .ticker {
+  color: var(--text-faint);
+}
+
+/* --- the page footer ---------------------------------------------------- */
+
+.foot {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  gap: 1.2rem;
+  align-items: center;
+  width: 100%;
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: 1.6rem clamp(1.2rem, 3vw, 2.4rem) 3rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+
+.foot a {
+  margin-left: auto;
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.foot a:hover {
+  color: var(--text);
+}
+
+.page-head {
+  max-width: 46rem;
+  margin-bottom: clamp(1.8rem, 3vw, 2.6rem);
+  padding-top: clamp(1.6rem, 3vw, 2.4rem);
+}
+
+.page-head h1 {
+  font-size: clamp(1.8rem, 3.6vw, 2.6rem);
+  font-weight: 500;
+  letter-spacing: -0.035em;
+}
+
+/* --- narrow ------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .nav-links,
+  .nav-search {
+    display: none;
+  }
+
+  .row {
+    grid-template-columns: 30px 1fr 90px;
+  }
+
+  .row-mechanic,
+  .row-rules {
+    display: none;
+  }
+}
+
+/* --- the activity strip ------------------------------------------------- */
+
+.ticker {
+  position: relative;
+  z-index: 4;
+  border-bottom: 1px solid var(--line);
+  background: rgb(255 255 255 / 1.5%);
+  overflow: hidden;
+}
+
+.ticker-inner {
+  display: flex;
+  gap: 1.6rem;
+  width: 100%;
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: 0.5rem clamp(1.2rem, 3vw, 2.4rem);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ticker-inner::-webkit-scrollbar {
+  display: none;
+}
+
+.tick {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  white-space: nowrap;
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.tick:hover .tick-ticker {
+  color: var(--text);
+}
+
+.tick-tag {
+  font-family: var(--font-mono);
+  font-size: 0.56rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.tick-live {
+  color: #7fd1a8;
+}
+
+.tick-ticker {
+  font-weight: 500;
+  color: var(--text-dim);
+  transition: color 0.35s var(--curve);
+}
+
+.tick-age {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--text-ghost);
+}
+
+/* --- discovery tabs ----------------------------------------------------- */
+
+.tabs-row {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.tabs-row button {
+  display: flex;
+  gap: 0.45rem;
+  align-items: baseline;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: 0.86rem;
+  cursor: pointer;
+  transition:
+    color 0.35s var(--curve),
+    background 0.35s var(--curve);
+}
+
+.tabs-row button:hover {
+  color: var(--text-dim);
+}
+
+.tabs-row button.on {
+  background: var(--surface-lift);
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.tab-count {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-faint);
+}
+
+/*
+ * The composer, compact.
+ *
+ * It was the whole first viewport, which is right for a page whose only job is to take a
+ * sentence and wrong for a launchpad: a visitor who arrives should see that other people
+ * have built things here before they see the box asking them to. Markets now start above
+ * the fold on a laptop.
+ */
+.hero {
+  margin-top: clamp(1.6rem, 3vw, 2.4rem);
+  margin-bottom: clamp(1.6rem, 3vw, 2.2rem);
+}
+
+.hero h1 {
+  font-size: clamp(1.7rem, 3.2vw, 2.4rem);
+}
+
+.hero .composer {
+  margin-top: clamp(1.1rem, 2vw, 1.5rem);
+}
+
+.hero .composer-field {
+  min-height: 96px;
+  font-size: 0.98rem;
+}

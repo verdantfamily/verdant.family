@@ -17,12 +17,14 @@
 import {
   EXTERNAL_ADDRESSES,
   ROBINHOOD_MAINNET_ID,
+  agentsFor,
   deploymentFor,
   robinhoodMainnet,
 } from "@verdant/config";
 import type { Address } from "viem";
 
 const deployment = deploymentFor(ROBINHOOD_MAINNET_ID);
+const agentLayer = agentsFor(ROBINHOOD_MAINNET_ID);
 
 /**
  * An address from the environment, or from the deployment record, or a refusal.
@@ -85,3 +87,98 @@ export const RPC_URL =
 
 /** Lowercased once, because address comparisons happen per event. */
 export const HOOK_LOWER = HOOK.toLowerCase();
+
+// --- the agent layer ------------------------------------------------------
+//
+// Optional, and that is the difference from everything above. The market layer must be
+// present or this indexer has nothing to do, so a missing factory is a refusal. The
+// agent layer is an addon that has not been broadcast, so a missing one is a
+// deployment state rather than a misconfiguration.
+//
+// It is still described here when it is absent, with the zero address standing in, and
+// the agent contracts are still registered in `ponder.config.ts`. That looks wasteful
+// and is deliberate: `ponder codegen` derives the set of valid event names from the
+// configuration, so a conditionally-registered contract makes
+// `ponder.on("AgentTreasury:Spent", …)` a type error on any build where the layer is
+// absent. Handlers that only compile once a deployment exists are handlers nobody can
+// typecheck before deploying, which is the wrong way round.
+//
+// A contract at the zero address emits nothing, so the cost is a log filter that never
+// matches, and `/agents` correctly serves an empty list.
+//
+// All three addresses or none. `AgentLaunchFactory` deploys the two registries in its
+// own constructor, so a partial override describes a deployment that cannot exist, and
+// taking two from the environment and one from a record would silently mix
+// deployments.
+
+const NOT_DEPLOYED = "0x0000000000000000000000000000000000000000" as Address;
+
+interface AgentLayer {
+  /** False when nothing is deployed and the addresses below are the zero address. */
+  readonly deployed: boolean;
+  readonly launchFactory: Address;
+  readonly identityRegistry: Address;
+  readonly serviceRegistry: Address;
+  readonly startBlock: number;
+}
+
+function resolveAgentLayer(): AgentLayer {
+  const fromEnv = [
+    process.env.VERDANT_AGENT_FACTORY,
+    process.env.VERDANT_AGENT_IDENTITY_REGISTRY,
+    process.env.VERDANT_AGENT_SERVICE_REGISTRY,
+  ];
+
+  const supplied = fromEnv.filter((value) => value !== undefined).length;
+
+  if (supplied !== 0 && supplied !== 3) {
+    throw new Error(
+      `the agent layer needs all three of VERDANT_AGENT_FACTORY, ` +
+        `VERDANT_AGENT_IDENTITY_REGISTRY and VERDANT_AGENT_SERVICE_REGISTRY, or none. ` +
+        `${supplied} were set. The factory deploys both registries in its constructor, ` +
+        `so a partial set describes a deployment that does not exist.`,
+    );
+  }
+
+  if (supplied === 3) {
+    const [launchFactory, identityRegistry, serviceRegistry] = fromEnv as [
+      string,
+      string,
+      string,
+    ];
+
+    return {
+      deployed: true,
+      launchFactory: launchFactory as Address,
+      identityRegistry: identityRegistry as Address,
+      serviceRegistry: serviceRegistry as Address,
+      startBlock: Number(
+        process.env.VERDANT_AGENT_START_BLOCK ??
+          process.env.VERDANT_START_BLOCK ??
+          0,
+      ),
+    };
+  }
+
+  if (agentLayer === null) {
+    return {
+      deployed: false,
+      launchFactory: NOT_DEPLOYED,
+      identityRegistry: NOT_DEPLOYED,
+      serviceRegistry: NOT_DEPLOYED,
+      startBlock: START_BLOCK,
+    };
+  }
+
+  return {
+    deployed: true,
+    launchFactory: agentLayer.launchFactory,
+    identityRegistry: agentLayer.identityRegistry,
+    serviceRegistry: agentLayer.serviceRegistry,
+    startBlock: Number(
+      process.env.VERDANT_AGENT_START_BLOCK ?? agentLayer.deployedAtBlock,
+    ),
+  };
+}
+
+export const AGENTS = resolveAgentLayer();

@@ -241,13 +241,20 @@ contract Seed is Script {
             // Anyone may collect; the fees go to the splitter either way.
             PositionLocker(market.locker).collect();
 
-            // The claim has to come from a recipient, and the broadcaster is the
-            // creator of every market this rig made, so it can claim the creator's
-            // share. The treasury's share stays unclaimed, which is worth having in
+            // The claim has to come from a recipient, and `claim` reverts
+            // `NotARecipient` for anybody else — so this asks the splitter who it pays
+            // rather than assuming the broadcaster. It is the creator of every market
+            // it launched itself, but an agent's market names the agent's revenue
+            // router as its fee recipient, and that money is claimed by the router in
+            // `AgentSeed.s.sol` instead. Before this check existed, one agent market in
+            // the registry made this loop revert and took the whole rig with it.
+            //
+            // The treasury's share stays unclaimed either way, which is worth having in
             // the data: an unclaimed balance is the splitter's normal state.
             // `payable` because the splitter has one: it receives ether fees. The
             // cast says nothing about this call, which sends none.
-            FeeSplitter(payable(market.splitter)).claim();
+            FeeSplitter splitter = FeeSplitter(payable(market.splitter));
+            if (splitter.creator() == msg.sender) splitter.claim();
         }
         vm.stopBroadcast();
 

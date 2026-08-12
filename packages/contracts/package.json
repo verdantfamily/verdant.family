@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "build": "forge build",
-    "test": "forge test",
+    "test": "bash ../../scripts/check-test-discovery.sh && forge test",
     "typecheck": "echo \"solidity: covered by forge build\" && exit 0",
     "lint": "forge fmt --check && bash ../../scripts/check-lint.sh",
     "fmt": "forge fmt",

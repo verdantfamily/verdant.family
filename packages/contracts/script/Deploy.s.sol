@@ -6,6 +6,7 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
+import {AgentLaunchFactory} from "../src/agents/AgentLaunchFactory.sol";
 import {FactoryOrigin} from "../src/FactoryOrigin.sol";
 import {MarketRegistry} from "../src/MarketRegistry.sol";
 import {ModelRegistry} from "../src/ModelRegistry.sol";
@@ -77,6 +78,7 @@ contract Deploy is Script {
         VerdantDeployer deployer;
         VerdantHook hook;
         VerdantFactory factory;
+        AgentLaunchFactory agents;
     }
 
     /// @dev The environment, read once and validated once. A struct because the
@@ -120,6 +122,15 @@ contract Deploy is Script {
         // check in its constructor.
         out.factory = VerdantFactory(out.origin.deployFactory(_factoryInitcode(input, out)));
 
+        // Phase 5: the agent layer, which reads the market registry and writes
+        // nothing in it. Last because it depends on the market layer and nothing
+        // depends on it: a deployment that stopped after phase 4 is a complete
+        // Verdant, and this phase adds agents to it without touching a market
+        // contract's constructor, storage or address. Its own constructor creates
+        // the identity registry, the service registry and the two agent deployers,
+        // so this is the whole of it.
+        out.agents = new AgentLaunchFactory(address(out.marketRegistry), input.treasury);
+
         vm.stopBroadcast();
 
         // The constructors have checked their own halves. These check the halves no
@@ -129,6 +140,11 @@ contract Deploy is Script {
         require(out.factory.hook() == out.hook, "factory does not name the deployed hook");
         require(out.marketRegistry.writer() == address(out.factory), "registry writer is not the factory");
         require(out.deployer.factory() == address(out.factory), "deployer is not bound to the factory");
+        require(
+            address(out.agents.identityRegistry().markets()) == address(out.marketRegistry),
+            "agents read a different market registry"
+        );
+        require(out.agents.protocolTreasury() == input.treasury, "agents pay a different protocol treasury");
 
         _report(input, salt, out);
     }
@@ -310,6 +326,11 @@ contract Deploy is Script {
         console.log("VerdantDeployer", address(out.deployer));
         console.log("VerdantHook    ", address(out.hook));
         console.log("VerdantFactory ", address(out.factory));
+        console.log("");
+        console.log("--- agents ---");
+        console.log("AgentLaunchFactory   ", address(out.agents));
+        console.log("AgentIdentityRegistry", address(out.agents.identityRegistry()));
+        console.log("AgentServiceRegistry ", address(out.agents.serviceRegistry()));
         console.log("");
         console.log("hook salt      ", vm.toString(salt));
         console.log("protocol share ", out.modelRegistry.protocolBps());

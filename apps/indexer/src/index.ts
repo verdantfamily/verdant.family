@@ -443,3 +443,13 @@ ponder.on("VerdantToken:MetadataURIUpdated", async ({ event, context }) => {
     .update(market, { id: link.poolId })
     .set({ metadataURI: event.args.newURI });
 });
+
+/**
+ * The agent layer, in its own file.
+ *
+ * Imported for its side effects: `src/agents.ts` registers its own handlers. Kept
+ * separate because the two halves answer to different contracts, and because nothing
+ * above this line should learn about agents — a market created by an agent is an
+ * ordinary market, and the agent is a row that points at it.
+ */
+import "./agents";

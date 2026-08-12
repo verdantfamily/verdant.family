@@ -5,6 +5,50 @@ Verdant is MIT licensed; see LICENSE. This file records the code in or around
 this repository that is somebody else's, so that the licence above is not read
 as covering it.
 
+It also records the two files whose SPDX header disagrees with that licence, and
+why the header rather than the licence is the thing that is wrong.
+
+
+Two stale SPDX headers, frozen by a deployment
+==============================================
+
+These files carry `// SPDX-License-Identifier: BUSL-1.1`:
+
+  packages/contracts/src/VerdantFactory.sol
+  packages/contracts/src/FeeForwarder.sol
+
+They are MIT licensed, like everything else here. The header is a leftover: the
+repository was relicensed from BUSL-1.1 to MIT before it was made public, and a
+later commit restored these two headers while editing the files for an unrelated
+reason.
+
+The obvious fix is not available. An SPDX identifier is part of solc's metadata,
+the metadata hash is appended to the compiled bytecode, and both of these files
+are compiled into contracts deployed on Robinhood Chain and verified byte-for-byte
+on Blockscout:
+
+  VerdantFactory       0x661A5B2A8d7DC0EaEd98B335e070478b40B92Dd9
+  FeeForwarderFactory  (embeds FeeForwarder's creation code)
+
+Correcting either header changes that contract's bytecode. The deployment would
+no longer be reproducible from this source, and "the deployed code is the source
+in this repository" would stop being true — which is a more valuable claim than a
+tidy header.
+
+So the grant is stated here instead, and it governs:
+
+  The copyright holder licenses packages/contracts/src/VerdantFactory.sol and
+  packages/contracts/src/FeeForwarder.sol under the MIT License in LICENSE,
+  notwithstanding the BUSL-1.1 identifier in their headers. No Business Source
+  License terms apply to any file in this repository. There is no change date,
+  no additional use grant, and no restriction on redeployment.
+
+The headers will be corrected in the same change that next redeploys those
+contracts, and not before. `pnpm verify:licenses` enforces both halves of this:
+no other file may carry a non-MIT header, and these two may not be "fixed"
+without the deployment being redone. See
+docs/decisions/013-the-repository-is-mit.md.
+
 The Solidity dependencies are not distributed here. `packages/contracts/vendor/`
 holds Uniswap's v4-core, v4-periphery, OpenZeppelin, Solmate and forge-std,
 fetched at pinned commits by `scripts/vendor-contracts-deps.sh` and gitignored —

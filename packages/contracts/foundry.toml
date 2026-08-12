@@ -32,6 +32,9 @@ extra_output = ["storageLayout"]
 # "preview equals reality" a tested property (§20.4).
 fs_permissions = [
   { access = "read", path = "../sdk/src/models/vectors" },
+  # The agent layer's own vectors, holding RevenueAllocationLib.sol and the SDK's
+  # allocation.ts to one definition of how an agent's revenue divides.
+  { access = "read", path = "../sdk/src/agents/vectors" },
   # The parameter register, projected to JSON by `pnpm bounds:emit`. Solidity
   # cannot import TypeScript, so the bounds arrive as data and BoundsParity.t.sol
   # asserts that what the registry returns equals what this file says.
@@ -40,6 +43,9 @@ fs_permissions = [
   # its security surface — "there is no mint function" is a claim about the ABI,
   # so it is asserted against the ABI rather than against the source.
   { access = "read", path = "./out" },
+  # The deployment record, so the fork suite points at the addresses the published
+  # record names rather than at constants that can drift from it.
+  { access = "read", path = "../../deployments" },
 ]
 
 [profile.default.fuzz]

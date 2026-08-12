@@ -17,6 +17,13 @@ import {IWETH9} from "@uniswap/v4-periphery/src/interfaces/external/IWETH9.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
 import {Deploy} from "../script/Deploy.s.sol";
+import {AgentIdentityRegistry} from "../src/agents/AgentIdentityRegistry.sol";
+import {AgentLifecycle} from "../src/agents/AgentLifecycle.sol";
+import {IAgentIdentityRegistry} from "../src/agents/IAgentIdentityRegistry.sol";
+import {IAgentLaunchFactory} from "../src/agents/IAgentLaunchFactory.sol";
+import {IAgentMandate} from "../src/agents/IAgentMandate.sol";
+import {IAgentRevenueRouter} from "../src/agents/IAgentRevenueRouter.sol";
+import {RevenueAllocationLib} from "../src/agents/RevenueAllocationLib.sol";
 import {FactoryOrigin} from "../src/FactoryOrigin.sol";
 import {MarketRegistry} from "../src/MarketRegistry.sol";
 import {VerdantFactory} from "../src/VerdantFactory.sol";
@@ -130,6 +137,71 @@ contract DeployScriptTest is Deployers {
             // BoundsParity.t.sol.
             assertEq(d.modelRegistry.boundsOf(model).enabled, enabled[i], "enabled matches the register");
         }
+    }
+
+    /// @dev The agent layer is a fifth phase of the same script, so it is held to
+    /// the same standard as the four before it: deployed, wired to the market layer
+    /// it reads, and wired to nothing it should not be.
+    function test_theAgentLayerCameUpWiredToTheMarketLayerAndToNothingElse() public view {
+        assertTrue(address(d.agents) != address(0), "no agent factory was deployed");
+
+        AgentIdentityRegistry identity = d.agents.identityRegistry();
+        assertEq(address(identity.markets()), address(d.marketRegistry), "agents read the deployed market registry");
+        assertEq(identity.factory(), address(d.agents), "only the agent factory may write the agent record");
+        assertEq(d.agents.protocolTreasury(), treasury, "agents pay the deployment's treasury");
+        assertEq(
+            address(d.agents.serviceRegistry().identityRegistry()),
+            address(identity),
+            "the service registry asks the deployment's own identity registry"
+        );
+
+        // And the market layer does not know the agent layer exists. This is the
+        // whole claim of ADR-010 restated against a real deployment: nothing in
+        // phase 5 wrote to anything from phases 1 to 4.
+        assertEq(d.marketRegistry.writer(), address(d.factory), "the agent factory acquired write access");
+        assertEq(d.deployer.factory(), address(d.factory), "the agent factory can deploy market contracts");
+    }
+
+    /// @dev The agent equivalent of the market test below: everything above could
+    /// hold while an agent still could not be created on what the script deployed.
+    function test_anAgentCanBeCreatedOnTheDeployedSystem() public {
+        IAgentMandate.AssetLimit[] memory limits = new IAgentMandate.AssetLimit[](1);
+        limits[0] = IAgentMandate.AssetLimit({asset: address(0), maxActionValue: 1 ether, periodLimit: 5 ether});
+
+        vm.prank(creator);
+        IAgentLaunchFactory.AgentAddresses memory agent = d.agents
+            .createAgent(
+                IAgentLaunchFactory.AgentParams({
+                    salt: keccak256("deployment"),
+                    guardian: makeAddr("guardian"),
+                    operator: makeAddr("operator"),
+                    limits: limits,
+                    targets: new address[](0),
+                    minActionInterval: 1 minutes,
+                    periodLength: 1 days,
+                    expiry: 0,
+                    allocation: RevenueAllocationLib.Allocation({
+                        operationsBps: 6000, buybacksBps: 0, developerBps: 3000, protocolBps: 1000
+                    }),
+                    metadataURI: "ipfs://agent",
+                    expectation: IAgentIdentityRegistry.MarketExpectation({
+                        token: makeAddr("a token this launch will produce"),
+                        quoteAsset: address(0),
+                        model: 0,
+                        expectedSupply: SUPPLY_TOKENS * LaunchBounds.TOKEN_SCALE,
+                        launchNonce: 1
+                    })
+                })
+            );
+
+        IAgentIdentityRegistry.Agent memory record = d.agents.identityRegistry().agentOf(agent.agentId);
+        assertEq(record.developer, creator, "the agent belongs to whoever created it");
+        assertEq(record.treasury, agent.treasury, "the record names the treasury that was deployed");
+        assertEq(uint8(record.state), uint8(AgentLifecycle.State.Created), "a new agent has not bound a market");
+
+        // The protocol leg of an agent deployed by this script pays the treasury the
+        // script was given, which is the one wiring nothing else could check.
+        assertEq(IAgentRevenueRouter(agent.router).destinationOf(3), treasury, "the protocol leg");
     }
 
     // --- and then a market ---------------------------------------------------

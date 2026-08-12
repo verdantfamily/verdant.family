@@ -9,6 +9,22 @@
 # runs the indexer against the whole history, and then asks the contracts the same
 # questions the indexer just answered and requires the same answers.
 #
+# ## The agent layer
+#
+# It also creates three agents, two of which launch markets of their own, and drives
+# them through every state-changing event the agent layer has: services registered,
+# repriced and retired, a treasury funded and spent from, a service bought from one
+# agent by another, revenue recognised, allocated and settled across four legs and two
+# assets, a market's fee stream claimed into an agent's router, a guardian's pause and
+# resume, and an agent revoked.
+#
+# That list is not decoration. An agent event with no handler produces no rows and no
+# errors, so a missing one is indistinguishable from a chain where it never happened —
+# `apps/indexer/src/agent-events.test.ts` catches the handler nobody wrote, and only a
+# real chain can catch the handler that writes the wrong row.
+# `apps/indexer/scripts/assert-agents.ts` then reconciles every revenue leg against the
+# router's own counters, and requires that all eighteen activity types actually appear.
+#
 # ## The two markets the SDK launches
 #
 # Four of the six come from `Seed.s.sol`, which creates them in Solidity — so they
@@ -320,6 +336,9 @@ forge script script/Deploy.s.sol \
   >"$LOGS/deploy.log" 2>&1 || { cat "$LOGS/deploy.log"; exit 1; }
 
 FACTORY=$(address_from "$LOGS/deploy.log" "VerdantFactory")
+AGENT_FACTORY=$(address_from "$LOGS/deploy.log" "AgentLaunchFactory")
+AGENT_IDENTITY_REGISTRY=$(address_from "$LOGS/deploy.log" "AgentIdentityRegistry")
+AGENT_SERVICE_REGISTRY=$(address_from "$LOGS/deploy.log" "AgentServiceRegistry")
 HOOK=$(address_from "$LOGS/deploy.log" "VerdantHook")
 MARKET_REGISTRY=$(address_from "$LOGS/deploy.log" "MarketRegistry")
 MODEL_REGISTRY=$(address_from "$LOGS/deploy.log" "ModelRegistry")
@@ -328,9 +347,10 @@ MODEL_REGISTRY=$(address_from "$LOGS/deploy.log" "ModelRegistry")
 # interface reads its init code hash; getting it from anywhere else would predict
 # addresses no launch lands on.
 DEPLOYER=$(address_from "$LOGS/deploy.log" "VerdantDeployer")
-export FACTORY
+export FACTORY AGENT_FACTORY
 echo "VerdantFactory  $FACTORY"
 echo "VerdantHook     $HOOK"
+echo "AgentLaunchFactory $AGENT_FACTORY"
 
 # Everything the indexer cares about happens from here on, so this is where it starts
 # reading. Taken before the markets exist, deliberately: an indexer that began after
@@ -407,6 +427,19 @@ fi
 # shellcheck disable=SC1090
 . "$SDK_OUTPUT"
 
+step "creating three agents, launching two agent markets"
+# The agent layer, driven on a real chain. `AgentSeed.s.sol` explains what each of
+# the three agents is for; what matters here is that between this phase and the one
+# after the warp, **every** state-changing agent event fires at least once.
+#
+# Before the warp, deliberately. Two of those events need time to have passed — a
+# spending period only rolls once one has elapsed, and a market has no fees to claim
+# until it has been traded and collected — and the phases below do both.
+PHASE=launch forge script script/AgentSeed.s.sol \
+  --rpc-url "$RPC" --private-key "$OPERATOR_KEY" --broadcast -vv \
+  >"$LOGS/agents-launch.log" 2>&1 || { cat "$LOGS/agents-launch.log"; exit 1; }
+grep -E '^  (provider|payer|retired|service)' "$LOGS/agents-launch.log" || true
+
 step "warping past the fee transition"
 # One hour plus a minute. The two-stage market's second stage begins at 3600 seconds,
 # so this puts the next trade unambiguously on the far side of it — which is the whole
@@ -425,6 +458,14 @@ PHASE=settle forge script script/Seed.s.sol \
   --rpc-url "$RPC" --private-key "$OPERATOR_KEY" --broadcast -vv \
   >"$LOGS/seed-settle.log" 2>&1 || { cat "$LOGS/seed-settle.log"; exit 1; }
 
+step "settling the agent layer"
+# After the warp and after the markets have traded, which is what the two events this
+# phase exists for require: a market fee stream that has something in it, and a
+# spending period that has actually rolled with something counted against it.
+PHASE=settle forge script script/AgentSeed.s.sol \
+  --rpc-url "$RPC" --private-key "$OPERATOR_KEY" --broadcast -vv \
+  >"$LOGS/agents-settle.log" 2>&1 || { cat "$LOGS/agents-settle.log"; exit 1; }
+
 cd "$ROOT"
 
 step "indexing"
@@ -436,6 +477,16 @@ export VERDANT_HOOK="$HOOK"
 export VERDANT_POOL_MANAGER="$POOL_MANAGER"
 export VERDANT_START_BLOCK="$START_BLOCK"
 export PONDER_RPC_URL_4663="$RPC"
+
+# The agent layer. Nothing is recorded for it in packages/config yet, and the indexer
+# treats an absent agent layer as "watch nothing" rather than as an error — which is
+# the right default for a chain that has none, and would silently produce an empty
+# agent surface here. All three are exported together for that reason: the indexer
+# refuses a partial override rather than guessing the rest.
+export VERDANT_AGENT_FACTORY="$AGENT_FACTORY"
+export VERDANT_AGENT_IDENTITY_REGISTRY="$AGENT_IDENTITY_REGISTRY"
+export VERDANT_AGENT_SERVICE_REGISTRY="$AGENT_SERVICE_REGISTRY"
+export VERDANT_AGENT_START_BLOCK="$START_BLOCK"
 
 # No DATABASE_URL, so Ponder uses PGlite in a directory under the app. Removed first,
 # because a previous run's database would be reused and the proof would pass on stale
@@ -503,6 +554,38 @@ if [ -z "$ready" ]; then
 fi
 echo "the indexer is serving all $expected_markets markets"
 
+# And the agents, for the same reason and separately. The markets are created early in
+# the history and the agent layer is driven to the very end of it, so a poll satisfied
+# by the market listing can return while the last agent transactions are still being
+# indexed — and the assertions would then report an indexer that had dropped events it
+# simply had not reached yet.
+expected_agents=$(cast call "$AGENT_IDENTITY_REGISTRY" "agentCount()(uint256)" --rpc-url "$RPC" | awk "{print \$1}")
+echo "the registry has $expected_agents agents; waiting for the indexer to have all of them"
+
+agents_ready=""
+indexed_agents=0
+for _ in $(seq 1 150); do
+  body=$(curl -sf "$API/agents" 2>/dev/null || true)
+  indexed_agents=$(printf "%s" "$body" | awk -v RS='"agentId"' "END {print NR - 1}")
+  if [ "$indexed_agents" = "$expected_agents" ]; then
+    agents_ready=1
+    break
+  fi
+  if ! kill -0 "$ponder_pid" 2>/dev/null; then
+    echo "the indexer exited while the agents were being indexed:" >&2
+    tail -30 "$LOGS/ponder.log" >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+if [ -z "$agents_ready" ]; then
+  echo "the indexer served $indexed_agents of $expected_agents agents within 150 seconds:" >&2
+  tail -30 "$LOGS/ponder.log" >&2
+  exit 1
+fi
+echo "the indexer is serving all $expected_agents agents"
+
 step "asking the chain whether the indexer is telling the truth"
 VERDANT_API="$API" \
 VERDANT_RPC="$RPC" \
@@ -515,8 +598,25 @@ VERDANT_EXPECTED_MARKETS="$expected_markets" \
 VERDANT_EQUITY_QUOTED_TOKENS="$STOCK_TOKEN,$SDK_EQUITY_TOKEN" \
   node apps/indexer/scripts/assert-feed.ts
 
+step "asking the chain the same questions about the agents"
+# The market assertions above would pass unchanged on a build with no agent surface at
+# all, because none of them mentions an agent. These are the ones that would not.
+#
+# The human market is named rather than discovered: it is the ether-quoted market the
+# SDK launched, and it is here to prove that agent attribution did not leak onto the
+# markets that have no agent. Searching for a market the indexer reports as
+# unattributed would take the indexer's word for exactly the thing under test.
+VERDANT_API="$API" \
+VERDANT_RPC="$RPC" \
+VERDANT_AGENT_IDENTITY_REGISTRY="$AGENT_IDENTITY_REGISTRY" \
+VERDANT_AGENT_SERVICE_REGISTRY="$AGENT_SERVICE_REGISTRY" \
+VERDANT_MULTICALL3="$MULTICALL3" \
+VERDANT_EXPECTED_AGENTS="$expected_agents" \
+VERDANT_HUMAN_POOL_ID="$SDK_ETHER_POOL_ID" \
+  node apps/indexer/scripts/assert-agents.ts
+
 step "done"
-echo "the feed agrees with the contracts. Logs in $LOGS."
+echo "the market feed and the agent feed both agree with the contracts. Logs in $LOGS."
 
 if [ -n "${VERDANT_KEEP:-}" ]; then
   cat <<INFO

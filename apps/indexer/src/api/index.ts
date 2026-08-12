@@ -27,6 +27,8 @@ import { quotePerToken } from "@verdant/ui";
 import { Hono } from "hono";
 import { and, count, desc, eq, gt, gte, max, min, sql, sum } from "ponder";
 
+import { agentForMarket, agentRoutes } from "./agents";
+
 const app = new Hono();
 
 /** How many markets a listing returns when the caller does not say. */
@@ -247,8 +249,20 @@ app.get("/markets/:id", async (c) => {
   const row = await findMarket(c.req.param("id"));
   if (row === undefined) return c.json({ error: "no such market" }, 404);
 
-  const at = await chainNow();
-  return c.json(present(row, at));
+  const [at, launchedBy] = await Promise.all([chainNow(), agentForMarket(row.id)]);
+
+  /**
+   * Who launched it, where that was an agent.
+   *
+   * Null for every market a person created, which is nearly all of them, and that null
+   * is what keeps a human market's response exactly as it was. An agent-created market
+   * is otherwise an ordinary market — same factory, same schedule, same splitter — so
+   * this is one added field and nothing else changes.
+   *
+   * On the detail endpoint only. The listing would need a join per row to carry it, and
+   * a card that wants attribution can follow the market it is already linking to.
+   */
+  return c.json({ ...present(row, at), launchedByAgent: launchedBy });
 });
 
 /**
@@ -594,5 +608,17 @@ app.get("/markets/:id/fees", async (c) => {
     })),
   });
 });
+
+/**
+ * The agent endpoints.
+ *
+ * Mounted rather than written here, and given this module's own `chainNow`, `bounded`
+ * and `offsetOf`. Two implementations of "what time does the chain think it is" would
+ * eventually be two answers, and every response on both halves carries one.
+ */
+app.route(
+  "/",
+  agentRoutes({ chainNow, bounded, offsetOf, defaultLimit: DEFAULT_LIMIT, maxLimit: MAX_LIMIT }),
+);
 
 export default app;

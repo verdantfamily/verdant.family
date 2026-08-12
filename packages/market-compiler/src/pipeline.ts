@@ -62,6 +62,8 @@ import {
   elevatedRiskIsCovered,
   invariantsWereProven,
 } from "./gates.js";
+import { recogniseAll, remedyBrief } from "./playbook.js";
+import { classify } from "./recovery.js";
 import type { EffectsRepair, Repair, StageOutput } from "./engineer.js";
 import {
   ArtefactError,
@@ -71,6 +73,7 @@ import {
   generateTests,
   interpret,
   repairCompilation,
+  repairDeployability,
   repairFindings,
   repairTests,
   revise,
@@ -93,12 +96,24 @@ export interface PipelineBudget {
    * Counts total attempts, so two means one retry.
    */
   readonly artefactRetries: number;
+  /**
+   * How many times a correct market may be edited to make it launchable.
+   *
+   * Two, and for a different reason than the others: a market reaching that stage has
+   * already compiled, passed its tests and cleared every gate, so what is wrong is the
+   * shape of something the launcher reads rather than anything the market does. That
+   * edit either works or runs into a constraint no edit will satisfy. The loop also
+   * stops as soon as an attempt fails the same way twice, so this is a ceiling rather
+   * than an expectation.
+   */
+  readonly deploymentRepairs: number;
 }
 
 export const DEFAULT_BUDGET: PipelineBudget = {
   compilationRepairs: 3,
   testRepairs: 3,
   artefactRetries: 3,
+  deploymentRepairs: 2,
 };
 
 /** The shared contracts a generated market is deployed through. */
@@ -1278,20 +1293,22 @@ export async function runBuild(
         .filter((name) => PRELUDE_CONTRACTS.includes(name)),
     );
 
-    const contracts = await readArtifacts({
-      outDir: join(workspace.paths.artifacts, "out"),
-      sources: [
-        ...sources,
-        ...preludeSources().filter((source) =>
-          deployedPrelude.has(source.path.split("/").pop()?.replace(/\.sol$/, "") ?? ""),
-        ),
-      ],
-    });
-
-    const artifacts: BuildArtifacts = {
+    // Read rather than computed once, because a market that cannot be launched gets a
+    // chance to be corrected below and the artefacts of the corrected one are different
+    // artefacts. Nothing is written to disk until a bundle has actually been assembled
+    // from them — see the note above about what an artefact directory is evidence of.
+    const collectArtifacts = async (): Promise<BuildArtifacts> => ({
       jobId: job.id,
       createdAt: now(),
-      contracts,
+      contracts: await readArtifacts({
+        outDir: join(workspace!.paths.artifacts, "out"),
+        sources: [
+          ...sources,
+          ...preludeSources().filter((source) =>
+            deployedPrelude.has(source.path.split("/").pop()?.replace(/\.sol$/, "") ?? ""),
+          ),
+        ],
+      }),
       implementationHash: hashSources([...sources, ...tests]),
       specificationHash: hashSpecification(specification),
       toolchain: TOOLCHAIN,
@@ -1300,9 +1317,7 @@ export async function runBuild(
         failed: tested.failed,
         outcomes: tested.outcomes,
       },
-    };
-
-    await workspace.writeJson(`${LAYOUT.artifacts}/build.json`, artifacts);
+    });
 
     // The two things about this market that only its compiled hook can answer, both
     // read from the parsed program rather than discovered by a creator signing a launch
@@ -1320,81 +1335,192 @@ export async function runBuild(
       });
     }
 
-    const fee = await requiredFeeMode({
-      root: workspace.root,
-      buildOutput: rebuilt.output,
-      hookContractName: hookContract,
-    });
+    const supplyTokens = request.supplyTokens ?? DEFAULT_SUPPLY_TOKENS;
 
-    if (fee.problem !== null) {
+    /** One attempt at proving this market can be put on a chain. */
+    const proveLaunchable = async (
+      built: Awaited<ReturnType<typeof forcedBuild>>,
+    ): Promise<
+      | {
+          readonly ok: true;
+          readonly artifacts: BuildArtifacts;
+          readonly fee: Awaited<ReturnType<typeof requiredFeeMode>>;
+          readonly devBuy: Awaited<ReturnType<typeof supportsAtomicDevBuy>>;
+        }
+      | { readonly ok: false; readonly problem: string }
+    > => {
+      const artifacts = await collectArtifacts();
+
+      const fee = await requiredFeeMode({
+        root: workspace!.root,
+        buildOutput: built.output,
+        hookContractName: hookContract,
+      });
+
+      if (fee.problem !== null) return { ok: false, problem: fee.problem };
+
+      const devBuy = await supportsAtomicDevBuy({
+        root: workspace!.root,
+        buildOutput: built.output,
+        hookContractName: hookContract,
+      });
+
+      try {
+        assembleManifest({
+          plan,
+          artifacts: artifacts.contracts,
+          environment: {
+            poolManager: probe.poolManager,
+            installer: probe.factory,
+            creator: PROBE_CREATOR,
+            feeReceiver: PROBE_CREATOR,
+            name: request.name,
+            symbol: request.symbol,
+            supplyTokens,
+          },
+          specificationHash: artifacts.specificationHash,
+          implementationHash: artifacts.implementationHash,
+          quoteAsset: NATIVE_QUOTE,
+          lpFee: fee.lpFee,
+          initialTick: PROBE_TICK,
+          feeReceiver: PROBE_CREATOR,
+          marketSalt: marketSaltFor(job.id),
+          deployerAddress: probe.deployer,
+        });
+      } catch (error) {
+        return {
+          ok: false,
+          problem:
+            error instanceof ManifestError
+              ? error.message
+              : error instanceof Error
+                ? error.message.slice(0, 300)
+                : "an unexpected failure",
+        };
+      }
+
+      return { ok: true, artifacts, fee, devBuy };
+    };
+
+    // A market that gets this far is correct: it compiled, its tests passed, the deep
+    // run passed and every gate cleared. If it cannot be launched, what is wrong is
+    // almost never what it does — it is the shape of something the launcher has to read
+    // before it opens a pool, and that is a small, safe edit.
+    //
+    // Until there was a loop here the stage had no repair at all, and a real EMBR build
+    // was discarded at this line after eleven minutes of correct work because its hook
+    // stated a fee requirement Agen supports inside a compound condition Agen could not
+    // read. One attempt would have saved it.
+    //
+    // Behaviour is re-proven rather than trusted. The repair is told not to change what
+    // the market does, and a repair that says so is not evidence: the tests are cheap —
+    // seconds — and they are the only thing that can tell the difference between a hook
+    // rewritten to be readable and a hook rewritten to be wrong.
+    let launchBuild = rebuilt;
+    let launchable = await proveLaunchable(launchBuild);
+    let deploymentAttempt = 0;
+    let lastSignature: string | null = null;
+
+    while (!launchable.ok && deploymentAttempt < budget.deploymentRepairs) {
+      const { problem } = launchable;
+      const signature = classify({
+        stage: Stage.DeploymentReady,
+        error: new Error(problem),
+      }).signature;
+
+      // Nothing changed between attempts, so another one spends a minute to arrive here
+      // again. Stop and say what is actually in the way.
+      if (signature === lastSignature) break;
+      lastSignature = signature;
+      deploymentAttempt += 1;
+
+      let repair: Repair;
+      try {
+        const output = await repairDeployability(provider, {
+          sources,
+          problem,
+          remedy: remedyBrief(recogniseAll([], [], [problem])),
+          attempt: deploymentAttempt,
+        });
+        repair = output.value;
+        job = remember(job, Stage.DeploymentReady, output);
+      } catch (error) {
+        return await fail(failureFor(error, Stage.DeploymentReady));
+      }
+
+      diagnostics = withRepair(diagnostics, {
+        attempt: deploymentAttempt,
+        at: now(),
+        kind: "compilation",
+        diagnosis: repair.diagnosis,
+        files: repair.files.map((file) => file.path),
+        gaveUp: repair.giveUp,
+      });
+      await flushDiagnostics();
+
+      if (repair.giveUp) break;
+
+      sources = mergeSources(sources, repair.files);
+      await workspace.write(repair.files);
+      job = { ...job, sources };
+
+      launchBuild = await forcedBuild();
+      if (!launchBuild.result.ok) {
+        return await fail({
+          code: FailureCode.CompilationUnrepairable,
+          stage: Stage.DeploymentReady,
+          detail: "A change made so this market could launch stopped it compiling.",
+          diagnostics: launchBuild.result.diagnostics,
+        });
+      }
+
+      const reproven = await runTests({ root: workspace.root, depth: "critical" });
+      diagnostics = withTestAttempt(
+        diagnostics,
+        testAttemptFrom(reproven, testAttempt + deploymentAttempt + 1, now()),
+      );
+      await flushDiagnostics();
+
+      if (!reproven.ok) {
+        return await fail({
+          code: FailureCode.TestsUnrepairable,
+          stage: Stage.DeploymentReady,
+          detail:
+            "A change made so this market could launch altered what it does, and its own " +
+            "tests no longer pass.",
+          failingTests: reproven.outcomes.filter((outcome) => !outcome.passed),
+        });
+      }
+
+      launchable = await proveLaunchable(launchBuild);
+    }
+
+    if (!launchable.ok) {
       return await fail({
         code: FailureCode.Undeployable,
         stage: Stage.DeploymentReady,
         detail:
           `This market compiled and passed its checks, but Agen cannot open a pool its own ` +
-          `rules would accept. ${fee.problem}`,
+          `rules would accept. ${launchable.problem}`,
       });
     }
 
-    const devBuy = await supportsAtomicDevBuy({
-      root: workspace.root,
-      buildOutput: rebuilt.output,
-      hookContractName: hookContract,
-    });
+    const { artifacts, fee, devBuy } = launchable;
+    const contracts = artifacts.contracts;
+    await workspace.writeJson(`${LAYOUT.artifacts}/build.json`, artifacts);
 
-    // The bundle is assembled here, in full, and thrown away. Everything it does is
-    // work that would otherwise happen for the first time when a creator pressed launch:
-    // every constructor argument placed from the compiled ABI, the hook mined onto an
-    // address carrying its permissions, the wiring encoded against predicted addresses,
-    // the token checked to sort above the quote asset. Any of those can fail on a market
-    // that compiled, tested and passed every gate — a real PULSE build asked for the id
-    // of the pool it was the hook of — and the only honest place to find out is here,
-    // where it is a failed build rather than a rejected transaction.
+    // The bundle was assembled in full inside `proveLaunchable`, and thrown away.
+    // Everything it did is work that would otherwise happen for the first time when a
+    // creator pressed launch: every constructor argument placed from the compiled ABI,
+    // the hook mined onto an address carrying its permissions, the wiring encoded
+    // against predicted addresses, the token checked to sort above the quote asset. Any
+    // of those can fail on a market that compiled, tested and passed every gate — a real
+    // PULSE build asked for the id of the pool it was the hook of — and the only honest
+    // place to find out is here, where it is a failed build rather than a rejected
+    // transaction.
     //
     // The bytes cannot be kept, because they are the bytes for one creator. See
     // `LaunchManifest`.
-    const supplyTokens = request.supplyTokens ?? DEFAULT_SUPPLY_TOKENS;
-
-    try {
-      assembleManifest({
-        plan,
-        artifacts: contracts,
-        environment: {
-          poolManager: probe.poolManager,
-          installer: probe.factory,
-          creator: PROBE_CREATOR,
-          // The probe's creator, because the real fee receiver is a launch-time choice
-          // and this assembly exists to prove the bundle can be built at all. It only
-          // has to be an address: a component that takes one is satisfiable whichever
-          // address the creator eventually names.
-          feeReceiver: PROBE_CREATOR,
-          name: request.name,
-          symbol: request.symbol,
-          supplyTokens,
-        },
-        specificationHash: artifacts.specificationHash,
-        implementationHash: artifacts.implementationHash,
-        quoteAsset: NATIVE_QUOTE,
-        lpFee: fee.lpFee,
-        initialTick: PROBE_TICK,
-        feeReceiver: PROBE_CREATOR,
-        marketSalt: marketSaltFor(job.id),
-        deployerAddress: probe.deployer,
-      });
-    } catch (error) {
-      return await fail({
-        code: FailureCode.Undeployable,
-        stage: Stage.DeploymentReady,
-        detail:
-          error instanceof ManifestError
-            ? `This market compiled and passed its checks, but it cannot be deployed as ` +
-              `generated. ${error.message}`
-            : `This market could not be assembled for deployment. ${
-                error instanceof Error ? error.message.slice(0, 300) : "an unexpected failure"
-              }`,
-      });
-    }
-
     const manifest: LaunchManifest = {
       version: 1,
       jobId: job.id,

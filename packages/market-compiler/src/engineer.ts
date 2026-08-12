@@ -2610,6 +2610,81 @@ export async function repairCompilation(
   };
 }
 
+/**
+ * Fix a market that compiles, passes and cannot be launched.
+ *
+ * This is the last thing standing between a green build and a pool, and until there was
+ * a repair for it the stage had none: the fee probe or the manifest said no and the
+ * build ended there, seven minutes of correct work discarded over the way a condition
+ * was written. A real EMBR build died exactly that way — the hook required a fixed fee,
+ * which Agen supports, and stated the requirement inside a compound condition, which
+ * Agen cannot read before it opens the pool.
+ *
+ * The instruction is narrower than the other repairs on purpose. Nothing here is a
+ * behaviour problem: the market does what the creator asked and the tests agree. What is
+ * wrong is the shape of something the launcher has to read, so a repair that alters the
+ * economics has broken the market to satisfy the tooling, which is the one outcome worse
+ * than the failure it was fixing.
+ */
+export async function repairDeployability(
+  provider: ModelProvider,
+  {
+    sources,
+    problem,
+    remedy,
+    attempt,
+    timeoutMs = STAGE_TIMEOUTS.repair,
+  }: {
+    readonly sources: readonly GeneratedSource[];
+    /** What the launcher could not do, in its own words. */
+    readonly problem: string;
+    /** The known fix, where this failure has been met before. */
+    readonly remedy: string | null;
+    readonly attempt: number;
+    readonly timeoutMs?: number;
+  },
+): Promise<StageOutput<Repair>> {
+  const output = await ask<RawRepair>(provider, {
+    stage: "deployment_repair",
+    instructions:
+      "These contracts compile and their tests pass. They cannot be deployed, because " +
+      "something Agen must read before it opens the pool is written in a form it cannot " +
+      "read, or asks for something the factory cannot supply.\n\n" +
+      "This is not a behaviour problem. The market does what its creator asked and the " +
+      "tests prove it. Change the smallest thing that makes the market readable to the " +
+      "launcher and leave its economics exactly as they are: the same fees, the same " +
+      "rules, the same state, the same events. A repair that alters what the market does " +
+      "in order to make it deployable has broken it.\n\n" +
+      "Return the complete corrected files. If the market genuinely cannot be launched " +
+      "without changing what it does, do not change what it does — say so in the " +
+      "diagnosis and set giveUp, so a person can be asked.",
+    input: [
+      `This is repair attempt ${String(attempt)}.`,
+      "",
+      "What the launcher could not do:",
+      problem,
+      ...(remedy === null ? [] : ["", remedy]),
+      "",
+      "The market's contracts:",
+      sources.map((source) => `--- ${source.path} ---\n${source.content}`).join("\n\n"),
+    ].join("\n"),
+    schemaName: "deployment_repair",
+    schema: repairSchema,
+    timeoutMs,
+    effort: STAGE_EFFORT.repair,
+    role: STAGE_ROLES.repair,
+  });
+
+  return {
+    ...output,
+    value: {
+      diagnosis: output.value.diagnosis,
+      files: output.value.files.map((file) => ({ path: file.path, content: file.content })),
+      giveUp: output.value.giveUp,
+    },
+  };
+}
+
 /** Fix a build whose tests failed. */
 export async function repairTests(
   provider: ModelProvider,

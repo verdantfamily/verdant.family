@@ -402,6 +402,11 @@ describe("a build that goes well", () => {
       planAnswer(),
       sources(UNDEPLOYABLE_HOOK),
       tests(UNDEPLOYABLE_TESTS),
+      // A market that reaches this stage is offered a chance to be made launchable
+      // before it is given up on, because the usual cause is the shape of something
+      // rather than anything the market does. This one declines, which is the honest
+      // answer for an argument no deployment can ever supply.
+      { diagnosis: "the hook needs the id of the pool it is the hook of", files: [], giveUp: true },
     ]);
 
     const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
@@ -442,6 +447,7 @@ describe("a build that goes well", () => {
       planAnswer(),
       sources(UNREADABLE_FEE_HOOK),
       tests(GOOD_TESTS),
+      { diagnosis: "the required fee is genuinely not knowable statically", files: [], giveUp: true },
     ]);
 
     const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
@@ -450,6 +456,37 @@ describe("a build that goes well", () => {
     expect(job.failure?.code).toBe(FailureCode.Undeployable);
     expect(job.failure?.detail).toMatch(/cannot open a pool its own rules would accept/);
     expect(job.manifest).toBeNull();
+  });
+
+  it("rewrites a fee requirement it cannot read, rather than discarding the market", async () => {
+    // The failure that ended a real EMBR build after eleven minutes of correct work: a
+    // hook requiring a fixed fee, which Agen supports, stating the requirement in a form
+    // Agen cannot read before it opens the pool. Nothing about the market was wrong, and
+    // the stage had no repair, so it was thrown away.
+    //
+    // The repair returns the same market with the requirement stated plainly, and the
+    // build finishes. The tests are re-run against the rewritten hook before it is
+    // accepted — see the deployment loop — so this also proves a repair that preserved
+    // behaviour is distinguishable from one that did not.
+    const { options } = pipeline([
+      ...interpretationAnswers(),
+      matchAnswer(),
+      planAnswer(),
+      sources(UNREADABLE_FEE_HOOK),
+      tests(GOOD_TESTS),
+      {
+        diagnosis: "stated the fee requirement as a plain guard",
+        files: [{ path: "contracts/StreakHook.sol", content: ZERO_FEE_HOOK }],
+        giveUp: false,
+      },
+    ]);
+
+    const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
+
+    expect(job.stage).toBe(Stage.DeploymentReady);
+    expect(job.failure).toBeNull();
+    expect(job.manifest?.feeMode).toBe("zero");
+    expect(job.manifest?.lpFee).toBe(0);
   });
 
   it("never claims a simulation it did not run", async () => {

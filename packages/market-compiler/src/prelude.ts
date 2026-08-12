@@ -618,6 +618,7 @@ import {Hooks} from "v4-core/src/libraries/Hooks.sol";
 import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
+import {IERC20Minimal} from "v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {PoolManager} from "v4-core/src/PoolManager.sol";
 import {PoolModifyLiquidityTest} from "v4-core/src/test/PoolModifyLiquidityTest.sol";
 import {PoolSwapTest} from "v4-core/src/test/PoolSwapTest.sol";
@@ -673,7 +674,15 @@ abstract contract AgenTest is Test {
     /// @notice Put liquidity in a pool so it can be traded against.
     /// @dev A pool with no liquidity fills nothing, so a swap against one either reverts
     /// or moves zero and every assertion about a fee reads zero.
+    /// @dev The approvals are done here rather than asked for. A suite that forgot them
+    /// failed in setUp with InsufficientAllowance(0, ...) before a single rule ran, and
+    /// three repair rounds spent themselves on a market that was never the problem. There
+    /// is no case where a test wants this call to fail for want of an allowance it could
+    /// have granted itself, so the harness grants it.
     function addLiquidity(PoolKey memory key, int256 amount) internal {
+        _allowRouters(key.currency0);
+        _allowRouters(key.currency1);
+
         liquidityRouter.modifyLiquidity{value: key.currency0.isAddressZero() ? 100 ether : 0}(
             key,
             ModifyLiquidityParams({
@@ -708,6 +717,28 @@ abstract contract AgenTest is Test {
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
             ""
         );
+    }
+
+    /// @notice Let a trader spend a currency through the swap router.
+    /// @dev For a swap made by somebody other than the test contract. The test contract's
+    /// own allowances are granted by addLiquidity; this is the pranked case, and it is a
+    /// separate call rather than something swapExactIn does because an approval inside
+    /// swapExactIn would spend a prank meant for the swap. The test would then approve as
+    /// the trader and swap as itself, and pass while proving nothing about the trader.
+    function approveSwapRouter(address trader, Currency currency) internal {
+        if (currency.isAddressZero()) return;
+        vm.prank(trader);
+        IERC20Minimal(Currency.unwrap(currency)).approve(address(swapRouter), type(uint256).max);
+    }
+
+    /// @dev Both routers, because a suite that adds liquidity almost always swaps next,
+    /// and an allowance the test contract could always have granted itself is not a fact
+    /// worth failing over.
+    function _allowRouters(Currency currency) private {
+        if (currency.isAddressZero()) return;
+        IERC20Minimal token = IERC20Minimal(Currency.unwrap(currency));
+        token.approve(address(liquidityRouter), type(uint256).max);
+        token.approve(address(swapRouter), type(uint256).max);
     }
 
     /// @dev Tests receive ether back from the routers when a swap returns some.

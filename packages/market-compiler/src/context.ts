@@ -339,6 +339,17 @@ Currency.wrap(address(token)), IHooks(address(hook)).
       A pool with no liquidity fills nothing, so a suite that skips addLiquidity sees
       every fee come back zero and concludes the mechanic does not work.
 
+      addLiquidity grants the test contract's own allowances to both routers, so do not
+      write approve() for the test contract — it is already done, in setUp, before you
+      could need it.
+
+  approveSwapRouter(address trader, Currency currency)
+      The allowance for a swap made by somebody else. A test that does
+      vm.prank(trader); swapExactIn(...) still needs the trader to have approved the
+      router, and the trader is not the test contract. Call this first, then prank and
+      swap. Do not hand-roll it as vm.prank(trader); token.approve(...) immediately
+      before another prank — that is two pranks in a row and fails.
+
   agenPoolKey(Currency quote, Currency token, IHooks hook, int24 tickSpacing) -> PoolKey
       Built in Agen's order, quote below token, with the dynamic-fee flag set.
 

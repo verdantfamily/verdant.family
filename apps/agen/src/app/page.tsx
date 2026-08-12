@@ -1,75 +1,116 @@
 import Link from "next/link";
 
-import { Hero } from "./hero";
 import { buildStoreSource } from "./lib/markets";
-import { MarketRow, RowHeadings } from "./markets/row";
-import { MarketTabs } from "./markets/tabs";
+import { MarketCard } from "./markets/card";
 import { Nav } from "./nav";
-import { Ticker } from "./ticker";
+import { Search } from "./search";
 
 export const dynamic = "force-dynamic";
 
 /**
- * The front page.
+ * Explore.
  *
- * It used to be a teaser: one sentence, a mark, and a page quietly watching whether
- * anybody was still in front of it. That was the right page for a product with nothing
- * behind it, and the wrong one from the moment markets started coming out the other end.
+ * The front page is a list of tokens and a way to find one. That is the whole of it.
  *
- * So: the prompt first, because writing one is the entire product, and then evidence that
- * other people's have worked. Everything below the fold is read from finished builds. The
- * shelves that need trading data to exist do not appear at all rather than appearing
- * empty — a section headed "Trending" over a blank strip tells a visitor the product is
- * dead, when the truth is that nothing has traded yet.
+ * It used to open with the prompt box, on the reasoning that describing a market is the
+ * product — which is true, and still the wrong thing to put here. Somebody arriving at a
+ * venue is asking whether anything is happening, not whether they can create something;
+ * a creation form is what you look for once you already trust the place. The prompt now
+ * lives on `/launch`, one click away and unmissable in the navigation.
+ *
+ * ## Trending is empty and says so
+ *
+ * Ranking by activity needs activity. Nothing is deployed, so the section states that
+ * rather than either disappearing or quietly filling with the newest tokens under a
+ * label that would then be false.
  */
-export default async function Home() {
-  const markets = await buildStoreSource().list();
+export default async function Home({
+  searchParams,
+}: {
+  readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const parameters = await searchParams;
+  const raw = parameters["q"];
+  const query = (Array.isArray(raw) ? raw[0] : raw)?.trim() ?? "";
+
+  const all = await buildStoreSource().list();
+  const now = Math.floor(Date.now() / 1000);
+
+  const needle = query.toLowerCase();
+  const markets =
+    needle.length === 0
+      ? all
+      : all.filter((market) =>
+          [market.name, market.symbol, market.mechanics.headline]
+            .join(" ")
+            .toLowerCase()
+            .includes(needle),
+        );
 
   const newest = [...markets].sort((left, right) => right.createdAt - left.createdAt);
+  const trading = newest.filter((market) => market.trading !== undefined);
 
   return (
     <>
-      <div className="canvas" aria-hidden="true">
-        <span className="mass mass-a" />
-        <span className="mass mass-b" />
-      </div>
-      <div className="grain" aria-hidden="true" />
-
-      <Nav />
-      <Ticker markets={newest} />
+      <Nav active="explore" />
 
       <main className="page">
-        <Hero />
+        <section className="explore-head">
+          <h1>Explore evolving tokens.</h1>
+          <p className="explore-lede">
+            Discover tokens with custom onchain behavior, powered by programmable Uniswap
+            v4 hooks.
+          </p>
+          <Search initial={query} />
+        </section>
 
         {markets.length === 0 ? (
-          <section className="shelf">
-            <header className="shelf-head">
-              <h2>no markets yet</h2>
-            </header>
-            <p className="shelf-note">
-              Nothing has been built. The first market to come through the launch flow
-              appears here, with the rules its creator described.
-            </p>
-          </section>
+          <p className="shelf-empty">
+            {query.length === 0
+              ? "No token has been built yet. The first one through the launch flow appears here, with the rules its creator described."
+              : `Nothing matches “${query}”.`}
+          </p>
         ) : (
           <>
-            <MarketTabs markets={markets} />
+            {query.length === 0 ? (
+              <section className="shelf" id="trending">
+                <header className="shelf-head">
+                  <h2>Trending</h2>
+                  {trading.length > 0 ? <span className="shelf-hint">by 24h volume</span> : null}
+                </header>
 
-            <section className="shelf" id="recent">
+                {trading.length === 0 ? (
+                  <p className="shelf-empty">
+                    Nothing is trading yet, so there is nothing to rank. The first token to
+                    launch appears here.
+                  </p>
+                ) : (
+                  <div className="token-grid">
+                    {trading.slice(0, 8).map((market) => (
+                      <MarketCard market={market} now={now} key={market.id} />
+                    ))}
+                  </div>
+                )}
+              </section>
+            ) : null}
+
+            <section className="shelf" id="new">
               <header className="shelf-head">
-                <h2>recent launches</h2>
-                <span className="shelf-note-inline">{String(markets.length)} built</span>
-                <Link className="shelf-more" href="/markets">
-                  all markets →
-                </Link>
+                <h2>{query.length === 0 ? "New launches" : `Matching “${query}”`}</h2>
+                <span className="shelf-hint">{String(markets.length)} built</span>
               </header>
 
-              <div className="rows">
-                <RowHeadings />
-                {newest.slice(0, 10).map((market) => (
-                  <MarketRow market={market} key={market.id} />
+              <div className="token-grid">
+                {newest.slice(0, 16).map((market) => (
+                  <MarketCard market={market} now={now} key={market.id} />
                 ))}
               </div>
+
+              {newest.length > 16 ? (
+                <Link className="shelf-more" href="/markets">
+                  all tokens →
+                </Link>
+              ) : null}
             </section>
           </>
         )}
@@ -77,7 +118,7 @@ export default async function Home() {
 
       <footer className="foot">
         <span>agen</span>
-        <span>markets with rules their creators wrote in plain english</span>
+        <span>tokens whose markets have their own rules</span>
         <a href="https://x.com/agendotspace" target="_blank" rel="noreferrer">
           x
         </a>

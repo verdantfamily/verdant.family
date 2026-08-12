@@ -23,7 +23,16 @@ import { abi } from "@verdant/sdk";
 import { createConfig, factory } from "ponder";
 import { getAbiItem } from "viem";
 
-import { AGENTS, CHAIN_ID, FACTORY, HOOK, POOL_MANAGER, RPC_URL, START_BLOCK } from "./src/addresses";
+import {
+  AGEN,
+  AGENTS,
+  CHAIN_ID,
+  FACTORY,
+  HOOK,
+  POOL_MANAGER,
+  RPC_URL,
+  START_BLOCK,
+} from "./src/addresses";
 
 /**
  * A market's own contracts are created by the factory, so their addresses are only
@@ -177,6 +186,26 @@ export default createConfig({
       address: POOL_MANAGER,
       startBlock: START_BLOCK,
       filter: [{ event: "Initialize", args: {} }, { event: "Swap", args: {} }],
+    },
+
+    /**
+     * Agen's factory, which launches generated markets.
+     *
+     * One event carries everything: `MarketDeployed` names the token, the hook, the
+     * pool, the locker and the locked supply, in the transaction the market first
+     * appears in. Everything else about the market is read from the registry at that
+     * block, which is cheaper than following a second stream to learn the same facts.
+     *
+     * Registered whether or not it is deployed, with the zero address standing in.
+     * `src/addresses.ts` explains why: `ponder codegen` derives the valid event names
+     * from this configuration, so a conditionally-registered contract makes its own
+     * handler a type error on every build predating the deployment.
+     */
+    AgenFactory: {
+      abi: abi.agenFactoryAbi,
+      chain: "robinhood",
+      address: AGEN.factory,
+      startBlock: AGEN.startBlock,
     },
 
     VerdantToken: {

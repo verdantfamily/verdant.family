@@ -62,7 +62,7 @@ import {
 import { abi } from "@verdant/sdk";
 import { erc20Abi, type Address } from "viem";
 
-import { HOOK_LOWER } from "./addresses";
+import { indexAgenSwap } from "./agen";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
@@ -106,14 +106,29 @@ function logId(event: {
  * decoded one are two spellings of the same thing.
  */
 ponder.on("PoolManager:Initialize", async ({ event, context }) => {
-  if (event.args.hooks.toLowerCase() !== HOOK_LOWER) return;
-
+  /**
+   * Every pool, not only Verdant's.
+   *
+   * This used to filter on Verdant's hook, which was right when Verdant was the only
+   * thing being indexed: one hook, known in advance, and a pool naming it is a Verdant
+   * market by construction. Agen breaks that test rather than extending it — every
+   * generated market mines its own hook, so there is no address to compare against
+   * until the launch has already happened, and the launch's own event arrives *after*
+   * this one in the same transaction.
+   *
+   * So the filter moves downstream: this records the opening of any pool, and a row
+   * only becomes a market when a factory event claims it. The rows nobody claims are
+   * five columns each and are never read.
+   */
   await context.db.insert(poolInit).values({
     id: event.args.id,
     sqrtPriceX96: event.args.sqrtPriceX96,
     tick: event.args.tick,
     timestamp: Number(event.block.timestamp),
     blockNumber: event.block.number,
+    fee: event.args.fee,
+    tickSpacing: event.args.tickSpacing,
+    hooks: event.args.hooks,
   });
 });
 
@@ -304,7 +319,15 @@ ponder.on("VerdantFactory:MarketCreated", async ({ event, context }) => {
 
 ponder.on("PoolManager:Swap", async ({ event, context }) => {
   const existing = await context.db.find(market, { id: event.args.id });
-  if (existing === null) return; // Not a Verdant pool.
+
+  if (existing === null) {
+    // Not a Verdant pool. It may still be one of Agen's, which are indexed into their
+    // own tables — v4 emits every pool's swaps from one contract and Ponder allows one
+    // handler per event, so the two systems share this entry point. A pool belonging
+    // to neither is somebody else's and is dropped.
+    await indexAgenSwap({ event, context });
+    return;
+  }
 
   // The deltas are the *swapper's*, not the pool's, so a negative amount0 means the
   // trader paid the quote asset: a buy. currency0 is the market's quote asset —

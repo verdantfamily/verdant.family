@@ -48,6 +48,19 @@ export const poolInit = onchainTable("pool_init", (t) => ({
   tick: t.integer().notNull(),
   timestamp: t.integer().notNull(),
   blockNumber: t.bigint().notNull(),
+
+  /**
+   * The rest of the pool key, which is only ever announced here.
+   *
+   * Verdant does not need these — every one of them is a constant for its markets —
+   * but a generated market's fee is whatever its build chose and its hook is unique to
+   * it, and the registry records the pool id without the key that hashes to it. So
+   * this event is the only place an Agen pool's fee can be read from, and an interface
+   * that cannot read it cannot rebuild the key to quote a trade.
+   */
+  fee: t.integer().notNull(),
+  tickSpacing: t.integer().notNull(),
+  hooks: t.hex().notNull(),
 }));
 
 /**
@@ -740,6 +753,165 @@ export interface AgentActivityData {
   readonly quoteAmount?: string;
   readonly tokenAmount?: string;
 }
+
+// --- Agen's generated markets ---------------------------------------------
+//
+// A separate table from `market`, and the separation is the same one the contracts
+// make. A Verdant market has a fixed shape — one token, one model, one fee schedule,
+// one splitter — and half the columns above describe it. A generated market has no
+// fixed shape: it is however many contracts a mechanic needs, its fee is whatever its
+// own hook decides per swap, and it has no schedule to read. Widening `market` to hold
+// both would mean a dozen nullable columns and a `kind` discriminator on the table the
+// whole feed is built from, for two things that share only a pool.
+//
+// What they do share is Uniswap, so the swap side is genuinely the same shape and is
+// stored the same way one table over.
+
+/**
+ * One generated market, keyed by pool id.
+ *
+ * The pool id for the same reason `market` uses it: it is what v4 and the trade path
+ * address, and it is derivable off chain from the pool key. `AgenMarketRegistry`
+ * indexes by token, pool and hook, so every lookup an interface makes has an on-chain
+ * counterpart if this table is ever behind.
+ */
+export const agenMarket = onchainTable(
+  "agen_market",
+  (t) => ({
+    /** The v4 pool id: `keccak256(abi.encode(poolKey))`. */
+    id: t.hex().primaryKey(),
+
+    /** The registry's index, which is also creation order. */
+    marketIndex: t.integer().notNull(),
+    token: t.hex().notNull(),
+    /** The generated hook. Unique per market, unlike Verdant's one shared hook. */
+    hook: t.hex().notNull(),
+    creator: t.hex().notNull(),
+    /** `currency0`. The zero address is ether, which is what every launch opens against. */
+    quoteAsset: t.hex().notNull(),
+
+    /**
+     * The pool's fee field: the dynamic flag, or a fixed rate the hook demanded.
+     *
+     * Recorded from the PoolManager's own `Initialize`, which is the only place it
+     * appears — the registry stores the pool id but not the key that hashes to it. It
+     * is what an interface needs to rebuild the pool key and quote a trade.
+     */
+    fee: t.integer().notNull(),
+    tickSpacing: t.integer().notNull(),
+
+    // --- what the market was built from --------------------------------------
+    // Both hashes are in the registry's record. Together they let anyone check that
+    // the contract they are trading against is the one whose rules they were shown.
+    specificationHash: t.hex().notNull(),
+    implementationHash: t.hex().notNull(),
+    metadataURI: t.text().notNull(),
+
+    // --- the token's own account of itself -----------------------------------
+    name: t.text().notNull(),
+    symbol: t.text().notNull(),
+    decimals: t.integer().notNull(),
+    totalSupply: t.bigint().notNull(),
+
+    // --- the launch ----------------------------------------------------------
+    /** Holds the three locked positions forever. Only `collect()` moves anything. */
+    locker: t.hex().notNull(),
+    /** The first of the three position NFTs; the others are this plus one and two. */
+    firstPositionId: t.bigint().notNull(),
+    /** How much of the supply went into the locked bands. */
+    supplyLocked: t.bigint().notNull(),
+
+    createdAt: t.integer().notNull(),
+    createdAtBlock: t.bigint().notNull(),
+    createdTx: t.hex().notNull(),
+
+    // --- the pool, as last seen ---------------------------------------------
+    initialSqrtPriceX96: t.bigint().notNull(),
+    initialTick: t.integer().notNull(),
+    sqrtPriceX96: t.bigint().notNull(),
+    tick: t.integer().notNull(),
+    liquidity: t.bigint().notNull(),
+
+    // --- running totals ------------------------------------------------------
+    swapCount: t.integer().notNull(),
+    volumeQuote: t.bigint().notNull(),
+    volumeToken: t.bigint().notNull(),
+    lastSwapAt: t.integer(),
+  }),
+  (table) => ({
+    createdAtIdx: index().on(table.createdAt),
+    creatorIdx: index().on(table.creator),
+    tokenIdx: index().on(table.token),
+    hookIdx: index().on(table.hook),
+  }),
+);
+
+/**
+ * Every swap in a generated market's pool.
+ *
+ * The same columns as `swap`, and deliberately not the same table: that one's rows
+ * join `market`, and a row pointing at a market that does not exist would break the
+ * relation for every consumer of the Verdant feed. `feePpm` is what the pool reported
+ * charging, which for a dynamic-fee market is the hook's per-swap override — the whole
+ * point of a generated mechanic, and the number worth keeping per trade.
+ */
+export const agenSwap = onchainTable(
+  "agen_swap",
+  (t) => ({
+    id: t.text().primaryKey(),
+    poolId: t.hex().notNull(),
+    /** Whoever called the PoolManager. Usually a router, not the trader. */
+    sender: t.hex().notNull(),
+
+    amount0: t.bigint().notNull(),
+    amount1: t.bigint().notNull(),
+    /** True when the quote asset went in and tokens came out. */
+    buy: t.boolean().notNull(),
+    quoteAmount: t.bigint().notNull(),
+    tokenAmount: t.bigint().notNull(),
+
+    sqrtPriceX96: t.bigint().notNull(),
+    liquidity: t.bigint().notNull(),
+    tick: t.integer().notNull(),
+    /** Hundredths of a basis point, as charged. 10 000 is 1%. */
+    feePpm: t.integer().notNull(),
+
+    timestamp: t.integer().notNull(),
+    blockNumber: t.bigint().notNull(),
+    logIndex: t.integer().notNull(),
+    transactionHash: t.hex().notNull(),
+  }),
+  (table) => ({
+    poolIdx: index().on(table.poolId, table.timestamp),
+    sequenceIdx: index().on(table.poolId, table.blockNumber, table.logIndex),
+  }),
+);
+
+/** Every contract a generated market is made of, so an interface can list them. */
+export const agenComponent = onchainTable(
+  "agen_component",
+  (t) => ({
+    /** The contract's own address, which is unique across markets. */
+    id: t.hex().primaryKey(),
+    poolId: t.hex().notNull(),
+    /** `AgenMarketRegistry`'s role constant. 0 token, 1 hook, 6 locker, 255 other. */
+    role: t.integer().notNull(),
+    /** keccak256 of the deployed runtime code, so the code can be checked later. */
+    codeHash: t.hex().notNull(),
+  }),
+  (table) => ({
+    poolIdx: index().on(table.poolId),
+  }),
+);
+
+export const agenMarketRelations = relations(agenMarket, ({ many }) => ({
+  swaps: many(agenSwap),
+  components: many(agenComponent),
+}));
+
+export const agenSwapRelations = relations(agenSwap, ({ one }) => ({
+  market: one(agenMarket, { fields: [agenSwap.poolId], references: [agenMarket.id] }),
+}));
 
 export const marketRelations = relations(market, ({ many, one }) => ({
   swaps: many(swap),

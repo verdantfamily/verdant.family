@@ -69,6 +69,42 @@
     }
   },
   "addons": {
+    "agenFactoryOrigin": {
+      "address": "0xC0297B2d987793dE96f568C169b1ff90C226BE27",
+      "runtimeCodeHash": "0x84673e304bce87dea1cce9b7f5c11dec9221af62585048f8b4ec0a98de9c2744",
+      "runtimeCodeSize": 1070,
+      "transactionHash": "0x93d2ccb2ad63103ffabbee922f3f78d5c1945d7890770d2d99a5182b4608313a",
+      "explorer": "https://robinhoodchain.blockscout.com/address/0xC0297B2d987793dE96f568C169b1ff90C226BE27",
+      "enabled": true,
+      "note": "The anchor Agen's factory address was read from rather than predicted. Its single creation is spent; it does nothing else and nothing calls it again."
+    },
+    "agenDeployer": {
+      "address": "0x4C812526bF606927a887111299f94e35AE5bd77E",
+      "runtimeCodeHash": "0x3f94935b9559420efcd6b015745865c021957446bb91190d40e1626397c04494",
+      "runtimeCodeSize": 1209,
+      "transactionHash": "0xd9e042905f339e11c7329e1a7dbcc6f642845db5c33c97658c538065ad910c2c",
+      "explorer": "https://robinhoodchain.blockscout.com/address/0x4C812526bF606927a887111299f94e35AE5bd77E",
+      "enabled": true,
+      "note": "Performs every generated market's CREATE2. Refuses every caller but AgenFactory."
+    },
+    "agenMarketRegistry": {
+      "address": "0x3AE1a797750ed9988ea7C2348534519E44Ed0791",
+      "runtimeCodeHash": "0x6cc05cca6f92b8a3a0ffb0c700b75e5af576b49e7911e3e1cf68d460cf58a0a8",
+      "runtimeCodeSize": 5918,
+      "transactionHash": "0xfd7a6dd5c9357c441f5de028f76838b90ec6594f34751f98fa950b337dc21de2",
+      "explorer": "https://robinhoodchain.blockscout.com/address/0x3AE1a797750ed9988ea7C2348534519E44Ed0791",
+      "enabled": true,
+      "note": "Append-only, ownerless record of every generated market. Writable by AgenFactory alone."
+    },
+    "agenFactory": {
+      "address": "0xb0fD1387ae751A377dEC0DF46b643B634eE46acc",
+      "runtimeCodeHash": "0xf01078d09ef6609f489748b99b6d832a612782d737f5c22d1b7e5d7985615e45",
+      "runtimeCodeSize": 19026,
+      "transactionHash": "0x11e5efacec5cbea938dc5de0ee1d922b33cc326fd9e42a65bd6207876f9edaea",
+      "explorer": "https://robinhoodchain.blockscout.com/address/0xb0fD1387ae751A377dEC0DF46b643B634eE46acc",
+      "enabled": true,
+      "note": "Agen's launch layer, broadcast 2026-08-12 in blocks 34794809-34794810 from operator 0x1f23c28F93aE48E6346DD05Ca66ba5e2213b00b8 for 6,143,317 gas. An addon rather than part of the deployment above because the two share a PoolManager and nothing else: Agen names nothing in Verdant's set and nothing in it names Agen. VerifyAgen.s.sol passed against these with no warnings before they were recorded. The transaction hash is a call to the anchor, which is what created the factory."
+    },
     "feeForwarderFactory": {
       "address": "0x266DEbCE6d33a4b84C140541bC142c7C8b46ae63",
       "runtimeCodeHash": "0x09b98c5bde60b3e942e4d7a4d4b570ea25bc9a32c49bcee04841542603e2bb9b",

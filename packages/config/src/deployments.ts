@@ -114,6 +114,33 @@ export interface VerdantAgentLayer {
   readonly deployedAtBlock: number;
 }
 
+/**
+ * Agen's launch layer, which shares a PoolManager with Verdant and nothing else.
+ *
+ * One object rather than three nullable fields, for the reason the agent layer above
+ * is one: the three are a single broadcast. `AgenDeployer` and `AgenMarketRegistry`
+ * each hold the factory in an immutable and the factory's constructor checks that both
+ * name it back, so a build holding two addresses from one deployment and one from
+ * another describes something that cannot exist on chain.
+ *
+ * An addon rather than part of `VerdantDeployment` because the two systems are
+ * genuinely separate: Verdant's factory launches markets whose shape is fixed at its
+ * own construction, Agen's launches however many contracts a generated mechanic needs,
+ * and neither names the other. Deploying or replacing one cannot disturb the other.
+ */
+export interface AgenDeployment {
+  /** The anchor the factory's address was derived from. Deploy-time only. */
+  readonly factoryOrigin: `0x${string}`;
+  /** Performs every market's CREATE2, for this factory only. */
+  readonly deployer: `0x${string}`;
+  /** The append-only record of every generated market. Writable by the factory only. */
+  readonly registry: `0x${string}`;
+  /** The one contract a creator's wallet ever calls. */
+  readonly factory: `0x${string}`;
+  /** The block the factory was created in, for indexers to start from. */
+  readonly deployedAtBlock: number;
+}
+
 export interface VerdantAddons {
   /**
    * The Agen agent layer, or `null` where it has not been deployed.
@@ -133,6 +160,17 @@ export interface VerdantAddons {
    * who pushes the button and nothing about who is owed what.
    */
   readonly feeForwarderFactory: `0x${string}` | null;
+
+  /**
+   * Agen's launch layer, or `null` where it has not been broadcast.
+   *
+   * `null` must read as "this build cannot launch or index generated markets". It is
+   * what the interface checks before offering a launch button and what the indexer
+   * checks before watching a factory, and in both places substituting an address from
+   * elsewhere would be worse than doing nothing: a market launched through a factory
+   * on another chain is a market launched into nothing.
+   */
+  readonly agen: AgenDeployment | null;
 }
 
 export const ADDONS = {
@@ -159,8 +197,38 @@ export const ADDONS = {
   // and until it is set the indexer declines to watch agent contracts and the
   // interface has no agent surface — which is the correct behaviour for a chain where
   // no agent exists, rather than an empty list that implies one could.
-  [ROBINHOOD_MAINNET_ID]: { agents: null, feeForwarderFactory: null },
-  [ROBINHOOD_TESTNET_ID]: { agents: null, feeForwarderFactory: null },
+  //
+  // `agen` is null until `scripts/deploy-agen.sh --broadcast` has run against a chain.
+  // Filling it in is the last step of that deployment and the switch that turns the
+  // launch button on: the interface refuses to build a transaction without these three
+  // addresses, and the indexer refuses to watch a factory it has not been given.
+  //
+  // Broadcast to 4663 on 2026-08-12, blocks 34,794,809 to 34,794,810, from operator
+  // 0x1f23c28F93aE48E6346DD05Ca66ba5e2213b00b8. 6,143,317 gas.
+  //
+  // `VerifyAgen.s.sol` was run against these before they were recorded and passed with
+  // no warnings: the deployer and the registry each name this factory, the factory
+  // names both of them, both Uniswap addresses are the ones on this chain, the anchor's
+  // single creation is spent, and all three runtime code sizes match this build.
+  //
+  // Creation transactions, in order:
+  //   FactoryOrigin      0x93d2ccb2ad63103ffabbee922f3f78d5c1945d7890770d2d99a5182b4608313a
+  //   AgenDeployer       0xd9e042905f339e11c7329e1a7dbcc6f642845db5c33c97658c538065ad910c2c
+  //   AgenMarketRegistry 0xfd7a6dd5c9357c441f5de028f76838b90ec6594f34751f98fa950b337dc21de2
+  //   AgenFactory        0x11e5efacec5cbea938dc5de0ee1d922b33cc326fd9e42a65bd6207876f9edaea
+  //     (through the anchor, which is why the transaction is a call to FactoryOrigin)
+  [ROBINHOOD_MAINNET_ID]: {
+    agents: null,
+    feeForwarderFactory: null,
+    agen: {
+      factoryOrigin: "0xC0297B2d987793dE96f568C169b1ff90C226BE27",
+      deployer: "0x4C812526bF606927a887111299f94e35AE5bd77E",
+      registry: "0x3AE1a797750ed9988ea7C2348534519E44Ed0791",
+      factory: "0xb0fD1387ae751A377dEC0DF46b643B634eE46acc",
+      deployedAtBlock: 34_794_810,
+    },
+  },
+  [ROBINHOOD_TESTNET_ID]: { agents: null, feeForwarderFactory: null, agen: null },
 } as const satisfies Record<VerdantChainId, VerdantAddons>;
 
 /**
@@ -176,6 +244,17 @@ export function agentsFor(chainId: VerdantChainId): VerdantAgentLayer | null {
 
 export function addonsFor(chainId: VerdantChainId): VerdantAddons {
   return ADDONS[chainId];
+}
+
+/**
+ * Agen's launch layer for a chain, or `null` where it is not deployed.
+ *
+ * The same shape of accessor as `agentsFor`, and the same reason: one call site per
+ * consumer decides what to do about a chain where generated markets cannot be
+ * launched, instead of a null flowing onward into a transaction.
+ */
+export function agenFor(chainId: VerdantChainId): AgenDeployment | null {
+  return ADDONS[chainId].agen;
 }
 
 /**

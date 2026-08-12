@@ -41,7 +41,18 @@ const DESCRIPTION =
  * README — this value is compiled into the markup, so pointing the domain at an older
  * deployment does not update it.
  */
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://agen.space";
+const SITE_URL = readSiteUrl();
+
+/**
+ * Empty is absent, and the distinction is load-bearing here rather than tidy: the
+ * container build declares this as a build argument so it can be set, which means an
+ * image built without one carries the variable as `""`. Under `??` that is a value, and
+ * `new URL("")` throws — a deploy that fails in `next build` on a line about link cards.
+ */
+function readSiteUrl(): string {
+  const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  return configured === undefined || configured === "" ? "https://agen.space" : configured;
+}
 
 /**
  * The filename carries a version because X, Slack and iMessage all cache a card against
@@ -89,16 +100,26 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  // Black, so the phone's own chrome continues the page instead of framing it.
-  themeColor: "#000000",
-  colorScheme: "dark",
+  // The grey the page sits on, so the phone's own chrome continues it rather than
+  // framing the white card with a black band.
+  themeColor: "#e8e8e8",
+  colorScheme: "light",
 };
 
+/**
+ * One white card, on grey.
+ *
+ * The shell is here rather than in each page because it is the product's frame: the
+ * navigation and the content are inside the same sheet of white, and a wrapper repeated
+ * in five page files is a wrapper that will eventually differ in one of them.
+ */
 export default function RootLayout({ children }: { readonly children: React.ReactNode }) {
   return (
     <html lang="en" className={fallback.variable}>
       <body>
-        <Providers>{children}</Providers>
+        <Providers>
+          <div className="shell">{children}</div>
+        </Providers>
       </body>
     </html>
   );

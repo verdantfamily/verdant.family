@@ -207,6 +207,10 @@ export async function prepareLaunch(request: LaunchRequest): Promise<PreparedLau
         poolManager: EXTERNAL.poolManager,
         installer: AGEN_ADDRESSES.addresses.factory,
         creator,
+        // The creator's choice, and a real one: a component that takes a fee receiver
+        // holds it in an immutable, so this is the address that market pays for as long
+        // as it trades. It defaults to the creator's wallet on the launch screen.
+        feeReceiver,
         name: job.name,
         symbol: job.symbol,
         supplyTokens: job.manifest.supplyTokens,

@@ -27,6 +27,7 @@ import { quotePerToken } from "@verdant/ui";
 import { Hono } from "hono";
 import { and, count, desc, eq, gt, gte, max, min, sql, sum } from "ponder";
 
+import { agenRoutes } from "./agen";
 import { agentForMarket, agentRoutes } from "./agents";
 
 const app = new Hono();
@@ -619,6 +620,18 @@ app.get("/markets/:id/fees", async (c) => {
 app.route(
   "/",
   agentRoutes({ chainNow, bounded, offsetOf, defaultLimit: DEFAULT_LIMIT, maxLimit: MAX_LIMIT }),
+);
+
+/**
+ * Agen's markets, under their own prefix.
+ *
+ * A prefix rather than the same paths, because they are a different set of things:
+ * `/markets/0x…` and `/agen/markets/0x…` can both exist, will never be the same market,
+ * and a client asking the wrong one gets a 404 instead of a market it did not mean.
+ */
+app.route(
+  "/agen",
+  agenRoutes({ chainNow, bounded, offsetOf, defaultLimit: DEFAULT_LIMIT, maxLimit: MAX_LIMIT }),
 );
 
 export default app;

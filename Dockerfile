@@ -80,6 +80,35 @@ COPY . .
 # from what the contracts were verified against.
 RUN bash scripts/vendor-contracts-deps.sh
 
+# Everything the browser is told, it is told here.
+#
+# Next replaces a `NEXT_PUBLIC_` expression with its value during `next build` and the
+# expression is gone from the bundle afterwards, so these cannot be supplied the way the
+# server's variables are. A value set on the host after this image was built is a value
+# the browser never sees — which is not an error anywhere, just a page that quietly
+# describes the wrong deployment. Railway passes service variables to a Docker build as
+# build arguments, but only a declared `ARG` receives one, so each is named here.
+#
+# None of them are required. The chain and Agen's three addresses come from the
+# deployment record in `@verdant/config` when unset, which is how a production build
+# should learn them; these stay for a fork or a devnet pointed at something else. Nothing
+# here is a secret — a WalletConnect id identifies the app to the relay and ships in the
+# bundle by necessity.
+ARG NEXT_PUBLIC_SITE_URL
+ARG NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID
+ARG NEXT_PUBLIC_CHAIN_ID
+ARG NEXT_PUBLIC_RPC_URL
+ARG NEXT_PUBLIC_AGEN_FACTORY
+ARG NEXT_PUBLIC_AGEN_DEPLOYER
+ARG NEXT_PUBLIC_AGEN_REGISTRY
+ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL \
+  NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=$NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID \
+  NEXT_PUBLIC_CHAIN_ID=$NEXT_PUBLIC_CHAIN_ID \
+  NEXT_PUBLIC_RPC_URL=$NEXT_PUBLIC_RPC_URL \
+  NEXT_PUBLIC_AGEN_FACTORY=$NEXT_PUBLIC_AGEN_FACTORY \
+  NEXT_PUBLIC_AGEN_DEPLOYER=$NEXT_PUBLIC_AGEN_DEPLOYER \
+  NEXT_PUBLIC_AGEN_REGISTRY=$NEXT_PUBLIC_AGEN_REGISTRY
+
 # Only what serving needs: the compiler package the app imports, then the app.
 RUN pnpm --filter @verdant/config build
 RUN pnpm --filter @verdant/market-compiler build

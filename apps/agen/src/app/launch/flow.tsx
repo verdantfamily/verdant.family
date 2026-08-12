@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { PublicJob } from "../lib/builds";
+import { Info } from "./info";
 import { Progress } from "./progress";
 import { Review } from "./review";
 
@@ -33,7 +34,22 @@ const SUGGESTIONS: readonly string[] = [
 ];
 
 const PLACEHOLDER =
-  "launch a token called King with ticker KING. every hour, the largest buyer becomes king and receives 20% of trading fees until someone overtakes them.";
+  "every hour the largest buyer becomes king and earns 20% of trading fees, until someone overtakes them.";
+
+/**
+ * What happens after the button, in words a first-time creator can read.
+ *
+ * This line used to say "generate the contracts → compile → test". Compiling is not a
+ * thing anybody launching a token has asked for; it is a thing that has to happen. So
+ * the steps are named by what they achieve rather than by what the toolchain calls them.
+ */
+const PATH: readonly string[] = [
+  "reads your idea",
+  "designs the market",
+  "writes the code",
+  "tests it",
+  "gets it ready",
+];
 
 /** Poll while a build is in flight; stop the moment it is not. */
 function useJob(jobId: string | null, onMissing: () => void): PublicJob | null {
@@ -204,13 +220,13 @@ export function Flow() {
    */
   const blocked =
     ready === false
-      ? "Agen cannot interpret a market right now: no model endpoint is configured on the server."
+      ? "agen cannot build anything right now. the server has no model connected to it."
       : !described && !named
-        ? "add a token name and describe your market"
+        ? "say what your token should do, and give it a name and a ticker."
         : !described
-          ? "describe what your market should do"
+          ? "say what your token should do, in the box above."
           : !named
-            ? "add a token name and ticker"
+            ? "give your token a name and a ticker."
             : null;
 
   return (
@@ -225,30 +241,49 @@ export function Flow() {
       </ol>
 
       {phase === "describe" ? (
-        <section className="compose">
-          <h1>what should your token do?</h1>
-          <p className="lede">describe your token and how its market should behave.</p>
+        <section className="create">
+          <header className="create-head">
+            <h1>what should your token be able to do?</h1>
+            <p>
+              explain it here in your own words, and agen will build it.
+              <Info id="info-idea">
+                write it like you would say it to a friend. no code, no crypto words
+                needed. things like: who pays a fee, who gets rewarded, and when it
+                happens.
+              </Info>
+            </p>
+          </header>
 
-          <div className="composer">
+          <div className="prompt">
             <textarea
-              className="composer-field composer-tall"
+              id="prompt"
+              className="prompt-field"
               value={description}
-              rows={8}
+              rows={6}
               maxLength={4_000}
               placeholder={PLACEHOLDER}
               aria-label="describe your market"
               onChange={(event) => {
                 setDescription(event.currentTarget.value);
               }}
+              onKeyDown={(event) => {
+                // ⌘/Ctrl + return, the shortcut every composer has. Plain return still
+                // writes a paragraph, because this is prose rather than a command.
+                if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && canBuild) {
+                  event.preventDefault();
+                  void start();
+                }
+              }}
             />
 
-            <div className="composer-foot">
-              <span className="composer-hint">{String(description.length)} / 4000</span>
+            <div className="prompt-foot">
+              <span className="prompt-shortcut">⌘ + return to build</span>
+              <span className="prompt-count">{String(description.length)} / 4000</span>
             </div>
           </div>
 
-          <div className="suggestions">
-            <span className="suggestions-note">try something like</span>
+          <div className="examples">
+            <span className="examples-note">or start from an idea</span>
             {SUGGESTIONS.map((suggestion) => (
               <button
                 type="button"
@@ -262,62 +297,96 @@ export function Flow() {
             ))}
           </div>
 
-          <div className="identity">
-            <div className="field">
-              <label htmlFor="name">name</label>
+          <div className="identity-row">
+            {/*
+              No upload: nothing stores an image yet, and a control that accepts a file
+              and drops it is worse than no control.
+            */}
+            <div className="identity-art" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4">
+                <rect x="3" y="4" width="18" height="16" rx="3" />
+                <circle cx="8.8" cy="9.6" r="1.5" />
+                <path d="M3.4 16.6 8.5 12l4 3.4 3.4-2.6 4.7 3.9" strokeLinejoin="round" />
+              </svg>
+            </div>
+
+            <label className="ifield" htmlFor="name">
+              <span>
+                name
+                <Info id="info-name">
+                  the full name of your token, the way people will read it. this is set
+                  when your token goes live and cannot be changed after that.
+                </Info>
+              </span>
               <input
                 id="name"
                 value={name}
                 maxLength={64}
                 placeholder="King"
+                autoComplete="off"
                 onChange={(event) => {
                   setName(event.currentTarget.value);
                 }}
               />
-            </div>
+            </label>
 
-            <div className="field">
-              <label htmlFor="symbol">ticker</label>
-              <input
-                id="symbol"
-                value={symbol}
-                maxLength={12}
-                placeholder="KING"
-                onChange={(event) => {
-                  setSymbol(event.currentTarget.value.toUpperCase());
-                }}
-              />
-            </div>
-
-            {/*
-              No upload: nothing stores an image yet, and a control that accepts a file
-              and drops it is worse than no control.
-            */}
-            <div className="field field-pending">
-              <label htmlFor="image">image</label>
-              <input id="image" disabled placeholder="added after launch" />
-            </div>
+            <label className="ifield" htmlFor="symbol">
+              <span>
+                ticker
+                <Info id="info-ticker">
+                  the short name traders use, like $KING. three to five letters is normal.
+                  it also cannot be changed once your token is live.
+                </Info>
+              </span>
+              <div className="ifield-affix">
+                <em>$</em>
+                <input
+                  id="symbol"
+                  value={symbol}
+                  maxLength={12}
+                  placeholder="KING"
+                  autoComplete="off"
+                  onChange={(event) => {
+                    setSymbol(event.currentTarget.value.toUpperCase());
+                  }}
+                />
+              </div>
+            </label>
           </div>
 
-          <div className="build">
-            <button
-              type="button"
-              className="primary primary-large"
-              disabled={!canBuild}
-              onClick={() => void start()}
-            >
-              {starting ? "starting…" : "build market"}
+          <p className="identity-note">
+            you can add a picture once your token is live.
+            <Info id="info-image">
+              pictures are not stored yet, so there is nothing to upload here. your token
+              works without one and you can add it later from its page.
+            </Info>
+          </p>
+
+          <div className="create-go">
+            <button type="button" className="cta" disabled={!canBuild} onClick={() => void start()}>
+              {starting ? "starting…" : "build my token"}
             </button>
 
-            {blocked === null ? null : <p className="build-blocked">{blocked}</p>}
+            {blocked === null ? null : <p className="create-blocked">{blocked}</p>}
           </div>
 
           {error === null ? null : <p className="notice">{error}</p>}
 
-          <p className="next">
-            agen will understand your rules → design the market → generate the contracts →
-            compile → test → prepare it for launch.
-          </p>
+          <div className="create-path">
+            <span className="create-path-note">
+              nothing goes live yet
+              <Info id="info-next">
+                building is free and private. agen writes and tests your token first — you
+                read it, change anything you want, and only then choose to launch it.
+              </Info>
+            </span>
+
+            <ol aria-label="what happens next">
+              {PATH.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+          </div>
         </section>
       ) : null}
 

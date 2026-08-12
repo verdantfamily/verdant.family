@@ -24,6 +24,47 @@ export * from "./generated.js";
  * 4663 by `test_aThirdPartyRouterChargesTheScheduledFee` in the contracts' fork
  * suite: a wrong encoding reverts, so that test is the check on this constant.
  */
+/**
+ * `StateView`, restricted to the two functions that describe a live pool.
+ *
+ * Written by hand for the same reason as the router below: it is Uniswap's contract,
+ * not one this repository deploys, and it is not reachable from any Solidity in
+ * `src/` — so Foundry never compiles it and there is no artefact for the generator to
+ * read. Importing it into a source file purely to produce an ABI would put a contract
+ * into the build that nothing calls.
+ *
+ * Both signatures are copied from the vendored
+ * `v4-periphery/src/interfaces/IStateView.sol`, which is pinned to the commit matching
+ * the bytecode deployed on 4663. A wrong signature here decodes to a plausible number
+ * rather than reverting, which is why the source is named rather than remembered.
+ *
+ * `getSlot0` is the pool's price and its *stored* fee. On a market whose hook overrides
+ * the fee per swap, that stored fee is written once at initialisation and is not what
+ * anybody is charged — see `../trade/quote.js`. Read the price from here; read the fee
+ * from the quoter.
+ */
+export const stateViewAbi = [
+  {
+    type: "function",
+    name: "getSlot0",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32", internalType: "PoolId" }],
+    outputs: [
+      { name: "sqrtPriceX96", type: "uint160", internalType: "uint160" },
+      { name: "tick", type: "int24", internalType: "int24" },
+      { name: "protocolFee", type: "uint24", internalType: "uint24" },
+      { name: "lpFee", type: "uint24", internalType: "uint24" },
+    ],
+  },
+  {
+    type: "function",
+    name: "getLiquidity",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32", internalType: "PoolId" }],
+    outputs: [{ name: "liquidity", type: "uint128", internalType: "uint128" }],
+  },
+] as const;
+
 export const universalRouterAbi = [
   {
     type: "function",

@@ -18,7 +18,9 @@ generated/
 # Foundry
 packages/contracts/out/
 packages/contracts/cache/
-packages/contracts/broadcast/*/dry-run/
+# Two levels, not one: forge writes `broadcast/<Script>.s.sol/<chainId>/dry-run/`, and a
+# pattern a directory short of that matches nothing and silently commits the simulations.
+packages/contracts/broadcast/*/*/dry-run/
 # Every broadcast forge has ever made, one file per run. A local rig re-run twenty
 # times leaves twenty of these, none of which describes the deployment anybody cares
 # about. `run-latest.json` is committed and is the record; these are the noise around

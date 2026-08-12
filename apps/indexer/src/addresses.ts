@@ -17,6 +17,7 @@
 import {
   EXTERNAL_ADDRESSES,
   ROBINHOOD_MAINNET_ID,
+  agenFor,
   agentsFor,
   deploymentFor,
   robinhoodMainnet,
@@ -25,6 +26,7 @@ import type { Address } from "viem";
 
 const deployment = deploymentFor(ROBINHOOD_MAINNET_ID);
 const agentLayer = agentsFor(ROBINHOOD_MAINNET_ID);
+const agenLayer = agenFor(ROBINHOOD_MAINNET_ID);
 
 /**
  * An address from the environment, or from the deployment record, or a refusal.
@@ -182,3 +184,66 @@ function resolveAgentLayer(): AgentLayer {
 }
 
 export const AGENTS = resolveAgentLayer();
+
+// --- Agen's launch layer ---------------------------------------------------
+//
+// Optional for the same reason the agent layer is, and registered whether or not it
+// exists for the same reason: `ponder codegen` derives the valid event names from the
+// configuration, so a conditionally-registered factory would make its handler a type
+// error on every build made before the deployment. A contract at the zero address
+// emits nothing, so the cost is a filter that never matches.
+//
+// Both addresses or neither. The registry holds the factory in an immutable and the
+// factory's constructor checks that the registry names it back, so a pair taken from
+// two different deployments describes something that cannot exist on chain.
+
+interface AgenLayer {
+  /** False when nothing is deployed and the addresses below are the zero address. */
+  readonly deployed: boolean;
+  readonly factory: Address;
+  readonly registry: Address;
+  readonly startBlock: number;
+}
+
+function resolveAgenLayer(): AgenLayer {
+  const fromEnv = [process.env.AGEN_FACTORY, process.env.AGEN_REGISTRY];
+  const supplied = fromEnv.filter((value) => value !== undefined).length;
+
+  if (supplied !== 0 && supplied !== 2) {
+    throw new Error(
+      `Agen needs both AGEN_FACTORY and AGEN_REGISTRY, or neither. ${supplied} was ` +
+        `set. The two are bound to each other in immutables, so a half-set pair ` +
+        `describes a deployment that does not exist.`,
+    );
+  }
+
+  if (supplied === 2) {
+    const [factory, registry] = fromEnv as [string, string];
+    return {
+      deployed: true,
+      factory: factory as Address,
+      registry: registry as Address,
+      startBlock: Number(
+        process.env.AGEN_START_BLOCK ?? process.env.VERDANT_START_BLOCK ?? 0,
+      ),
+    };
+  }
+
+  if (agenLayer === null) {
+    return {
+      deployed: false,
+      factory: NOT_DEPLOYED,
+      registry: NOT_DEPLOYED,
+      startBlock: START_BLOCK,
+    };
+  }
+
+  return {
+    deployed: true,
+    factory: agenLayer.factory,
+    registry: agenLayer.registry,
+    startBlock: Number(process.env.AGEN_START_BLOCK ?? agenLayer.deployedAtBlock),
+  };
+}
+
+export const AGEN = resolveAgenLayer();

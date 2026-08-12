@@ -13,8 +13,14 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { build } from "./foundry.js";
-import { overridePoints, PRELUDE_CONTRACTS, preludeSources, tokenSource } from "./prelude.js";
+import { build, test as forgeTest } from "./foundry.js";
+import {
+  overridePoints,
+  PRELUDE_CONTRACTS,
+  preludeSources,
+  testPreludeSources,
+  tokenSource,
+} from "./prelude.js";
 import type { Workspace } from "./workspace.js";
 import { createWorkspace } from "./workspace.js";
 
@@ -37,12 +43,15 @@ beforeAll(async () => {
 /** The scratch workspace uses `src/`, so the prelude's paths are rewritten for it. */
 async function open() {
   workspace = await createWorkspace({ vendorRoot: VENDOR });
-  await workspace.write(
-    preludeSources().map((source) => ({
+  await workspace.write([
+    ...preludeSources().map((source) => ({
       path: source.path.replace(/^contracts\//, "src/"),
       content: source.content,
     })),
-  );
+    // The harness already lives under test/, which is where the scratch project looks
+    // for it too, so its path survives the rewrite the contracts need.
+    ...testPreludeSources(),
+  ]);
   return workspace;
 }
 
@@ -142,6 +151,178 @@ contract StreakHook is AgenBaseHook {
       expect(base?.content).toMatch(new RegExp(`function ${callback}\\([^)]*\\)[\\s\\S]{0,120}onlyPoolManager`));
     }
   });
+});
+
+/**
+ * The harness is the one piece of the prelude whose correctness cannot be read off the
+ * source: `deployHook` is right only if the pool manager subsequently agrees, and
+ * "subsequently" means running a real swap against a real PoolManager. So this suite
+ * runs the tests rather than compiling them.
+ *
+ * The build that motivated it is worth keeping in mind. EMBRT generated a correct
+ * market, and its test suite deployed the hook at an address whose bits enabled nothing,
+ * so every assertion about fees came back zero and every repair round went looking for
+ * the bug in the hook.
+ */
+describe("the test harness generated suites are built on", () => {
+  const HOOK = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.26;
+
+import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
+import {Hooks} from "v4-core/src/libraries/Hooks.sol";
+import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
+import {PoolKey} from "v4-core/src/types/PoolKey.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
+import {SwapParams} from "v4-core/src/types/PoolOperation.sol";
+
+import {AgenBaseHook} from "./AgenBaseHook.sol";
+
+contract SellFeeHook is AgenBaseHook {
+    uint24 public constant SELL_FEE_PPM = 10_000;
+
+    constructor(IPoolManager manager) AgenBaseHook(manager) {}
+
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory permissions) {
+        permissions.beforeSwap = true;
+    }
+
+    function _beforeSwap(address, PoolKey calldata, SwapParams calldata params, bytes calldata)
+        internal
+        pure
+        override
+        returns (BeforeSwapDelta, uint24)
+    {
+        uint24 fee = isBuy(params) ? 0 : SELL_FEE_PPM;
+        return (BeforeSwapDeltaLibrary.ZERO_DELTA, fee | LPFeeLibrary.OVERRIDE_FEE_FLAG);
+    }
+}
+`;
+
+  /** Written the way the testing context instructs a model to write it. */
+  const SUITE = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.26;
+
+import {Hooks} from "v4-core/src/libraries/Hooks.sol";
+import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
+import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
+import {Currency} from "v4-core/src/types/Currency.sol";
+import {PoolKey} from "v4-core/src/types/PoolKey.sol";
+
+import {AgenTest} from "./AgenTest.sol";
+import {SellFeeHook} from "../src/SellFeeHook.sol";
+import {HarnessToken} from "../src/HarnessToken.sol";
+
+contract SellFeeHookTest is AgenTest {
+    SellFeeHook internal hook;
+    HarnessToken internal token;
+
+    function setUp() public {
+        deployPoolManager();
+        hook = SellFeeHook(deployHook("SellFeeHook.sol:SellFeeHook", abi.encode(manager)));
+
+        // Mined above the zero address, which is how v4 addresses native ether, so the
+        // pool sorts the way every Agen market does: quote first, token second.
+        token = new HarnessToken(address(this));
+        token.approve(address(swapRouter), type(uint256).max);
+        token.approve(address(liquidityRouter), type(uint256).max);
+
+        vm.deal(address(this), 1_000 ether);
+    }
+
+    function test_hook_address_encodes_its_permissions() public view {
+        assertEq(uint160(address(hook)) & Hooks.BEFORE_SWAP_FLAG, Hooks.BEFORE_SWAP_FLAG);
+        assertEq(uint160(address(hook)) & Hooks.AFTER_SWAP_FLAG, 0);
+    }
+
+    /// The assertion that matters: v4 itself validates the address, and a pool whose hook
+    /// sits at the wrong one cannot be created at all.
+    function test_pool_manager_accepts_a_pool_using_it() public {
+        manager.initialize(poolKey(), 79228162514264337593543950336);
+    }
+
+    /// A real swap, through the manager, settled.
+    ///
+    /// This is the one that proves the harness is usable rather than merely correct: a
+    /// generated suite that called _beforeSwap directly would revert with ManagerLocked
+    /// the moment its hook touched the manager, which is what happened to a live build.
+    function test_a_real_swap_runs_the_hook() public {
+        PoolKey memory key = poolKey();
+        manager.initialize(key, 79228162514264337593543950336);
+
+        addLiquidity(key, 10 ether);
+        swapExactIn(key, true, 0.01 ether);
+    }
+
+    function poolKey() internal view returns (PoolKey memory) {
+        return agenPoolKey(
+            Currency.wrap(address(0)),
+            Currency.wrap(address(token)),
+            IHooks(address(hook)),
+            60
+        );
+    }
+}
+`;
+
+  /** Ordinary enough that nothing about the harness depends on it. */
+  const TOKEN = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.26;
+
+contract HarnessToken {
+    string public constant name = "Harness";
+    string public constant symbol = "HRN";
+    uint8 public constant decimals = 18;
+    uint256 public totalSupply;
+
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    constructor(address recipient) {
+        totalSupply = 1_000_000_000 ether;
+        balanceOf[recipient] = totalSupply;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        emit Transfer(msg.sender, to, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        uint256 allowed = allowance[from][msg.sender];
+        if (allowed != type(uint256).max) allowance[from][msg.sender] = allowed - amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        emit Transfer(from, to, amount);
+        return true;
+    }
+}
+`;
+
+  it("deploys a hook the pool manager will actually accept, and swaps against it", async () => {
+    const space = await open();
+    await space.write([
+      { path: "src/SellFeeHook.sol", content: HOOK },
+      { path: "src/HarnessToken.sol", content: TOKEN },
+      { path: "test/SellFeeHook.t.sol", content: SUITE },
+    ]);
+
+    const result = await forgeTest({ root: space.root });
+
+    expect(result.buildFailure).toBeNull();
+    expect(result.outcomes.filter((outcome) => !outcome.passed)).toEqual([]);
+    expect(result.passed).toBe(3);
+  }, 180_000);
 });
 
 describe("the token Agen writes itself", () => {

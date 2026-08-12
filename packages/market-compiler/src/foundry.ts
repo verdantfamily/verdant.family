@@ -24,6 +24,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
+import { forgeGate } from "./limit.js";
+
 const run = promisify(execFile);
 
 export type Severity = "error" | "warning";
@@ -103,6 +105,22 @@ async function forge(
   args: readonly string[],
   options: ForgeOptions,
   extraEnv: Readonly<Record<string, string>> = {},
+): Promise<{ stdout: string; stderr: string; failed: boolean }> {
+  /*
+   * Inside the gate, and the ordering matters.
+   *
+   * The timeout below is wall clock and starts when the process spawns, so waiting for
+   * a slot costs a queued build nothing. Spawning first and queueing after — or not
+   * queueing at all — is what turns a busy minute into compiles that get killed and
+   * reported as broken contracts. See `limit.ts`.
+   */
+  return forgeGate.run(() => spawnForge(args, options, extraEnv));
+}
+
+async function spawnForge(
+  args: readonly string[],
+  options: ForgeOptions,
+  extraEnv: Readonly<Record<string, string>>,
 ): Promise<{ stdout: string; stderr: string; failed: boolean }> {
   try {
     const { stdout, stderr } = await run(options.binary ?? "forge", [...args], {

@@ -28,10 +28,11 @@
  * ## The vocabulary is deliberately small
  *
  * Only what a launch genuinely knows: the pool manager, the factory doing the
- * installing, the creator, the token's name, symbol and supply, and the addresses of the
- * bundle's own components. Matching is on parameter name, because that is what a
- * generated constructor gives us to go on, and the alternative — positional guessing by
- * type — is confidently wrong the first time two addresses appear in a row.
+ * installing, the creator, where the fees are to be paid, the token's name, symbol and
+ * supply, and the addresses of the bundle's own components. Matching is on parameter
+ * name, because that is what a generated constructor gives us to go on, and the
+ * alternative — positional guessing by type — is confidently wrong the first time two
+ * addresses appear in a row.
  */
 
 import { encodeFunctionData, keccak256, toHex, type Abi, type Address, type Hex } from "viem";
@@ -55,6 +56,17 @@ export interface DeploymentEnvironment {
   readonly installer: Address;
   /** Whose market this is. Receives the supply and owns anything ownable. */
   readonly creator: Address;
+  /**
+   * Where the market's fees are paid, for its whole life.
+   *
+   * The creator's choice at launch, defaulting to their own wallet, and separate from
+   * `creator` because it is genuinely a different decision — a multisig, a splitter, a
+   * team address. It is here rather than only in the manifest because generated
+   * mechanics take it as a constructor argument constantly: "the fees go to the fee
+   * receiver" is the most common sentence in a specification, and a component holding
+   * it in an immutable is how a market keeps that promise.
+   */
+  readonly feeReceiver: Address;
   readonly name: string;
   readonly symbol: string;
   /** Whole tokens, before decimals. */
@@ -135,8 +147,9 @@ export function resolveDeployment({
         problems.push(
           `${component.contractName}: nothing known about the constructor argument ` +
             `\`${input.type ?? "?"} ${input.name ?? "(unnamed)"}\`. A deployment can supply the ` +
-            `pool manager, the installer, the creator, the token name, symbol and supply, and ` +
-            `the address of another component in this market — nothing else exists yet.`,
+            `pool manager, the installer, the creator, the fee receiver, the token name, symbol ` +
+            `and supply, and the address of another component in this market — nothing else ` +
+            `exists yet.`,
         );
         continue;
       }
@@ -230,7 +243,38 @@ function resolveArgument({
     return { kind: "external", address: environment.installer };
   }
 
-  if (name.includes("owner") || name.includes("recipient") || name.includes("treasury")) {
+  /**
+   * Where the fees go, which is a different address from who owns the market.
+   *
+   * Checked before the general case below, because a `feeReceiver_` matches "receiver"
+   * and would otherwise resolve to the creator — which is right by default and wrong
+   * the moment somebody points their fees at a splitter or a multisig, silently, in an
+   * immutable, forever.
+   *
+   * The name has to mention fees for this to fire. A bare `receiver_` on some other
+   * component is not necessarily about money, and guessing that it is would bake the
+   * fee receiver into a contract that meant something else by it.
+   */
+  const aboutFees = name.includes("fee") || name.includes("revenue") || name.includes("royalt");
+  const isDestination =
+    name.includes("receiver") ||
+    name.includes("recipient") ||
+    name.includes("collector") ||
+    name.includes("sink") ||
+    name.includes("treasury") ||
+    name.includes("beneficiary");
+
+  if (aboutFees && isDestination) {
+    return { kind: "external", address: environment.feeReceiver };
+  }
+
+  if (
+    name.includes("owner") ||
+    name.includes("recipient") ||
+    name.includes("receiver") ||
+    name.includes("beneficiary") ||
+    name.includes("treasury")
+  ) {
     return { kind: "external", address: environment.creator };
   }
 

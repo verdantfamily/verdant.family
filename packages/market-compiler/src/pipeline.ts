@@ -48,7 +48,7 @@ import {
   withRepair,
   withTestAttempt,
 } from "./diagnostics.js";
-import { PRELUDE_CONTRACTS, preludeSources, tokenSource } from "./prelude.js";
+import { PRELUDE_CONTRACTS, preludeSources, testPreludeSources, tokenSource } from "./prelude.js";
 import type { MarketImplementationPlan } from "./plan.js";
 import type { MarketSpecification } from "./spec.js";
 import type { Decision } from "./spec.js";
@@ -459,8 +459,11 @@ export async function runBuild(
     });
 
     // Written before anything is generated, so the model extends it rather than
-    // reinventing the v4 plumbing it does not have the paths for.
-    await workspace.write(preludeSources());
+    // reinventing the v4 plumbing it does not have the paths for. The test harness goes
+    // in at the same time rather than later: compilation happens before test generation
+    // and a `test/` directory holding a file nobody has written a suite against yet
+    // compiles perfectly well, whereas discovering it is missing costs a repair round.
+    await workspace.write([...preludeSources(), ...testPreludeSources()]);
 
     const context = await buildContext({ vendorRoot: options.vendorRoot });
 
@@ -1360,6 +1363,11 @@ export async function runBuild(
           poolManager: probe.poolManager,
           installer: probe.factory,
           creator: PROBE_CREATOR,
+          // The probe's creator, because the real fee receiver is a launch-time choice
+          // and this assembly exists to prove the bundle can be built at all. It only
+          // has to be an address: a component that takes one is satisfiable whichever
+          // address the creator eventually names.
+          feeReceiver: PROBE_CREATOR,
           name: request.name,
           symbol: request.symbol,
           supplyTokens,

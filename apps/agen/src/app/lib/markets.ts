@@ -30,7 +30,12 @@ import type {
 } from "@verdant/market-compiler";
 import { mechanicSummary } from "@verdant/market-compiler";
 
+import type { Address } from "viem";
+
 import { jobStore, publicView } from "./builds";
+import { fetchMarketStats, type MarketStats } from "./feed";
+import { readLaunch, readLaunches, type LaunchRecord } from "./launched";
+import { readLiveMarket, type LiveMarket } from "./onchain";
 
 /** Where a market is in its life. Drives which figures a page can show at all. */
 export type MarketPhase =
@@ -44,15 +49,29 @@ export type MarketPhase =
  *
  * Absent rather than zeroed. Zero is a measurement — "nobody has traded this" — and
  * showing it for a market that has no pool at all would be a different lie from the
- * placeholder one, not an improvement on it.
+ * placeholder one, not an improvement on it. Fields inside are `null` for the same
+ * reason at one level down: a market can have a price and no volume, and it says so.
+ *
+ * ## Everything here is in the quote asset, not dollars
+ *
+ * Which is ether, on this chain, for every market Agen creates. There is no oracle on
+ * 4663 that this repository trusts for an ether price, and inventing a dollar figure
+ * from an off-chain quote would make every number on the site depend on an unverified
+ * third party — for the sole benefit of a familiar currency symbol. So a market worth
+ * twelve ether says twelve ether.
  */
 export interface TradingData {
-  readonly priceUsd: number;
-  readonly marketCapUsd: number;
-  readonly volume24hUsd: number;
-  readonly liquidityUsd: number;
-  readonly holders: number;
-  readonly change24hPercent: number;
+  /** Quote asset per whole token, at the block this was read. */
+  readonly price: number;
+  /** Supply times price, in the quote asset. */
+  readonly marketCap: number;
+  /** The pool's own depth, in the quote asset. */
+  readonly liquidity: number;
+  /** Null until the indexer has a day of history for this market. */
+  readonly volume24h: number | null;
+  readonly trades24h: number | null;
+  readonly change24hPercent: number | null;
+  readonly holders: number | null;
 }
 
 export interface MarketSummary {
@@ -69,11 +88,25 @@ export interface MarketSummary {
   readonly phase: MarketPhase;
   readonly mechanics: MechanicSummary;
   readonly contractCount: number;
+  /**
+   * Whole tokens, fixed for the life of the market — a generated token has no mint
+   * function. Zero for a build that has not been launched and so has no supply yet.
+   *
+   * Carried because it is what turns a price into a capitalisation, and the chart needs
+   * that multiplier on the client where the price per token is unreadable.
+   */
+  readonly supplyTokens: number;
   /** Absent for anything not trading. See the note at the top of this file. */
   readonly trading?: TradingData;
 }
 
 export interface MarketDetail extends MarketSummary {
+  /** The pool, once there is one. What the trade panel quotes and swaps against. */
+  readonly poolId?: string;
+  /** The fee the pool was created with: the dynamic flag, or a fixed value. */
+  readonly lpFee?: number;
+  /** The pool's price as a string, because a `bigint` cannot cross into a client component. */
+  readonly sqrtPriceX96?: string;
   readonly specification: MarketSpecification;
   readonly sources: readonly { readonly path: string; readonly content: string }[];
   readonly testOutcomes: readonly TestOutcome[];
@@ -149,23 +182,85 @@ export interface MarketSource {
   state(id: string): Promise<readonly StateReading[]>;
 }
 
-function summaryFrom(job: ReturnType<typeof publicView>): MarketSummary | null {
+/**
+ * A build, plus whatever the chain says about it.
+ *
+ * The build is the source of everything a market *is* — its rules, its contracts, its
+ * tests — and the chain is the source of everything it is *worth*. Neither can answer
+ * the other's questions, so a market is the two joined, and `live` being absent is the
+ * ordinary case rather than an error: most builds are never launched.
+ */
+function summaryFrom(
+  job: ReturnType<typeof publicView>,
+  launch: LaunchRecord | null,
+  live: LiveMarket | null,
+  stats: MarketStats | null = null,
+): MarketSummary | null {
   // A market is a build that was cleared. Anything else is somebody's abandoned
   // attempt, and a discovery page listing those would be listing failures as products.
   if (job.stage !== "deployment_ready" || job.specification === null) return null;
+
+  const supply = job.launch === null ? 0 : Number(job.launch.supplyTokens);
 
   return {
     id: job.id,
     name: job.name,
     symbol: job.symbol,
-    createdAt: job.createdAt,
-    creator: null,
-    hookAddress: null,
-    tokenAddress: null,
-    phase: "ready",
+    // The launch supersedes the build's own age once there is one: a market's age is
+    // how long it has been tradable, not how long ago somebody described it.
+    createdAt: live?.createdAt ?? launch?.at ?? job.createdAt,
+    creator: live?.creator ?? launch?.creator ?? null,
+    hookAddress: live?.hook ?? launch?.hook ?? null,
+    tokenAddress: live?.token ?? launch?.token ?? null,
+    phase: live === null ? "ready" : "live",
     mechanics: mechanicSummary(job.specification),
     contractCount: job.plan?.components.length ?? job.sources.length,
+    supplyTokens: supply,
+    ...(live === null
+      ? {}
+      : {
+          trading: {
+            price: live.price,
+            marketCap: supply * live.price,
+            liquidity: Number(live.liquidity) / 1e18,
+            // From the indexer, which is the only thing that can answer them: a pool
+            // knows its price now and has no memory of yesterday. Null rather than zero
+            // whenever there is no indexer to ask — see `lib/feed.ts` for why the
+            // difference matters.
+            volume24h: stats === null ? null : Number(stats.day.volumeQuote) / 1e18,
+            trades24h: stats?.day.trades ?? null,
+            change24hPercent: stats?.day.changePercent ?? null,
+            // Agen's indexer does not follow token transfers, so nothing here has
+            // counted holders. A dash rather than a number nobody measured.
+            holders: null,
+          },
+        }),
   };
+}
+
+/**
+ * What the chain knows about a build, if anything.
+ *
+ * Two reads, and the second only when the first found something. The local record is a
+ * cache of the launch transaction; the registry is the authority. Asking the registry
+ * for a token the server has never seen launched would be a round trip per build on
+ * every discovery page, so the cache decides whether to ask.
+ */
+async function chainStateFor(jobId: string): Promise<{
+  launch: LaunchRecord | null;
+  live: LiveMarket | null;
+  stats: MarketStats | null;
+}> {
+  const launch = await readLaunch(jobId).catch(() => null);
+  if (launch === null) return { launch: null, live: null, stats: null };
+
+  const live = await readLiveMarket(launch.token as Address);
+
+  // Only once there is a pool to ask about, and never fatal: the day's volume is worth
+  // a request on a market page and worth nothing at all if it can take the page down.
+  const stats = live === null ? null : await fetchMarketStats(live.poolId);
+
+  return { launch, live, stats };
 }
 
 /**
@@ -182,9 +277,22 @@ export function buildStoreSource(): MarketSource {
         .list(200)
         .catch(() => []);
 
-      return jobs
-        .map((job) => summaryFrom(publicView(job)))
-        .filter((market): market is MarketSummary => market !== null);
+      // The launched ones are read from disk in one directory listing rather than one
+      // stat per build, because a discovery page holds two hundred of them and only a
+      // handful will ever have been launched.
+      const launches = new Map(
+        (await readLaunches().catch(() => [])).map((record) => [record.jobId, record]),
+      );
+
+      const summaries = await Promise.all(
+        jobs.map(async (job) => {
+          const launch = launches.get(job.id) ?? null;
+          const live = launch === null ? null : await readLiveMarket(launch.token as Address);
+          return summaryFrom(publicView(job), launch, live);
+        }),
+      );
+
+      return summaries.filter((market): market is MarketSummary => market !== null);
     },
 
     read: async (id) => {
@@ -194,7 +302,8 @@ export function buildStoreSource(): MarketSource {
       if (job === null) return null;
 
       const view = publicView(job);
-      const summary = summaryFrom(view);
+      const { launch, live, stats } = await chainStateFor(id);
+      const summary = summaryFrom(view, launch, live, stats);
       if (summary === null || view.specification === null) return null;
 
       return {
@@ -209,6 +318,9 @@ export function buildStoreSource(): MarketSource {
           purpose: component.purpose,
           address: null,
         })),
+        ...(live === null
+          ? {}
+          : { poolId: live.poolId, lpFee: live.lpFee, sqrtPriceX96: live.sqrtPriceX96.toString() }),
       };
     },
 

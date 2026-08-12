@@ -74,9 +74,10 @@ export function Review({
   return (
     <div className="review">
       <header className="review-head">
-        <p className="eyebrow">market review</p>
+        <p className="eyebrow">{ready ? "ready to launch" : "review"}</p>
         <h1>
-          {job.name} <span className="ticker">${job.symbol}</span>
+          {ready ? "Your token is ready." : job.name}{" "}
+          <span className="ticker">${job.symbol}</span>
         </h1>
 
         <div className="review-counts">
@@ -268,7 +269,15 @@ export function Review({
         </dl>
       </section>
 
-      <section className="advanced">
+      {/*
+        Folded, and under a word that says who it is for. The generated Solidity used to
+        be the tallest thing on this screen, immediately under the checks — which framed
+        the product as "here is some code we wrote" rather than "here is your token". It
+        is still one click away and still complete; it is no longer the hero.
+      */}
+      <details className="advanced">
+        <summary>Advanced — view contracts</summary>
+
         <div className="tabs">
           <button type="button" className={tab === "sources" ? "on" : ""} onClick={() => { setTab("sources"); }}>
             source
@@ -315,7 +324,7 @@ export function Review({
         ) : null}
 
         {tab === "plan" ? <pre className="plan-json">{JSON.stringify(plan, null, 2)}</pre> : null}
-      </section>
+      </details>
 
       {/*
         "Every check Agen performs" was the old wording, on a screen that says two rows

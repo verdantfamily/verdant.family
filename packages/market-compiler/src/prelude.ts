@@ -589,6 +589,193 @@ abstract contract KeeperAdapter {
 `;
 
 /**
+ * The base every generated test extends, and the one thing it exists to do.
+ *
+ * Uniswap reads a hook's permissions from the low fourteen bits of its address, so a
+ * test that deploys the hook with `new MyHook(...)` gets whatever address the nonce
+ * produced and every callback the market relies on is either absent or unauthorised.
+ * The pool manager then rejects it, and the failure — `NotHook`, or a callback that
+ * silently never runs — says nothing about the address being the cause.
+ *
+ * There are two ways out and a generated test reaches for the wrong one. Uniswap's own
+ * answer is `HookMiner`, which is not in the vendored tree; a live EMBRT build spent its
+ * last repair round importing it and died on "File not found" having otherwise been
+ * correct. The other is to compute the address from the permissions and put the code
+ * there, which needs no mining, no CREATE2 and no salt search, and is what this does.
+ *
+ * The permissions are read off the hook rather than passed in, because a test that
+ * restates them is a test that can restate them wrongly: the same build asserted a fee
+ * of 3000 against a hook deployed at bits that never enabled `beforeSwap`, and the
+ * repair diagnosed the market rather than the harness. Deploying twice — once anywhere
+ * to ask, once at the address the answer implies — makes the question unaskable.
+ */
+const TEST_HARNESS = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.26;
+
+import {Test} from "forge-std/Test.sol";
+
+import {Hooks} from "v4-core/src/libraries/Hooks.sol";
+import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
+import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
+import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
+import {PoolManager} from "v4-core/src/PoolManager.sol";
+import {PoolModifyLiquidityTest} from "v4-core/src/test/PoolModifyLiquidityTest.sol";
+import {PoolSwapTest} from "v4-core/src/test/PoolSwapTest.sol";
+import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
+import {Currency} from "v4-core/src/types/Currency.sol";
+import {ModifyLiquidityParams, SwapParams} from "v4-core/src/types/PoolOperation.sol";
+import {PoolKey} from "v4-core/src/types/PoolKey.sol";
+import {TickMath} from "v4-core/src/libraries/TickMath.sol";
+
+/// @title AgenTest
+/// @notice The base for every generated test. Extend this instead of Test.
+/// @dev Provided by Agen, not generated. It exists because a hook's address encodes its
+/// permissions, which makes "deploy the contract under test" a step that cannot be done
+/// the ordinary way and fails confusingly when it is.
+abstract contract AgenTest is Test {
+    /// @dev Any address whose low fourteen bits are clear works as a base; the permission
+    /// flags are OR-ed into them. High enough not to collide with a precompile or with
+    /// forge-std's own labelled addresses.
+    address internal constant HOOK_BASE = 0xa6E0000000000000000000000000000000000000;
+
+    /// @dev Where a hook is put briefly to be asked what permissions it wants. Nothing it
+    /// writes during that construction survives — the real deployment runs the
+    /// constructor again at the final address.
+    address internal constant HOOK_PROBE = 0xa6e1000000000000000000000000000000000000;
+
+    /// @notice The fee value a pool must be initialised with for a hook to override it.
+    /// @dev A pool created with a fixed fee ignores whatever beforeSwap returns, so a
+    /// market whose whole mechanic is a dynamic fee looks broken in a test that used
+    /// 3000 here. Agen launches every market's pool with this.
+    uint24 internal constant DYNAMIC_FEE = LPFeeLibrary.DYNAMIC_FEE_FLAG;
+
+    /// @notice The manager the last deployPoolManager() call created, and its routers.
+    IPoolManager internal manager;
+    PoolSwapTest internal swapRouter;
+    PoolModifyLiquidityTest internal liquidityRouter;
+
+    /// @notice A real pool manager and the routers needed to drive it.
+    /// @dev IPoolManager is large and still moving, so a hand-written fake is a
+    /// half-implemented interface that the compiler rejects as abstract — and if it
+    /// compiles it agrees with the hook about behaviour neither has checked against v4.
+    /// Deploying the real one costs nothing here.
+    ///
+    /// The routers come with it because the manager is useless without them: every
+    /// operation that moves value has to happen inside manager.unlock(), and a test that
+    /// calls take() or settle() outside one reverts with ManagerLocked.
+    function deployPoolManager() internal returns (IPoolManager) {
+        manager = IPoolManager(address(new PoolManager(address(this))));
+        swapRouter = new PoolSwapTest(manager);
+        liquidityRouter = new PoolModifyLiquidityTest(manager);
+        return manager;
+    }
+
+    /// @notice Put liquidity in a pool so it can be traded against.
+    /// @dev A pool with no liquidity fills nothing, so a swap against one either reverts
+    /// or moves zero and every assertion about a fee reads zero.
+    function addLiquidity(PoolKey memory key, int256 amount) internal {
+        liquidityRouter.modifyLiquidity{value: key.currency0.isAddressZero() ? 100 ether : 0}(
+            key,
+            ModifyLiquidityParams({
+                tickLower: -887_220,
+                tickUpper: 887_220,
+                liquidityDelta: amount,
+                salt: bytes32(0)
+            }),
+            ""
+        );
+    }
+
+    /// @notice Perform a real swap: exact input, through the manager, fully settled.
+    /// @param zeroForOne True to spend currency0 — a BUY in an Agen pool, where
+    /// currency0 is the quote asset and currency1 is the launched token.
+    /// @dev Use this rather than calling hook.beforeSwap(...) directly. A direct call
+    /// tests the arithmetic and skips settlement, which is exactly where a hook that
+    /// takes value goes wrong: take() without a matching delta reverts the swap inside
+    /// the manager, and a test that never settles never finds out. It also cannot work —
+    /// the manager is locked outside unlock() and reverts with ManagerLocked.
+    function swapExactIn(PoolKey memory key, bool zeroForOne, uint256 amount)
+        internal
+        returns (BalanceDelta)
+    {
+        return swapRouter.swap{value: zeroForOne && key.currency0.isAddressZero() ? amount : 0}(
+            key,
+            SwapParams({
+                zeroForOne: zeroForOne,
+                amountSpecified: -int256(amount),
+                sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+            }),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+    }
+
+    /// @dev Tests receive ether back from the routers when a swap returns some.
+    receive() external payable {}
+
+    /// @notice Deploy a hook at an address matching the permissions it declares.
+    /// @param artifact "FileName.sol:ContractName", e.g. "MyHook.sol:MyHook".
+    /// @param args abi.encode of the constructor arguments, or "" when there are none.
+    /// @dev Use this for every hook. \`new MyHook(...)\` puts the code at an address whose
+    /// bits are an accident, and the pool manager reads those bits as the hook's
+    /// permissions.
+    function deployHook(string memory artifact, bytes memory args) internal returns (address hook) {
+        deployCodeTo(artifact, args, HOOK_PROBE);
+        uint160 flags = permissionFlags(IHooks(HOOK_PROBE));
+        vm.etch(HOOK_PROBE, "");
+
+        hook = address(uint160(HOOK_BASE) | flags);
+        deployCodeTo(artifact, args, hook);
+    }
+
+    /// @notice The address bits a hook's declared permissions correspond to.
+    function permissionFlags(IHooks hook) internal view returns (uint160 flags) {
+        Hooks.Permissions memory p = AgenPermissions(address(hook)).getHookPermissions();
+
+        if (p.beforeInitialize) flags |= Hooks.BEFORE_INITIALIZE_FLAG;
+        if (p.afterInitialize) flags |= Hooks.AFTER_INITIALIZE_FLAG;
+        if (p.beforeAddLiquidity) flags |= Hooks.BEFORE_ADD_LIQUIDITY_FLAG;
+        if (p.afterAddLiquidity) flags |= Hooks.AFTER_ADD_LIQUIDITY_FLAG;
+        if (p.beforeRemoveLiquidity) flags |= Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG;
+        if (p.afterRemoveLiquidity) flags |= Hooks.AFTER_REMOVE_LIQUIDITY_FLAG;
+        if (p.beforeSwap) flags |= Hooks.BEFORE_SWAP_FLAG;
+        if (p.afterSwap) flags |= Hooks.AFTER_SWAP_FLAG;
+        if (p.beforeDonate) flags |= Hooks.BEFORE_DONATE_FLAG;
+        if (p.afterDonate) flags |= Hooks.AFTER_DONATE_FLAG;
+        if (p.beforeSwapReturnDelta) flags |= Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG;
+        if (p.afterSwapReturnDelta) flags |= Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG;
+        if (p.afterAddLiquidityReturnDelta) flags |= Hooks.AFTER_ADD_LIQUIDITY_RETURNS_DELTA_FLAG;
+        if (p.afterRemoveLiquidityReturnDelta) flags |= Hooks.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG;
+    }
+
+    /// @notice A pool key in the order Agen launches markets: quote below token.
+    /// @dev The direction of every rule depends on this. zeroForOne means spending
+    /// currency0, so a key built the other way round makes buys look like sells and a
+    /// test written against it agrees with a hook that has the same bug.
+    function agenPoolKey(Currency quote, Currency token, IHooks hook, int24 tickSpacing)
+        internal
+        pure
+        returns (PoolKey memory)
+    {
+        require(Currency.unwrap(quote) < Currency.unwrap(token), "quote must sort below token");
+        return PoolKey({
+            currency0: quote,
+            currency1: token,
+            fee: DYNAMIC_FEE,
+            tickSpacing: tickSpacing,
+            hooks: hook
+        });
+    }
+}
+
+/// @dev getHookPermissions is on AgenBaseHook rather than on IHooks, and the harness
+/// must not import the market's own contracts to reach it.
+interface AgenPermissions {
+    function getHookPermissions() external pure returns (Hooks.Permissions memory);
+}
+`;
+
+/**
  * The token, written by hand rather than by a model.
  *
  * A launched token is a fixed-supply ERC20 with a name, a symbol and a recipient. There
@@ -771,6 +958,18 @@ abstract contract AgenWired {
 }
 `;
 
+/**
+ * Test-side files written into a job's workspace before test generation.
+ *
+ * Kept apart from `preludeSources` deliberately. That list is the market's own
+ * contracts — it feeds `preludeApi`, the reserved-name list and the review screen, and a
+ * test harness appearing in any of those would be describing the build to itself. This
+ * is scaffolding for the suite and is not part of what gets deployed.
+ */
+export function testPreludeSources(): readonly GeneratedSource[] {
+  return [{ path: "test/AgenTest.sol", content: TEST_HARNESS }];
+}
+
 /** Files written into a job's workspace before generation begins. */
 export function preludeSources(): readonly GeneratedSource[] {
   return [
@@ -803,20 +1002,88 @@ export function preludeSources(): readonly GeneratedSource[] {
 export function preludeApi(): string {
   const sections: string[] = [];
 
-  for (const { path, content } of preludeSources()) {
+  for (const { path, content: file } of preludeSources()) {
     const name = path.split("/").pop()?.replace(/\.sol$/, "") ?? "";
+    const isAbstract = new RegExp(`abstract contract ${name}\\b`).test(file);
 
-    const functions = [...content.matchAll(/^\s{4}function\s+([^;{]+?)\s*\{/gm)]
+    // Only this contract's own body. `FeeVault.sol` also declares the ERC20 interface it
+    // calls through, and reading the whole file listed `balanceOf` and `transfer` as
+    // things a FeeVault offers — which is precisely the invented-method-name failure
+    // this listing exists to prevent, produced by the listing itself.
+    const content = bodyOf(file, name);
+
+    /*
+     * Internal members are included for the abstract bases, and they are the whole
+     * point of one.
+     *
+     * The public surface of `EpochAccounting` is two view functions; everything a
+     * subclass actually uses — `_rollEpochs`, `_onEpochClosed` — is internal, so a list
+     * filtered to public told a generated market nothing about the contract it was
+     * extending. It guessed `rollEpochs()`, spent three repair rounds on "Undeclared
+     * identifier", and the build failed with the market itself perfectly sound.
+     *
+     * A concrete contract is the other case: it is used across a call, so its internals
+     * are noise to a caller and are left out.
+     */
+    const wanted = isAbstract ? /\s(external|public|internal)\b/ : /\s(external|public)\b/;
+
+    const functions = [...content.matchAll(/^\s{4}function\s+([^;{]+?)\s*[{;]/gm)]
       .map((match) => match[1]!.replace(/\s+/g, " ").trim())
-      .filter((signature) => / (external|public)\b/.test(signature))
-      // Modifier applications and inheritance specifiers say nothing a caller needs.
-      .map((signature) => signature.replace(/\s+(onlyOwner|onlyHook|onlyInstaller|onlyPoolManager)\b/g, ""));
+      .filter((signature) => wanted.test(signature))
+      // Modifier applications say nothing a caller or a subclass needs.
+      .map((signature) =>
+        signature.replace(/\s+(onlyOwner|onlyHook|onlyInstaller|onlyPoolManager)\b/g, ""),
+      )
+      // `virtual` is the one keyword worth keeping: it is the difference between a
+      // member to call and a member to implement, and a subclass that overrides the
+      // wrong one compiles and never runs.
+      .map((signature) => (/ virtual\b/.test(signature) ? `${signature}   <- override this` : signature));
 
-    if (functions.length === 0) continue;
-    sections.push(`  ${name}\n${functions.map((signature) => `    function ${signature}`).join("\n")}`);
+    // The constructor, because a base with one cannot be inherited without calling it.
+    // A generated hook inherited AgenWired and passed it nothing, which does not compile
+    // and reads as a mistake about the market rather than about the base.
+    const constructor = /^\s{4}constructor\(([^)]*)\)/m.exec(content);
+
+    if (functions.length === 0 && constructor === null) continue;
+
+    const lines = [
+      ...(constructor === null
+        ? []
+        : [`    constructor(${constructor[1]!.replace(/\s+/g, " ").trim()})`]),
+      ...functions.map((signature) => `    function ${signature}`),
+    ];
+
+    sections.push(`  ${name}${isAbstract ? "  (abstract — inherit it)" : ""}\n${lines.join("\n")}`);
   }
 
   return sections.join("\n\n");
+}
+
+/**
+ * One contract's source, from its declaration to its closing brace.
+ *
+ * Brace counting rather than a regex to the next declaration, because a contract
+ * containing a struct or a nested block would end early and silently drop half its
+ * members from the listing. Falls back to the whole file if the contract is not found,
+ * which keeps this from turning a rename into an empty section nobody notices.
+ */
+function bodyOf(file: string, name: string): string {
+  const start = new RegExp(`^(?:abstract )?contract ${name}\\b`, "m").exec(file);
+  if (start === null) return file;
+
+  const from = file.indexOf("{", start.index);
+  if (from === -1) return file;
+
+  let depth = 0;
+  for (let at = from; at < file.length; at++) {
+    if (file[at] === "{") depth += 1;
+    else if (file[at] === "}") {
+      depth -= 1;
+      if (depth === 0) return file.slice(start.index, at + 1);
+    }
+  }
+
+  return file.slice(start.index);
 }
 
 /**

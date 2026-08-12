@@ -16,6 +16,7 @@ const ENVIRONMENT: DeploymentEnvironment = {
   poolManager: "0x1111111111111111111111111111111111111111",
   installer: "0x2222222222222222222222222222222222222222",
   creator: "0x3333333333333333333333333333333333333333",
+  feeReceiver: "0x4444444444444444444444444444444444444444",
   name: "Pulse",
   symbol: "PULSE",
   supplyTokens: 1_000_000_000n,
@@ -135,6 +136,41 @@ describe("working out how a generated market is deployed", () => {
     // only the token's supply has to pass through the factory on its way to the pool.
     const vault = deployments.find((entry) => entry.componentId === "feeVault");
     expect(vault?.argumentValues).toEqual([{ kind: "external", address: ENVIRONMENT.creator }]);
+  });
+
+  it("pays a fee receiver to the fee receiver, not to the creator", () => {
+    // The real one, and it cost a live build to find. A generated EMBER accounting
+    // contract took `address feeReceiver_`, which nothing in the vocabulary answered —
+    // the market compiled, passed its tests and its gates, and was refused as
+    // undeployable at the last stage. "The fees go to the fee receiver" is the most
+    // common sentence in a specification, so this was not an unusual market.
+    //
+    // The distinction from the creator matters and is not cosmetic. A component holding
+    // this takes it in an immutable, so a creator who points their fees at a splitter or
+    // a multisig and silently gets their own wallet baked in has a market that pays the
+    // wrong address for as long as it trades, with no way to correct it.
+    const { deployments } = resolveDeployment({
+      plan: plan(),
+      artifacts: [
+        artifact("PulseToken", [constructorOf([{ name: "recipient", type: "address" }])]),
+        artifact("PulseHook", [constructorOf([{ name: "manager", type: "address" }])]),
+        artifact("FeeVault", [
+          constructorOf([
+            { name: "feeReceiver_", type: "address" },
+            // Not about fees, so it stays with the creator: a bare receiver on some
+            // other component is not necessarily about money.
+            { name: "receiver_", type: "address" },
+          ]),
+        ]),
+      ],
+      environment: ENVIRONMENT,
+    });
+
+    const vault = deployments.find((entry) => entry.componentId === "feeVault");
+    expect(vault?.argumentValues).toEqual([
+      { kind: "external", address: ENVIRONMENT.feeReceiver },
+      { kind: "external", address: ENVIRONMENT.creator },
+    ]);
   });
 
   it("refuses an argument nothing can supply, naming it", () => {

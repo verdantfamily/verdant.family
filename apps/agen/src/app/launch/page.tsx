@@ -24,7 +24,7 @@ export default function Launch() {
       </div>
       <div className="grain" aria-hidden="true" />
 
-      <Nav active="launch" />
+      <Nav active="create" />
 
       <main className="page launch">
         <Flow />

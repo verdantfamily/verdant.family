@@ -4,29 +4,28 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 /**
- * The thing the homepage is for.
+ * The composer, on a page that is mostly not the composer.
  *
- * A creator can start typing here without a click, and what they type survives the trip
- * to the launch page as a query parameter. That matters more than it looks: the previous
- * flow asked for a token name first, which is the least interesting decision in the
- * product and the one most likely to make somebody close the tab. The interesting
- * question is what the market should do, so it is the one on the front page.
+ * It used to be the homepage: a headline, a three-line textarea and a wall of
+ * suggestions, filling the screen before a visitor saw a single token. That is the
+ * shape of an AI product, and it answers a question nobody arriving at a launchpad is
+ * asking. What they want to know first is whether anything is happening here.
  *
- * The suggestions are examples, not templates. They fill the field and stay editable, and
- * the line under them says so — a creator who thinks these are the four available options
- * has misunderstood the entire product.
+ * So this is one row deep now and the market list starts immediately under it. Writing
+ * a prompt is still the product; it is no longer the entire front page.
+ *
+ * Enter sends, because this is a command box more than a document. Shift+Enter still
+ * writes a second line for anybody describing something long.
  */
 const SUGGESTIONS: readonly string[] = [
   "every sell triggers a buyback",
-  "reward long-term holders",
-  "make every 10th trade free",
-  "change fees at $1m volume",
+  "every 100th buyer wins the fees",
+  "make selling cheaper the longer someone holds",
 ];
 
-const PLACEHOLDER =
-  "every large sell triggers a buyback, and after 10 consecutive buys make the next trade fee-free…";
+const PLACEHOLDER = "every 100th buyer wins the accumulated fees…";
 
-export function Hero() {
+export function Composer() {
   const router = useRouter();
   const [prompt, setPrompt] = useState("");
 
@@ -36,43 +35,37 @@ export function Hero() {
   };
 
   return (
-    <section className="hero">
-      <h1>what should your token do?</h1>
-      <p className="hero-lede">describe the rules. agen builds the market.</p>
+    <section className="composer-bar">
+      <div className="composer-line">
+        <label className="composer-label" htmlFor="prompt">
+          what should your token do?
+        </label>
 
-      <div className="composer">
-        <textarea
-          className="composer-field"
-          value={prompt}
-          rows={3}
-          maxLength={4_000}
-          placeholder={PLACEHOLDER}
-          aria-label="describe your market"
-          onChange={(event) => {
-            setPrompt(event.currentTarget.value);
-          }}
-          onKeyDown={(event) => {
-            // Enter sends, because this is a command box more than it is a document.
-            // Shift+Enter still writes a second line for anyone describing something long.
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              go();
-            }
-          }}
-        />
+        <div className="composer-input">
+          <input
+            id="prompt"
+            value={prompt}
+            maxLength={4_000}
+            placeholder={PLACEHOLDER}
+            autoComplete="off"
+            onChange={(event) => {
+              setPrompt(event.currentTarget.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                go();
+              }
+            }}
+          />
 
-        <div className="composer-foot">
-          <span className="composer-hint">
-            {prompt.trim().length === 0 ? "no wallet needed to build" : "enter to continue"}
-          </span>
-
-          <button type="button" className="primary" onClick={go}>
-            build market <span aria-hidden="true">→</span>
+          <button type="button" className="button-solid" onClick={go}>
+            build token
           </button>
         </div>
       </div>
 
-      <div className="suggestions">
+      <div className="composer-hints">
         {SUGGESTIONS.map((suggestion) => (
           <button
             type="button"
@@ -84,7 +77,6 @@ export function Hero() {
             {suggestion}
           </button>
         ))}
-        <span className="suggestions-note">or describe something completely different.</span>
       </div>
     </section>
   );

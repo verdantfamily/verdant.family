@@ -15,19 +15,55 @@
  */
 
 import type { PublicJob } from "../lib/builds";
+import { StageIcon, type StageMark } from "./stage-icon";
 
-/** The order the interface shows, and the words it uses for each stage. */
-const LINES: readonly { readonly stage: string; readonly label: string }[] = [
-  { stage: "interpreting", label: "Understanding market" },
-  { stage: "specification_created", label: "Formalising rules" },
-  { stage: "architecture_planning", label: "Designing architecture" },
-  { stage: "code_generation", label: "Generating contracts" },
-  { stage: "compilation", label: "Compiling" },
-  { stage: "test_generation", label: "Generating tests" },
-  { stage: "test_execution", label: "Running tests" },
-  { stage: "simulation", label: "Simulating" },
-  { stage: "final_validation", label: "Checking safety" },
-  { stage: "deployment_ready", label: "Preparing deployment" },
+/**
+ * The order the interface shows, and the words it uses for each stage.
+ *
+ * One word each where one word will do. This used to name ten stages in the pipeline's
+ * own vocabulary — "Generating tests", "Running tests", "Checking safety" as three
+ * separate lines — which is an accurate account of the build and reads as a compiler
+ * log. A creator waiting two minutes wants to know roughly where it is, not which
+ * subsystem is busy; the detail is still on the record and still in `Advanced`.
+ */
+const LINES: readonly {
+  readonly stage: string;
+  readonly label: string;
+  readonly note: string;
+  readonly mark: StageMark;
+}[] = [
+  {
+    stage: "interpreting",
+    label: "Understanding",
+    note: "reading what you asked for",
+    mark: "understanding",
+  },
+  {
+    stage: "specification_created",
+    label: "Formalising",
+    note: "turning it into exact rules",
+    mark: "formalising",
+  },
+  {
+    stage: "architecture_planning",
+    label: "Architecture",
+    note: "deciding what to build",
+    mark: "architecture",
+  },
+  {
+    stage: "code_generation",
+    label: "Generating",
+    note: "writing the contracts",
+    mark: "generating",
+  },
+  {
+    stage: "compilation",
+    label: "Compiling",
+    note: "making them run on chain",
+    mark: "compiling",
+  },
+  { stage: "test_execution", label: "Testing", note: "proving the rules hold", mark: "testing" },
+  { stage: "deployment_ready", label: "Ready", note: "prepared for launch", mark: "ready" },
 ];
 
 type State = "waiting" | "running" | "done" | "failed" | "skipped";
@@ -59,12 +95,29 @@ function attemptsOf(job: PublicJob, stage: string): number {
 
 export function Progress({ job }: { readonly job: PublicJob }) {
   const failedAt = job.failure?.stage;
+  const queued = job.queue;
 
   return (
     <div className="progress">
       <h1 className="progress-title">
-        building your market <span className="ticker">${job.symbol}</span>
+        {queued === null ? "building" : "queued —"} {job.name}{" "}
+        <span className="ticker">${job.symbol}</span>
       </h1>
+
+      {/*
+        A waiting build has no running stage, so without this the list below sits
+        entirely grey and the screen reads as a build that has stalled. Saying the
+        position is the difference between "this is broken" and "this is a line".
+      */}
+      <p className="progress-lede">
+        {queued === null
+          ? "this takes a minute or two. you can leave this page open."
+          : queued.position === 1
+            ? "next to build. your market starts as soon as a slot frees up."
+            : `${String(queued.position - 1)} ${
+                queued.position === 2 ? "build is" : "builds are"
+              } ahead of yours. it will start on its own — you can leave this page open.`}
+      </p>
 
       <ol className="stages">
         {LINES.map((line) => {
@@ -78,8 +131,15 @@ export function Progress({ job }: { readonly job: PublicJob }) {
 
           return (
             <li className={`stage stage-${state}`} key={line.stage}>
-              <span className="stage-mark" aria-hidden="true" />
-              <span className="stage-label">{line.label}</span>
+              <StageIcon mark={line.mark} state={state} />
+
+              <span className="stage-text">
+                <span className="stage-label">{line.label}</span>
+                {/* The plain-language version, and only while it is happening: seven
+                    explanations at once is a paragraph, one is an answer. */}
+                {state === "running" ? <span className="stage-note">{line.note}</span> : null}
+              </span>
+
               {state === "skipped" ? <span className="stage-attempts">not run</span> : null}
               {repeated ? (
                 <span className="stage-attempts">attempt {String(attempts)}</span>

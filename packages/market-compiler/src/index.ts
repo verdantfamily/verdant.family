@@ -29,6 +29,7 @@ export * from "./foundry.js";
 export * from "./gates.js";
 export * from "./deployment.js";
 export * from "./job.js";
+export * from "./limit.js";
 export * from "./manifest.js";
 export * from "./mining.js";
 export * from "./model.js";

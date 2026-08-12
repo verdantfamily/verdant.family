@@ -65,7 +65,8 @@
   font-family: "Aeonik";
   src:
     url("/fonts/Aeonik-Medium.woff2") format("woff2"),
-    url("/fonts/Aeonik-Medium.otf") format("opentype");
+    url("/fonts/Aeonik-Medium.otf") format("opentype"),
+    url("/fonts/Aeonik-Medium.ttf") format("truetype");
   font-weight: 500;
   font-style: normal;
   font-display: swap;
@@ -2811,4 +2812,3208 @@ pre {
 .hero .composer-field {
   min-height: 96px;
   font-size: 0.98rem;
+}
+
+/* ==========================================================================
+ * The launchpad surfaces
+ * ==========================================================================
+ *
+ * Everything below dresses the trading side of the product: the front page's token
+ * shelves, the cards, and the token page with its chart and trade panel.
+ *
+ * It is a layer on the identity already in this file rather than a second one. Same
+ * near-black, same Aeonik, same thin light-on-dark borders. What changes is density —
+ * these screens carry ten times the information the teaser did, and the spacing that
+ * suited one headline makes a stats band look abandoned.
+ *
+ * ## Flat, and deliberately so
+ *
+ * There is no gloss anywhere in this file: no chrome edge, no gradient on a surface, no
+ * glow, no blur behind a panel. An earlier version of this system had all of them, and
+ * the problem with a screen where every panel catches light is not that it looks bad —
+ * it is that the light competes with the numbers, and the numbers are the entire reason
+ * anybody is here. A price should be the brightest thing on the row it sits in.
+ *
+ * So depth comes from one mechanism only: three flat greys and a hairline border. A
+ * panel is lighter than the page, an inset is darker than the panel, and a border
+ * separates them. That is the whole vocabulary, and it is the vocabulary a terminal uses.
+ *
+ * ## Colour
+ *
+ * Green and red appear for trade direction and price change and nowhere else. Everything
+ * else is black, white and grey, so the two colours on the page mean the same thing every
+ * time they are used.
+ */
+
+:root {
+  /* Trading direction. The only hues in the interface. */
+  --up: #4ade80;
+  --down: #f8717d;
+
+  /* Three flat greys. No gradients: a surface is one colour. */
+  --panel: #101012;
+  --panel-lift: #17171a;
+  --inset: #0a0a0b;
+
+  /* Corners stay tight. A large radius reads as friendly, which this is not. */
+  --radius: 6px;
+  --radius-sm: 4px;
+}
+
+.section-title {
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.dim {
+  color: var(--text-dim);
+}
+
+.tone-up,
+.up {
+  color: var(--up);
+}
+
+.tone-down,
+.down {
+  color: var(--down);
+}
+
+/* --- the compact composer ------------------------------------------------
+ *
+ * One row on a page that is otherwise a market list. It used to be the whole screen.
+ */
+
+.composer-bar {
+  margin-bottom: clamp(1.6rem, 3vw, 2.2rem);
+  padding: clamp(1rem, 2vw, 1.3rem);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.composer-label {
+  display: block;
+  margin-bottom: 0.7rem;
+  font-size: 1.02rem;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.composer-input {
+  display: flex;
+  gap: 0.7rem;
+  align-items: stretch;
+}
+
+.composer-input input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--inset);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.94rem;
+  transition: border-color 0.4s var(--slow);
+}
+
+.composer-input input:focus {
+  outline: none;
+  border-color: var(--line-strong);
+}
+
+.composer-input input::placeholder {
+  color: var(--text-faint);
+}
+
+/* The primary action, and the only white block on the page. White carries more weight
+   here than any finish could: on a screen that is otherwise black and grey, a solid
+   white rectangle is unmissable without asking for attention. */
+.button-solid {
+  padding: 0 1.4rem;
+  border: 1px solid var(--text);
+  border-radius: var(--radius-sm);
+  background: var(--text);
+  color: #000;
+  font-family: inherit;
+  font-size: 0.86rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: opacity 0.3s var(--slow);
+}
+
+.button-solid:hover {
+  opacity: 0.88;
+}
+
+.composer-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+}
+
+.composer-hints button {
+  padding: 0.34rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 0.76rem;
+  cursor: pointer;
+  transition:
+    color 0.3s var(--slow),
+    border-color 0.3s var(--slow);
+}
+
+.composer-hints button:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+/* --- shelves and the token grid ----------------------------------------- */
+
+.shelf-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.9rem;
+  margin-bottom: 0.9rem;
+}
+
+.shelf-head h2 {
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.shelf-hint {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+}
+
+.shelf-empty {
+  padding: 1.4rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 0.86rem;
+  color: var(--text-dim);
+}
+
+.shelf-more {
+  display: inline-block;
+  margin-top: 1rem;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+
+.token-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(258px, 1fr));
+  gap: 0.85rem;
+}
+
+/* --- the token card ------------------------------------------------------ */
+
+.token-card {
+  display: block;
+  padding: 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  text-decoration: none;
+  color: inherit;
+  transition:
+    border-color 0.35s var(--slow),
+    background 0.35s var(--slow),
+    transform 0.35s var(--curve);
+}
+
+.token-card:hover {
+  border-color: var(--line-strong);
+  background: var(--panel-lift);
+  transform: translateY(-1px);
+}
+
+.tc-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.tc-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--panel-lift);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.tc-identity {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tc-ticker {
+  font-size: 0.9rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.tc-name {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tc-corner {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+}
+
+.tc-age {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--text-faint);
+}
+
+.pill {
+  padding: 0.14rem 0.44rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.pill-live {
+  border-color: rgb(74 222 128 / 34%);
+  color: var(--up);
+}
+
+.tc-figures {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.4rem;
+  margin-top: 0.85rem;
+}
+
+.tc-figure {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+
+.tc-figure-label {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.tc-figure-value {
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+/* The sparkline's frame, drawn even with no series in it: a card that grows a strip the
+   day a token trades is a card whose height was a guess. */
+.tc-spark {
+  height: 26px;
+  margin-top: 0.7rem;
+  border-radius: 4px;
+  background: var(--inset);
+  display: grid;
+  align-items: center;
+  padding: 0 0.4rem;
+}
+
+.tc-spark-flat {
+  display: block;
+  height: 1px;
+  background: rgb(255 255 255 / 8%);
+}
+
+.tc-mechanic {
+  margin-top: 0.7rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* --- the token page ------------------------------------------------------ */
+
+.token-page {
+  padding-top: clamp(1.2rem, 2vw, 1.8rem);
+}
+
+.token-layout {
+  display: grid;
+  gap: 1.1rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1060px) {
+  .token-layout {
+    grid-template-columns: minmax(0, 1fr) 21rem;
+    align-items: start;
+  }
+
+  .token-aside {
+    position: sticky;
+    top: 5.2rem;
+  }
+}
+
+.token-head {
+  display: flex;
+  gap: 0.85rem;
+  align-items: center;
+}
+
+.token-mark {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  flex: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 13px;
+  background: var(--panel-lift);
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  text-transform: uppercase;
+}
+
+.token-names {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.token-names h1 {
+  font-size: clamp(1.25rem, 2.4vw, 1.6rem);
+  font-weight: 500;
+  letter-spacing: -0.025em;
+}
+
+.token-ticker {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+
+.token-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+}
+
+.token-links a,
+.addr {
+  padding: 0.22rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  text-decoration: none;
+  cursor: pointer;
+  font-family: inherit;
+  transition:
+    color 0.3s var(--slow),
+    border-color 0.3s var(--slow);
+}
+
+.token-links a:hover,
+.addr:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.addr {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.addr-action {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.addr-pending {
+  cursor: default;
+  color: var(--text-faint);
+}
+
+.token-price {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-top: 1.1rem;
+}
+
+.token-price-value {
+  font-size: clamp(1.7rem, 3.4vw, 2.3rem);
+  font-weight: 500;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+}
+
+.token-change {
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-band {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.8rem 1.4rem;
+  margin: 0.9rem 0 1.1rem;
+  padding: 0.85rem 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+@media (min-width: 620px) {
+  .stat-band {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.stat-label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.stat-value {
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- the chart ----------------------------------------------------------- */
+
+.chart-panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.chart-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+}
+
+.chart-label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.chart-value {
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-ranges {
+  display: flex;
+  gap: 0.15rem;
+  padding: 0.15rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--inset);
+}
+
+.chart-ranges button {
+  padding: 0.25rem 0.5rem;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  cursor: pointer;
+  transition:
+    color 0.25s var(--slow),
+    background 0.25s var(--slow);
+}
+
+.chart-ranges button:hover {
+  color: var(--text-dim);
+}
+
+.chart-ranges button.on {
+  background: rgb(255 255 255 / 8%);
+  color: var(--text);
+}
+
+.chart-body {
+  position: relative;
+  height: clamp(240px, 34vh, 380px);
+  background: rgb(0 0 0 / 22%);
+}
+
+/* Decoration, and it says so in the markup. Not an axis over absent data. */
+.chart-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, rgb(255 255 255 / 3%) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(255 255 255 / 3%) 1px, transparent 1px);
+  background-size: 12.5% 25%;
+}
+
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 0.3rem;
+  padding: 1rem;
+  text-align: center;
+}
+
+.chart-empty-line {
+  font-size: 0.88rem;
+  color: var(--text-dim);
+}
+
+.chart-empty-note {
+  font-size: 0.76rem;
+  color: var(--text-faint);
+  max-width: 30rem;
+}
+
+/* --- the trade panel ----------------------------------------------------- */
+
+.trade-panel {
+  padding: 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.tp-sides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.15rem;
+  padding: 0.15rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--inset);
+}
+
+.tp-side {
+  padding: 0.5rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 0.84rem;
+  cursor: pointer;
+  transition:
+    background 0.25s var(--slow),
+    color 0.25s var(--slow);
+}
+
+.tp-side.on.buy {
+  background: rgb(74 222 128 / 12%);
+  color: var(--up);
+}
+
+.tp-side.on.sell {
+  background: rgb(248 113 125 / 12%);
+  color: var(--down);
+}
+
+.tp-leg {
+  margin-top: 0.7rem;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--inset);
+}
+
+.tp-leg-head {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.tp-asset {
+  color: var(--text-dim);
+}
+
+.tp-amount {
+  width: 100%;
+  margin-top: 0.35rem;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.tp-amount:focus {
+  outline: none;
+}
+
+.tp-amount::placeholder {
+  color: var(--text-ghost);
+}
+
+.tp-out {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.tp-sizes {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+}
+
+.tp-sizes button {
+  padding: 0.35rem 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  cursor: pointer;
+  transition:
+    color 0.25s var(--slow),
+    border-color 0.25s var(--slow);
+}
+
+.tp-sizes button:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.tp-rows {
+  margin-top: 0.8rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tp-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-size: 0.76rem;
+}
+
+.tp-row-label {
+  color: var(--text-faint);
+}
+
+.tp-row-hint {
+  display: block;
+  font-size: 0.66rem;
+  color: var(--text-ghost);
+}
+
+.tp-row-value {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.tp-action {
+  width: 100%;
+  margin-top: 0.9rem;
+  padding: 0.8rem;
+  border: 1px solid var(--text);
+  border-radius: var(--radius-sm);
+  background: var(--text);
+  color: #000;
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.3s var(--slow);
+}
+
+.tp-action:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.tp-action:disabled {
+  border-color: var(--line);
+  background: var(--surface-lift);
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+
+.tp-note {
+  margin-top: 0.7rem;
+  font-size: 0.7rem;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+/* --- how this token works ------------------------------------------------ */
+
+.works {
+  margin-top: 1.4rem;
+}
+
+.rule-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.7rem;
+  margin-top: 0.8rem;
+}
+
+.rule-card {
+  padding: 0.8rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.rule-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.rule-figure {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 1.45rem;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.rule-note {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+
+.rule-lines {
+  margin-top: 0.45rem;
+  display: grid;
+  gap: 0.35rem;
+  list-style: none;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.state-block {
+  margin-top: 1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--line);
+}
+
+.state-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+}
+
+.state-head h3 {
+  font-size: 0.84rem;
+  font-weight: 500;
+}
+
+.state-note {
+  font-size: 0.7rem;
+  color: var(--text-faint);
+}
+
+.state-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.6rem;
+  margin-top: 0.7rem;
+}
+
+.state-cell {
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.state-cell.unread .state-value {
+  color: var(--text-faint);
+}
+
+.state-label {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-faint);
+}
+
+.state-value {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- activity ------------------------------------------------------------ */
+
+.activity {
+  margin-top: 1.4rem;
+}
+
+.activity-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.7rem;
+}
+
+.activity-tabs {
+  display: flex;
+  gap: 0.15rem;
+  padding: 0.15rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--inset);
+}
+
+.activity-tabs button {
+  padding: 0.3rem 0.6rem;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+
+.activity-tabs button.on {
+  background: rgb(255 255 255 / 8%);
+  color: var(--text);
+}
+
+.activity-empty {
+  padding: 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+
+.trade-table {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.trade-row {
+  display: grid;
+  grid-template-columns: 3.4rem 1fr 1fr 4rem 6rem 3rem;
+  gap: 0.6rem;
+  align-items: center;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--line);
+}
+
+.trade-row:last-child {
+  border-bottom: 0;
+}
+
+.trade-headings {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  background: var(--inset);
+}
+
+.trade-side {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.trade-buy .trade-side {
+  color: var(--up);
+}
+
+.trade-sell .trade-side {
+  color: var(--down);
+}
+
+.event-list {
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.event-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.8rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.event-list li:last-child {
+  border-bottom: 0;
+}
+
+.event-amount {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.event-age {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--text-faint);
+}
+
+/* --- advanced, folded ---------------------------------------------------- */
+
+.advanced {
+  margin-top: 1.6rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.9rem;
+}
+
+.advanced > summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.advanced-line {
+  margin-top: 0.7rem;
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+
+/* --- the phone's trade control ------------------------------------------- */
+
+.trade-dock {
+  display: none;
+}
+
+@media (max-width: 1059px) {
+  .trade-dock {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 40;
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 0.5rem;
+    padding: 0.6rem 0.8rem calc(0.6rem + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+    background: #0a0a0b;
+  }
+
+  .trade-dock a {
+    padding: 0.75rem;
+    border-radius: var(--radius-sm);
+    text-align: center;
+    text-decoration: none;
+    font-size: 0.88rem;
+    font-weight: 500;
+  }
+
+  .trade-dock-buy {
+    background: var(--text);
+    color: #000;
+  }
+
+  .trade-dock-sell {
+    border: 1px solid var(--line-strong);
+    color: var(--text);
+  }
+
+  /* Room for the dock, so the last row of activity is not under it. */
+  .token-page {
+    padding-bottom: 6rem;
+  }
+}
+
+/* ==========================================================================
+ * The visual system, stated last so it wins
+ * ==========================================================================
+ *
+ * Black, white, grey. Nothing else except the two trading colours.
+ *
+ * This file grew from a teaser whose whole job was atmosphere: two soft masses of light
+ * drifting behind the type, a noise tile over everything, a blurred bar at the top and
+ * buttons finished like brushed aluminium. That was the right page for a product with
+ * nothing behind it. It is the wrong one for a page carrying a price, a chart and a
+ * trade panel, because every one of those effects spends contrast on decoration — and
+ * contrast is the budget the numbers need.
+ *
+ * So the decoration is switched off here rather than deleted from the rules above. The
+ * teaser's styling is still legible as a record of what this looked like, the markup
+ * that carries it is untouched, and one section decides what the product actually shows.
+ * Anything reintroducing a gradient, a glow or a blur has to argue with this block.
+ */
+
+/* The drifting light and the noise. Both were the teaser's whole personality. */
+.canvas,
+.grain {
+  display: none;
+}
+
+/* Solid, not frosted. Glass over a scrolling list of prices is a legibility problem
+   wearing a style. */
+.nav {
+  background: #08080a;
+  backdrop-filter: none;
+}
+
+/* One white button, everywhere. Black text on it, dimming on hover, and no bevel. */
+.primary,
+.primary-large {
+  border: 1px solid var(--text);
+  border-radius: var(--radius-sm);
+  background: var(--text);
+  color: #000;
+  transition: opacity 0.3s var(--slow);
+}
+
+.primary:hover:not(:disabled),
+.primary-large:hover:not(:disabled) {
+  opacity: 0.88;
+  background: var(--text);
+}
+
+.primary:disabled {
+  border-color: var(--line);
+  background: transparent;
+  color: var(--text-faint);
+}
+
+/* Flat charcoal surfaces for the panels the teaser lit from above. */
+.describe,
+.composer,
+.launch-panel {
+  background: var(--inset);
+  border-radius: var(--radius);
+}
+
+/* Monograms are a tile with a border, not a chip of polished metal. */
+.market-mark,
+.card-mark,
+.row-mark {
+  background: var(--panel-lift);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+/* A progress bar is white on charcoal. It measures something; it is not a highlight. */
+.state-bar span {
+  background: var(--text);
+}
+
+/*
+ * Corners, once.
+ *
+ * The teaser used everything from 2px to 18px depending on when a rule was written. A
+ * financial surface should be consistent and nearly square, so both radii collapse to
+ * the two tokens and every panel in the product picks them up.
+ */
+.token-card,
+.chart-panel,
+.trade-panel,
+.rule-card,
+.state-cell,
+.shelf-empty,
+.activity-empty,
+.trade-table,
+.event-list,
+.composer-bar,
+.card,
+.panel,
+.review,
+.failure {
+  border-radius: var(--radius);
+}
+
+/* ==========================================================================
+ * The light system — one white sheet on grey
+ * ==========================================================================
+ *
+ * This file was written for a black product and is now a white one. Rather than rewrite
+ * three thousand lines of teaser styling, everything above is left as the record of what
+ * that looked like and this section decides what ships: it redefines the tokens the rest
+ * of the file reads, and overrides the handful of places that hardcoded a colour instead.
+ *
+ * That works because almost nothing above names a colour directly — surfaces read
+ * `--surface`, borders read `--line`, type reads `--text` — so inverting the palette in
+ * one place inverts the product. The exceptions are listed at the bottom of this section
+ * and there are about six of them.
+ *
+ * ## The frame
+ *
+ * The page is grey and the product is a single white sheet floating on it, corners
+ * rounded, navigation and content inside the same card. The grey is doing real work: it
+ * turns the interface into an object with edges rather than a wall of white, and it gives
+ * the token art something to sit against.
+ *
+ * ## Colour
+ *
+ * Black type, grey secondary type, white surfaces, one hairline grey border. Green and
+ * red appear on price movement and buy/sell and nowhere else.
+ */
+
+:root {
+  /* The page behind the sheet. `--black` keeps its name and stops being black; every
+     rule above that paints a background with it now paints the grey. */
+  --black: #e8e8e8;
+
+  --text: #0a0a0a;
+  --text-dim: #6b6b70;
+  --text-faint: #9a9aa0;
+  --text-ghost: #c2c2c6;
+
+  --surface: #ffffff;
+  --surface-lift: #f6f6f7;
+  --line: #e6e6e8;
+  --line-strong: #d4d4d8;
+
+  --panel: #ffffff;
+  --panel-lift: #fafafa;
+  --inset: #f4f4f5;
+
+  /* Direction, on white. Darker than the dark theme's so they hold contrast. */
+  --up: #16a34a;
+  --down: #dc2626;
+
+  --radius: 10px;
+  --radius-sm: 8px;
+}
+
+body {
+  background: var(--black);
+  color: var(--text);
+}
+
+.shell {
+  max-width: 1240px;
+  margin: clamp(0.6rem, 1.6vw, 1.4rem) auto;
+  background: #ffffff;
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+@media (max-width: 720px) {
+  .shell {
+    margin: 0;
+    border-radius: 0;
+    min-height: 100vh;
+  }
+}
+
+/* --- the header ---------------------------------------------------------- */
+
+.nav {
+  position: static;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.1rem clamp(1.1rem, 3vw, 2rem);
+  border-bottom: 0;
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.nav-brand {
+  display: inline-flex;
+  align-items: center;
+  /* The mark was drawn white-on-black. Inverted here rather than redrawn. */
+  filter: invert(1);
+}
+
+.nav-links {
+  display: flex;
+  justify-content: center;
+  gap: clamp(1.2rem, 3vw, 2.6rem);
+}
+
+.nav-links a {
+  font-size: 0.9rem;
+  color: var(--text-faint);
+  text-decoration: none;
+  transition: color 0.25s var(--slow);
+}
+
+.nav-links a:hover {
+  color: var(--text-dim);
+}
+
+.nav-links a.on {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.nav-account {
+  justify-self: end;
+}
+
+.wallet {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.86rem;
+  padding: 0;
+}
+
+.wallet:hover {
+  color: var(--text);
+}
+
+.wallet-panel {
+  border: 1px solid var(--line);
+  background: #ffffff;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 10%);
+}
+
+/* --- explore ------------------------------------------------------------- */
+
+.page {
+  padding: clamp(1rem, 2vw, 1.6rem) clamp(1.1rem, 3vw, 2rem) clamp(2.6rem, 5vw, 4rem);
+}
+
+.explore-head {
+  display: grid;
+  justify-items: center;
+  padding: clamp(1.6rem, 5vw, 3.4rem) 0 clamp(1.6rem, 3vw, 2.4rem);
+}
+
+.explore-head h1 {
+  max-width: 16ch;
+  text-align: center;
+  font-size: clamp(2.4rem, 6vw, 4.1rem);
+  font-weight: 500;
+  line-height: 1.02;
+  letter-spacing: -0.045em;
+}
+
+.explore-lede {
+  max-width: 52ch;
+  margin-top: 0.85rem;
+  text-align: center;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: min(560px, 100%);
+  /* Smaller now that a line of text sits between it and the headline. */
+  margin-top: clamp(1.1rem, 2.4vw, 1.7rem);
+}
+
+.search-field {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.62rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--inset);
+  transition: border-color 0.25s var(--slow);
+}
+
+.search-field:focus-within {
+  border-color: var(--line-strong);
+}
+
+.search-icon {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--text-faint);
+}
+
+.search-field input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.88rem;
+}
+
+.search-field input:focus {
+  outline: none;
+}
+
+.search-field input::placeholder {
+  color: var(--text-faint);
+}
+
+.search-filter {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--inset);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.search-filter svg {
+  width: 15px;
+  height: 15px;
+}
+
+.search-filter:disabled {
+  cursor: default;
+  color: var(--text-ghost);
+}
+
+/* --- shelves ------------------------------------------------------------- */
+
+.shelf {
+  margin-top: clamp(1.6rem, 3vw, 2.4rem);
+}
+
+.shelf-head h2 {
+  font-size: 1rem;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.shelf-empty {
+  border: 1px solid var(--line);
+  background: var(--inset);
+  color: var(--text-dim);
+}
+
+/* --- the token card ------------------------------------------------------ */
+
+.token-grid {
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.token-card {
+  padding: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+  transition:
+    box-shadow 0.3s var(--slow),
+    border-color 0.3s var(--slow),
+    transform 0.3s var(--curve);
+}
+
+.token-card:hover {
+  background: #ffffff;
+  border-color: var(--line-strong);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 8%);
+  transform: translateY(-2px);
+}
+
+/* The art. Square, black, and the largest thing on the card — it is the only part that
+   differs between one token and the next at a glance. */
+.tc-art {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  border-radius: 10px;
+  background: #0a0a0a;
+}
+
+.tc-monogram {
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #ffffff;
+}
+
+.tc-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-top: 0.55rem;
+  padding: 0 0.25rem;
+}
+
+.tc-line-sub {
+  margin-top: 0.05rem;
+}
+
+.tc-ticker {
+  font-size: 0.92rem;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  color: var(--text);
+}
+
+.tc-cap {
+  font-size: 0.92rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.tc-name {
+  font-size: 0.76rem;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tc-change {
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.tc-spark {
+  height: 46px;
+  margin: 0.6rem 0.25rem 0.35rem;
+  padding: 0;
+  background: transparent;
+  display: grid;
+  align-items: center;
+}
+
+.tc-spark-flat {
+  height: 1px;
+  background: var(--line);
+}
+
+/* --- everything the dark theme painted by hand --------------------------- */
+
+/* The primary action inverts: black block, white text. */
+.primary,
+.primary-large,
+.button-solid,
+.tp-action,
+.trade-dock-buy {
+  border: 1px solid var(--text);
+  background: var(--text);
+  color: #ffffff;
+}
+
+.primary:disabled,
+.tp-action:disabled {
+  border-color: var(--line);
+  background: var(--inset);
+  color: var(--text-faint);
+}
+
+.secondary,
+.trade-dock-sell {
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+}
+
+/* Monograms elsewhere in the product follow the card's art: black tile, white letters. */
+.market-mark,
+.card-mark,
+.row-mark,
+.tc-mark,
+.token-mark {
+  border: 0;
+  background: #0a0a0a;
+  color: #ffffff;
+}
+
+.state-bar span {
+  background: var(--text);
+}
+
+/* Insets that were darker than their panel have to become lighter than it. */
+.chart-body,
+.trade-dock {
+  background: var(--inset);
+}
+
+.chart-grid {
+  background-image:
+    linear-gradient(to right, rgb(0 0 0 / 5%) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(0 0 0 / 5%) 1px, transparent 1px);
+}
+
+.chart-ranges button.on,
+.activity-tabs button.on {
+  background: #ffffff;
+  color: var(--text);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 6%);
+}
+
+.tp-side.on.buy {
+  background: rgb(22 163 74 / 10%);
+  color: var(--up);
+}
+
+.tp-side.on.sell {
+  background: rgb(220 38 38 / 10%);
+  color: var(--down);
+}
+
+.pill-live {
+  border-color: rgb(22 163 74 / 35%);
+  color: var(--up);
+}
+
+.trade-headings {
+  background: var(--inset);
+}
+
+.foot {
+  border-top: 1px solid var(--line);
+  color: var(--text-faint);
+}
+
+/* Code stays on a light inset rather than inverting to a terminal inside a white sheet. */
+pre {
+  background: var(--inset);
+  color: var(--text);
+}
+
+/*
+ * Text fields, everywhere else.
+ *
+ * The dark theme underlined its inputs in translucent white, which on this sheet is
+ * invisible: the launch panel's amounts and the review's edit box had no edge at all.
+ * Grey hairlines, and a darker one on focus.
+ */
+.field input,
+.refine input,
+.describe,
+.field-amount {
+  border-bottom-color: var(--line-strong);
+}
+
+.field input:focus,
+.refine input:focus,
+.describe:focus,
+.field-amount:focus-within {
+  border-bottom-color: var(--text-dim);
+}
+
+.describe {
+  border: 1px solid var(--line-strong);
+  background: #ffffff;
+}
+
+/* ==========================================================================
+ * The create screen
+ * ==========================================================================
+ *
+ * One column, one decision at a time: say what the market does, name it, build it.
+ *
+ * The version before this one was a form that had been inverted rather than redrawn. Its
+ * text fields kept a white bottom border from the dark theme, which on a white sheet is
+ * no border at all — name, ticker and image read as three pieces of grey text floating
+ * over nothing, and the only way to discover they were typeable was to click them. The
+ * prompt box was a grey slab with 200px of dead space under the caret. Everything was
+ * flush left against a very wide column, so the eye had no centre to return to.
+ *
+ * So: the header and the actions are centred, the writing surface is a raised white card
+ * with a real edge, and every input is a bordered field that looks like somewhere text
+ * goes. Focus is a darkened hairline plus a soft ring rather than a colour, because
+ * nothing on this page should introduce a hue that isn't a price moving.
+ */
+
+.flow {
+  max-width: 44rem;
+}
+
+/* --- the step rail, as a stepper ----------------------------------------- */
+
+.steps {
+  justify-content: center;
+  gap: clamp(0.7rem, 2vw, 1.4rem);
+  margin-bottom: clamp(2rem, 4vw, 3rem);
+  font-size: 0.82rem;
+  letter-spacing: 0;
+  color: var(--text-faint);
+}
+
+.steps li {
+  gap: 0.55rem;
+  align-items: center;
+}
+
+/* The connector, drawn by the step that follows rather than by a divider element. */
+.steps li + li::before {
+  content: "";
+  width: clamp(14px, 3vw, 30px);
+  height: 1px;
+  margin-right: clamp(0.2rem, 1vw, 0.6rem);
+  background: var(--line-strong);
+}
+
+.steps li span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  font-size: 0.56rem;
+  color: var(--text-faint);
+}
+
+.steps li.on span {
+  border-color: var(--text);
+  background: var(--text);
+  color: #ffffff;
+}
+
+/* --- the header ---------------------------------------------------------- */
+
+.create {
+  animation: rise 0.7s var(--curve) backwards;
+}
+
+.create-head {
+  display: grid;
+  justify-items: center;
+  gap: 0.75rem;
+  margin-bottom: clamp(1.6rem, 3vw, 2.2rem);
+  text-align: center;
+}
+
+.create-head h1 {
+  font-size: clamp(2rem, 4.4vw, 2.85rem);
+  font-weight: 500;
+  line-height: 1.04;
+  letter-spacing: -0.04em;
+}
+
+.create-head p {
+  max-width: 54ch;
+  font-size: 1rem;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+/* --- the writing surface -------------------------------------------------- */
+
+.prompt {
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 4%),
+    0 14px 34px -20px rgb(0 0 0 / 22%);
+  transition:
+    border-color 0.25s var(--slow),
+    box-shadow 0.25s var(--slow);
+}
+
+.prompt:focus-within {
+  border-color: #a8a8ae;
+  box-shadow:
+    0 0 0 4px rgb(10 10 10 / 4%),
+    0 14px 34px -20px rgb(0 0 0 / 22%);
+}
+
+.prompt-field {
+  display: block;
+  width: 100%;
+  min-height: 8.5rem;
+  padding: 1.15rem 1.25rem 0.4rem;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 1.05rem;
+  line-height: 1.6;
+  letter-spacing: -0.011em;
+  resize: none;
+}
+
+.prompt-field:focus {
+  outline: none;
+}
+
+.prompt-field::placeholder {
+  color: #b3b3b8;
+}
+
+.prompt-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 1.25rem 0.9rem;
+}
+
+.prompt-shortcut,
+.prompt-count {
+  font-size: 0.72rem;
+  color: #a8a8ae;
+}
+
+.prompt-count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The shortcut is a hint for the keyboard, not a label for the box. It goes away when
+   there is no room for it rather than wrapping under the counter. */
+@media (max-width: 520px) {
+  .prompt-shortcut {
+    display: none;
+  }
+
+  .prompt-foot {
+    justify-content: flex-end;
+  }
+}
+
+/* --- examples ------------------------------------------------------------- */
+
+.examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+}
+
+.examples-note {
+  margin-right: 0.15rem;
+  font-size: 0.8rem;
+  color: var(--text-faint);
+}
+
+.examples button {
+  padding: 0.46rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 0.82rem;
+  letter-spacing: -0.005em;
+  cursor: pointer;
+  transition:
+    color 0.2s var(--slow),
+    border-color 0.2s var(--slow),
+    background-color 0.2s var(--slow);
+}
+
+.examples button:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-lift);
+  color: var(--text);
+}
+
+/* --- name, ticker, image -------------------------------------------------- */
+
+.identity-row {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr;
+  gap: 1rem;
+  align-items: end;
+  margin-top: clamp(1.8rem, 3vw, 2.4rem);
+  padding-top: clamp(1.6rem, 3vw, 2.2rem);
+  border-top: 1px solid var(--line);
+}
+
+/* A placeholder for artwork that cannot be uploaded yet: dashed, so it reads as a slot
+   waiting for something rather than as a control that is refusing to work. */
+.identity-art {
+  display: grid;
+  place-items: center;
+  width: 74px;
+  height: 74px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 14px;
+  background: var(--inset);
+  color: #bcbcc2;
+}
+
+.identity-art svg {
+  width: 22px;
+  height: 22px;
+}
+
+.ifield {
+  display: block;
+}
+
+.ifield > span {
+  display: block;
+  margin-bottom: 0.45rem;
+  font-size: 0.76rem;
+  letter-spacing: -0.005em;
+  color: var(--text-dim);
+}
+
+.ifield input,
+.ifield-affix {
+  width: 100%;
+  height: 46px;
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  background: #ffffff;
+  transition:
+    border-color 0.2s var(--slow),
+    box-shadow 0.2s var(--slow);
+}
+
+.ifield input {
+  padding: 0 0.9rem;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.98rem;
+  letter-spacing: -0.01em;
+}
+
+.ifield input::placeholder {
+  color: #b3b3b8;
+}
+
+.ifield > input:focus,
+.ifield-affix:focus-within {
+  outline: none;
+  border-color: #a8a8ae;
+  box-shadow: 0 0 0 4px rgb(10 10 10 / 4%);
+}
+
+/* The dollar sign belongs to the field, so the wrapper carries the edge and the input
+   inside it carries none. */
+.ifield-affix {
+  display: flex;
+  align-items: center;
+  padding-left: 0.9rem;
+}
+
+.ifield-affix em {
+  font-style: normal;
+  font-size: 0.98rem;
+  color: var(--text-faint);
+}
+
+.ifield-affix input {
+  height: auto;
+  padding: 0 0.9rem 0 0.2rem;
+  border: 0;
+  border-radius: 0;
+  letter-spacing: 0.01em;
+}
+
+.ifield-affix input:focus {
+  outline: none;
+}
+
+.identity-note {
+  margin-top: 0.7rem;
+  font-size: 0.76rem;
+  color: var(--text-faint);
+}
+
+@media (max-width: 560px) {
+  .identity-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .identity-art {
+    grid-column: 1 / -1;
+  }
+}
+
+/* --- the action ----------------------------------------------------------- */
+
+.create-go {
+  display: grid;
+  justify-items: center;
+  gap: 0.75rem;
+  margin-top: clamp(2rem, 4vw, 2.8rem);
+}
+
+.cta {
+  min-width: 15rem;
+  padding: 0.95rem 2rem;
+  border: 1px solid var(--text);
+  border-radius: 12px;
+  background: var(--text);
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition:
+    opacity 0.2s var(--slow),
+    transform 0.2s var(--curve);
+}
+
+.cta:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.cta:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.cta:disabled {
+  border-color: var(--line);
+  background: var(--inset);
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.create-blocked {
+  max-width: 46ch;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+/* --- what happens next ---------------------------------------------------- */
+
+.create-path {
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+  margin-top: clamp(2.4rem, 5vw, 3.4rem);
+  padding-top: 1.2rem;
+  border-top: 1px solid var(--line);
+  text-align: center;
+}
+
+/* The reassurance is the point of this block: the button says "build my token", and a
+   first-timer's next thought is whether that spends money. It does not. */
+.create-path-note {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.create-path ol {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  list-style: none;
+  font-size: 0.76rem;
+  color: var(--text-ghost);
+}
+
+.create-path li + li::before {
+  content: "→";
+  margin-right: 0.5rem;
+}
+
+/* ==========================================================================
+ * The build screen
+ * ==========================================================================
+ *
+ * Seven stages, and the one that is running is drawn moving.
+ *
+ * The rule this screen lives or dies by is at the top of `progress.tsx`: nothing here is
+ * on a timer. Every animation below is switched on by a class the component only applies
+ * to a stage the server has reported as running, so a build that stalls stalls visibly.
+ * An interface that keeps animating through a hung stage is not reassuring, it is lying.
+ */
+
+.progress {
+  max-width: 32rem;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.progress-title {
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  letter-spacing: -0.035em;
+}
+
+.progress-lede {
+  margin-top: 0.6rem;
+  font-size: 0.9rem;
+  color: var(--text-dim);
+}
+
+.progress .stages {
+  margin-top: clamp(1.6rem, 3vw, 2.2rem);
+  padding: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 4%),
+    0 14px 34px -22px rgb(0 0 0 / 20%);
+  text-align: left;
+}
+
+.stage {
+  position: relative;
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+  padding: 0.6rem 0.85rem;
+  border-radius: 11px;
+  font-size: 0.95rem;
+  color: var(--text-ghost);
+  transition:
+    color 0.5s var(--slow),
+    background-color 0.4s var(--slow);
+}
+
+/*
+ * The rail, drawn as two segments per row — above the icon and below it — so it stays
+ * continuous when the running row grows taller to fit its explanation.
+ */
+.stage::before,
+.stage::after {
+  content: "";
+  position: absolute;
+  left: 1.47rem;
+  width: 1px;
+  background: var(--line);
+}
+
+.stage::before {
+  top: 0;
+  height: calc(50% - 15px);
+}
+
+.stage::after {
+  top: calc(50% + 15px);
+  bottom: 0;
+}
+
+.stage:first-child::before,
+.stage:last-child::after {
+  display: none;
+}
+
+.stage-icon {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+.stage-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.stage-note {
+  font-size: 0.76rem;
+  color: var(--text-faint);
+}
+
+.stage-running {
+  color: var(--text);
+  background: var(--inset);
+}
+
+.stage-done {
+  color: var(--text-dim);
+}
+
+.stage-failed {
+  color: var(--down);
+}
+
+.stage-skipped,
+.stage-waiting {
+  color: var(--text-ghost);
+}
+
+/* --- the marks, moving ---------------------------------------------------- */
+
+/*
+ * `pathLength="1"` on the paths that trace means every dash figure below is a fraction
+ * of that path rather than a number of user units, so one keyframe animates a 3px stem
+ * and a 40px arc at the same apparent speed. It is the whole of what an animation
+ * library's `pathLength` prop does, and it is an SVG attribute.
+ */
+.stage-icon-live {
+  animation: ln-pulse 1.6s var(--slow) infinite;
+}
+
+@keyframes ln-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.07);
+  }
+}
+
+/* A line that draws and undraws, for anything being thought about. */
+.stage-icon-live .ln-trace {
+  animation: ln-trace 1.6s var(--slow) infinite;
+}
+
+@keyframes ln-trace {
+  0%,
+  100% {
+    stroke-dasharray: 1 0;
+    stroke-dashoffset: 0;
+  }
+  50% {
+    stroke-dasharray: 0.45 0.55;
+    stroke-dashoffset: 0.3;
+  }
+}
+
+/* A line that writes itself on, holds, and clears. */
+.stage-icon-live .ln-write {
+  animation: ln-write 2s var(--slow) infinite;
+}
+
+@keyframes ln-write {
+  0% {
+    stroke-dasharray: 0 1;
+  }
+  35%,
+  80% {
+    stroke-dasharray: 1 0;
+  }
+  100% {
+    stroke-dasharray: 0 1;
+  }
+}
+
+/* A block dropping into position. */
+.stage-icon-live .ln-place {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ln-place 1.9s var(--slow) infinite;
+}
+
+@keyframes ln-place {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.82);
+  }
+  28%,
+  68% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Brackets breathing apart. */
+.stage-icon-live .ln-left {
+  animation: ln-left 1.6s var(--slow) infinite;
+}
+
+.stage-icon-live .ln-right {
+  animation: ln-right 1.6s var(--slow) infinite;
+}
+
+@keyframes ln-left {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(-1.1px);
+  }
+}
+
+@keyframes ln-right {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(1.1px);
+  }
+}
+
+/* The gear, and the only thing on this screen that goes round. */
+.stage-icon-live .ln-spin {
+  transform-box: view-box;
+  transform-origin: 12px 12px;
+  animation: ln-spin 3.4s linear infinite;
+}
+
+@keyframes ln-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Bubbles in the flask. */
+.stage-icon-live .ln-bubble {
+  animation: ln-bubble 1.9s var(--slow) infinite;
+}
+
+@keyframes ln-bubble {
+  0% {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  30% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-4.5px);
+  }
+}
+
+/* The tick draws once, when the build is finally ready, and then stays drawn. */
+.stage-icon-live .ln-tick {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: ln-draw 0.55s var(--curve) 0.1s forwards;
+}
+
+@keyframes ln-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.stage-icon-live .ln-ring {
+  transform-box: view-box;
+  transform-origin: 12px 12px;
+  animation: ln-ring 1.9s var(--slow) infinite;
+}
+
+@keyframes ln-ring {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Staggered starts, so a mark made of several parts moves as one thing rather than as
+   several things that happen to share a frame. */
+.ln-delay-1 {
+  animation-delay: 0.1s;
+}
+
+.ln-delay-2 {
+  animation-delay: 0.2s;
+}
+
+.ln-delay-3 {
+  animation-delay: 0.3s;
+}
+
+/*
+ * Off, for anybody who asked for it.
+ *
+ * The icons are line drawings before they are animations, so removing the motion leaves
+ * a legible list rather than a set of half-drawn paths — every animated property is one
+ * whose resting value is the finished drawing.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .stage-icon,
+  .stage-icon * {
+    animation: none !important;
+    stroke-dasharray: none !important;
+    stroke-dashoffset: 0 !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* --- the "i" -------------------------------------------------------------- */
+
+.info {
+  position: relative;
+  display: inline-flex;
+  margin-left: 0.34rem;
+  vertical-align: baseline;
+}
+
+.info-dot {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: #ffffff;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: 0.6rem;
+  line-height: 1;
+  cursor: help;
+  transition:
+    color 0.2s var(--slow),
+    border-color 0.2s var(--slow);
+}
+
+.info-dot:hover,
+.info-dot:focus-visible {
+  border-color: var(--text-dim);
+  color: var(--text);
+  outline: none;
+}
+
+/*
+ * The explanation, above the dot and centred on it.
+ *
+ * Hover opens it for a mouse, focus opens it for a keyboard, and a tap on a phone counts
+ * as focus — so one rule covers all three and nothing here needs state. `visibility`
+ * rather than `display` so the fade has something to animate, and `pointer-events: none`
+ * so a popup that happens to sit over a field cannot swallow a click meant for it.
+ */
+.info-pop {
+  position: absolute;
+  bottom: calc(100% + 9px);
+  left: 50%;
+  z-index: 30;
+  width: max-content;
+  max-width: 17rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 5%),
+    0 16px 40px -16px rgb(0 0 0 / 30%);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  letter-spacing: 0;
+  color: var(--text-dim);
+  text-align: left;
+  text-transform: none;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate(-50%, 4px);
+  transition:
+    opacity 0.18s var(--slow),
+    transform 0.18s var(--curve),
+    visibility 0.18s;
+}
+
+.info:hover .info-pop,
+.info:focus-within .info-pop {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+}
+
+/* On a phone the column is narrow enough that a centred popup would hang off the edge,
+   so it stops being a bubble over the dot and becomes a strip across the column. */
+@media (max-width: 560px) {
+  .info-pop {
+    position: fixed;
+    inset: auto 1rem 1rem;
+    left: 1rem;
+    max-width: none;
+    transform: translateY(6px);
+  }
+
+  .info:hover .info-pop,
+  .info:focus-within .info-pop {
+    transform: translateY(0);
+  }
+}
+
+.notice {
+  margin-top: 1rem;
+  font-size: 0.85rem;
+  color: var(--down);
+  text-align: center;
+}
+
+/* ==========================================================================
+ * The token page
+ * ==========================================================================
+ *
+ * The layout every trading venue converged on, because it works: one figure set large
+ * at the top of a wide reading column, the chart directly under it, a band of numbers
+ * under that, and the only control that spends money pinned in a narrow column beside
+ * it. On a phone the same order stacks and the trade panel becomes a bar at the bottom.
+ *
+ * The chart sits on the page rather than inside a card. It is the only thing at this
+ * size and putting a border around it would be putting a rectangle around the page's
+ * subject — which is also why the stat band is separated by hairlines rather than being
+ * six little panels.
+ */
+
+.token-page {
+  padding-top: clamp(0.9rem, 2vw, 1.4rem);
+}
+
+.token-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--text-faint);
+  text-decoration: none;
+  transition: color 0.25s var(--slow);
+}
+
+.token-back:hover {
+  color: var(--text);
+}
+
+/* --- who this is --------------------------------------------------------- */
+
+.token-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: clamp(1.1rem, 2.4vw, 1.6rem);
+}
+
+.token-who {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
+.token-mark {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  flex: none;
+  border: 0;
+  border-radius: 14px;
+  background: #0a0a0a;
+  color: #ffffff;
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  text-transform: uppercase;
+}
+
+.token-identity {
+  min-width: 0;
+}
+
+.token-identity h1 {
+  font-size: clamp(1.4rem, 2.8vw, 1.95rem);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The second line: ticker, pair, state. Facts a reader checks once, set small. */
+.token-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.token-facts .token-ticker {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.token-facts .dot {
+  color: var(--text-ghost);
+}
+
+.token-state.live {
+  color: var(--up);
+}
+
+.token-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.pill-copy,
+.token-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.32rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 0.75rem;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    color 0.25s var(--slow),
+    border-color 0.25s var(--slow);
+}
+
+.pill-copy:hover,
+.token-link:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.pill-copy svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.pill-copy.pending {
+  cursor: default;
+  color: var(--text-faint);
+}
+
+.pill-copy.pending:hover {
+  color: var(--text-faint);
+  border-color: var(--line);
+}
+
+/* --- the two columns ----------------------------------------------------- */
+
+.token-layout {
+  display: grid;
+  gap: clamp(1.4rem, 3vw, 2.4rem);
+  grid-template-columns: minmax(0, 1fr);
+  margin-top: clamp(1.4rem, 3vw, 2rem);
+}
+
+@media (min-width: 1060px) {
+  .token-layout {
+    grid-template-columns: minmax(0, 1fr) 21rem;
+    align-items: start;
+  }
+
+  .token-aside {
+    position: sticky;
+    top: 1.4rem;
+  }
+}
+
+/* --- the chart ----------------------------------------------------------- */
+
+.chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.chart-label {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* The one number the page is built around. */
+.chart-headline {
+  margin-top: 0.5rem;
+  font-size: clamp(2.1rem, 5vw, 3.1rem);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-sub {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.6rem;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-sub .up {
+  color: var(--up);
+}
+
+.chart-sub .down {
+  color: var(--down);
+}
+
+.chart-span {
+  color: var(--text-faint);
+}
+
+/* Scrolls rather than wraps: a control that reflowed onto two rows would push the
+   chart down as it did. */
+.chart-ranges {
+  display: flex;
+  gap: 0.15rem;
+  padding: 0.2rem;
+  border-radius: 9px;
+  background: var(--inset);
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.chart-ranges button {
+  padding: 0.32rem 0.7rem;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.25s var(--slow),
+    color 0.25s var(--slow);
+}
+
+.chart-ranges button:hover {
+  color: var(--text);
+}
+
+.chart-ranges button.on {
+  background: #ffffff;
+  color: var(--text);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+/*
+ * The canvas gets a stated height rather than a share of the row.
+ *
+ * The library measures this element when it builds the chart and autoscales the price
+ * axis against what it finds. Asked to do that inside a box whose height is still
+ * indefinite, it lays the axis out for a box of no height and never revisits it — which
+ * shows up as a price scale with no labels and the line pressed flat against the bottom.
+ */
+.chart-body {
+  position: relative;
+  height: 17rem;
+  margin-top: 1.4rem;
+  background: transparent;
+  border: 0;
+}
+
+@media (min-width: 700px) {
+  .chart-body {
+    height: 23rem;
+  }
+}
+
+.chart-canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 0 2rem;
+  max-width: 46ch;
+  margin: 0 auto;
+  text-align: center;
+  font-size: 0.84rem;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.chart-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.7rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+.chart-extremes {
+  color: var(--text-dim);
+}
+
+/* --- the band of figures ------------------------------------------------- */
+
+.stat-band {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.1rem 1.4rem;
+  margin: clamp(1.6rem, 3.5vw, 2.4rem) 0 0;
+  padding: 1.1rem 0 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+}
+
+@media (min-width: 620px) {
+  .stat-band {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 900px) {
+  .stat-band {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.stat-label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.stat-value {
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.015em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stat-hint {
+  font-size: 0.7rem;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- the trade panel ----------------------------------------------------- */
+
+.trade-panel {
+  padding: 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+}
+
+/* Who you are trading, restated inside the panel. It is pinned and scrolls past the
+   header, so without this a reader who has gone down to the mechanics is looking at an
+   amount field with no token attached to it. */
+.tp-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.15rem 0.25rem 0.75rem;
+}
+
+.tp-mark {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 9px;
+  background: #0a0a0a;
+  color: #ffffff;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.tp-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.tp-name {
+  font-size: 0.85rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tp-symbol {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-faint);
+}
+
+.tp-fee {
+  margin-left: auto;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+.tp-sides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.15rem;
+  padding: 0.2rem;
+  border-radius: 10px;
+  background: var(--inset);
+}
+
+.tp-side {
+  padding: 0.5rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition:
+    background 0.25s var(--slow),
+    color 0.25s var(--slow);
+}
+
+.tp-side:hover {
+  color: var(--text);
+}
+
+.tp-side.on {
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+/* The two amounts, with the direction between them. `position: relative` so the arrow
+   can straddle the seam rather than pushing the cards apart. */
+.tp-legs {
+  position: relative;
+  display: grid;
+  gap: 0.3rem;
+  margin-top: 0.6rem;
+}
+
+.tp-leg {
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--panel-lift);
+}
+
+.tp-leg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.7rem;
+  color: var(--text-faint);
+}
+
+.tp-asset {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+.tp-amount,
+.tp-out {
+  display: block;
+  width: 100%;
+  margin-top: 0.35rem;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 1.45rem;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.tp-amount:focus {
+  outline: none;
+}
+
+.tp-amount::placeholder {
+  color: var(--text-ghost);
+}
+
+.tp-out {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tp-held {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.7rem;
+  color: var(--text-faint);
+}
+
+/* Straddles the gap between the two cards, sitting on the panel rather than in either. */
+.tp-turn {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-dim);
+  transform: translate(-50%, -50%);
+}
+
+.tp-turn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.tp-sizes {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.3rem;
+  margin-top: 0.6rem;
+}
+
+.tp-sizes button {
+  padding: 0.4rem 0.2rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    color 0.25s var(--slow),
+    border-color 0.25s var(--slow);
+}
+
+.tp-sizes button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.tp-sizes button:disabled {
+  color: var(--text-ghost);
+  cursor: default;
+}
+
+.tp-rows {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+}
+
+.tp-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.76rem;
+}
+
+.tp-row-label {
+  color: var(--text-dim);
+}
+
+.tp-row-hint {
+  margin-left: 0.35rem;
+  font-size: 0.68rem;
+  color: var(--text-ghost);
+}
+
+.tp-row-value {
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tp-action {
+  width: 100%;
+  margin-top: 0.85rem;
+  padding: 0.8rem;
+  border: 1px solid var(--text);
+  border-radius: 10px;
+  background: var(--text);
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 0.92rem;
+  cursor: pointer;
+  transition: opacity 0.25s var(--slow);
+}
+
+.tp-action:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.tp-action:disabled {
+  border-color: var(--line);
+  background: var(--inset);
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.tp-note {
+  margin-top: 0.7rem;
+  font-size: 0.7rem;
+  line-height: 1.55;
+  color: var(--text-faint);
+}
+
+.tp-error {
+  color: var(--down);
+}
+
+.tp-done {
+  margin-top: 0.7rem;
+  font-size: 0.75rem;
+  color: var(--up);
+}
+
+/* A missing headline is a statement of absence, not a value. Set in the weight the rest
+   of the page uses for a dash, because at 3rem a black em dash reads as a rule. */
+.chart-headline.absent {
+  color: var(--text-ghost);
+}
+
+/*
+ * A chart with nothing in it keeps its frame.
+ *
+ * The container, its height and a baseline stay, so the page a visitor sees today is the
+ * same page they will see with a line in it. What is never drawn is a series: a generated
+ * curve is indistinguishable from a real one at a glance, and the first person to
+ * screenshot this page would be publishing a price that never existed.
+ */
+.chart-body:has(.chart-empty)::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 1px;
+  background: var(--line);
 }

@@ -13,22 +13,34 @@
  * button. The interface is allowed to be unusable. It is not allowed to be wrong about
  * what it is about to do.
  *
- * This matters more here than it did there, because right now the honest answer is that
- * these addresses do not exist: `AgenFactory`, `AgenDeployer` and `AgenMarketRegistry`
- * are written, tested and deployed nowhere. The deploy button says so, in those words,
- * until somebody sets the variables below.
+ * ## Where the addresses come from
+ *
+ * The deployment record in `@verdant/config`, which is where `scripts/deploy-agen.sh`
+ * writes them and what `VerifyAgen.s.sol` checked before they were recorded. The
+ * environment variables below stay, as an override for a fork or a devnet, but they are
+ * no longer how a production build learns which factory it is talking to.
+ *
+ * They cannot be, because these reads are compiled out. Next replaces a `NEXT_PUBLIC_`
+ * expression with its value at build time, so a variable set on the host after the image
+ * was built is a variable the browser never sees — the deploy button would go on saying
+ * the factory was missing while the dashboard showed the address right there. Reading the
+ * record instead means the addresses travel with the code that was verified against them,
+ * and a deploy of this cannot disagree with a deploy of the indexer about which Agen it
+ * is.
  *
  * Each `process.env` read is written out in full rather than looked up by a computed
- * key. Next replaces these expressions literally at build time, so a dynamic lookup
- * would compile to a read of an object that does not exist in a browser.
+ * key, for that same substitution: a dynamic lookup would compile to a read of an object
+ * that does not exist in a browser.
  */
 
 import {
+  agenFor,
   EXTERNAL_ADDRESSES,
   ROBINHOOD_MAINNET_ID,
   ROBINHOOD_TESTNET_ID,
   robinhoodMainnet,
   robinhoodTestnet,
+  type AgenDeployment,
   type VerdantChainId,
 } from "@verdant/config";
 import { defineChain, getAddress, isAddress, type Address, type Chain } from "viem";
@@ -136,12 +148,31 @@ const OVERRIDES: Record<ContractName, string | undefined> = {
   registry: process.env.NEXT_PUBLIC_AGEN_REGISTRY,
 };
 
+/**
+ * The broadcast this build launches into, or `null` on a chain Agen has not been
+ * deployed to. All three addresses come from one record because they are one
+ * deployment: the factory's constructor checks that the deployer and the registry each
+ * name it back, so a build mixing an address from one broadcast with two from another
+ * describes something that cannot exist on chain.
+ */
+const RECORD: AgenDeployment | null = isVerdantChainId(CHAIN_ID) ? agenFor(CHAIN_ID) : null;
+
+const RECORDED: Record<ContractName, string | undefined> = {
+  factory: RECORD?.factory,
+  deployer: RECORD?.deployer,
+  registry: RECORD?.registry,
+};
+
 function resolve(): AddressResolution {
   const found: Partial<Record<ContractName, Address>> = {};
   const problems: AddressProblem[] = [];
 
   for (const contract of Object.keys(LABELS) as ContractName[]) {
-    const value = OVERRIDES[contract]?.trim();
+    // An override that is set to nothing is treated as absent rather than as an
+    // instruction to have no factory, so a variable left empty in a dashboard falls back
+    // to the record instead of disabling the launch button with no way to tell why.
+    const override = OVERRIDES[contract]?.trim();
+    const value = override === undefined || override === "" ? RECORDED[contract] : override;
 
     if (value === undefined || value === "") {
       problems.push({

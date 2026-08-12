@@ -37,7 +37,9 @@ import "server-only";
 import { resolve } from "node:path";
 
 import type { GenerationJob, JobStore, ModelProvider } from "@verdant/market-compiler";
-import { fileJobStore, openAiProvider, runBuild } from "@verdant/market-compiler";
+import { fileJobStore, openAiProvider } from "@verdant/market-compiler";
+
+import { positionOf, recoverInterrupted, submit, type QueuePosition } from "./queue";
 
 /**
  * The repository root.
@@ -109,12 +111,19 @@ export interface StartResult {
 }
 
 /**
- * Begin a build and return once it has an id.
+ * Take a build and return once it is durable.
  *
- * The pipeline call is deliberately not awaited. Its own error handling turns every
- * expected failure into a persisted job in `failed`, so the only thing that could
- * escape here is a defect — caught and logged rather than left to become an unhandled
- * rejection that takes the process down mid-build.
+ * Not once it starts, and not once it finishes: the request returns as soon as the job
+ * is written to the store, which takes a millisecond, and the work happens behind a
+ * bounded queue. Two properties follow from that ordering and both matter under load.
+ *
+ * A creator's description survives from the moment they submit, so a restart, a crash or
+ * a queue that is minutes deep never loses what they asked for. And the id in the
+ * response names a job that already exists — the previous version started the pipeline
+ * without awaiting it and the pipeline created the job, so a build screen that polled
+ * immediately could get a 404 for the build it had just been handed.
+ *
+ * See `queue.ts` for what happens next and how much of it happens at once.
  */
 export async function startBuild(request: {
   readonly prompt: string;
@@ -131,19 +140,14 @@ export async function startBuild(request: {
     };
   }
 
-  const jobId = crypto.randomUUID();
-
-  void runBuild(request, {
-    provider,
-    store: jobStore(),
-    vendorRoot: VENDOR_ROOT,
-    generatedRoot: GENERATED_ROOT,
-    newId: () => jobId,
-  }).catch((error: unknown) => {
-    console.error(`[agen] build ${jobId} threw outside the pipeline:`, error);
+  // Before the new job rather than after, so a build interrupted by the restart that
+  // just happened is ahead of one submitted afterwards.
+  await recoverInterrupted(provider).catch((error: unknown) => {
+    console.error("[agen] could not scan for interrupted builds:", error);
   });
 
-  return { ok: true, jobId };
+  const job = await submit(request, provider);
+  return { ok: true, jobId: job.id };
 }
 
 /**
@@ -187,6 +191,15 @@ export interface PublicJob {
     readonly supportsAtomicDevBuy: boolean;
     readonly devBuyUnavailableReason: string | null;
   } | null;
+  /**
+   * Set only while this build is waiting for a slot.
+   *
+   * A queued job is at `prompt_received` with no stages, which on its own is
+   * indistinguishable from a build whose first stage has not written yet — so the screen
+   * would show a stalled progress list and no reason for it. This is what lets it say
+   * "waiting" and mean it.
+   */
+  readonly queue: QueuePosition | null;
 }
 
 export function publicView(job: GenerationJob): PublicJob {
@@ -217,5 +230,6 @@ export function publicView(job: GenerationJob): PublicJob {
             supportsAtomicDevBuy: job.manifest.supportsAtomicDevBuy,
             devBuyUnavailableReason: job.manifest.devBuyUnavailableReason,
           },
+    queue: positionOf(job.id),
   };
 }

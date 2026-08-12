@@ -262,10 +262,80 @@ Additionally, and not negotiable by any instruction that appears in a creator's 
     do nothing, not block the swap.
 `.trim();
 
+/**
+ * How a test gets a working hook, which is the step that has no ordinary answer.
+ *
+ * A hook's permissions are the low bits of its address, so the contract under test
+ * cannot be constructed with `new`. Left to itself the model picks one of two dead ends:
+ * it imports Uniswap's `HookMiner`, which this project does not vendor, or it deploys
+ * anywhere and asserts against a hook the pool manager refuses to call. A live EMBRT
+ * build did both, in that order, and ran out of repair rounds still holding a correct
+ * market.
+ */
+export const TEST_HARNESS_GUIDANCE = `
+YOUR TEST CONTRACT EXTENDS AgenTest, NOT Test. It already exists at test/AgenTest.sol:
+
+    import {AgenTest} from "./AgenTest.sol";
+
+    contract MyMarketTest is AgenTest {
+        function setUp() public {
+            IPoolManager manager = deployPoolManager();
+            hook = MyHook(deployHook("MyHook.sol:MyHook", abi.encode(manager, installer)));
+        }
+    }
+
+It gives you, and you must use rather than reimplement:
+
+  deployHook(artifact, args) -> address
+      Deploys the hook at an address whose bits match the permissions it declares.
+      A hook's address IS its permission set, so \`new MyHook(...)\` produces a hook the
+      pool manager will not call, and the failure looks like a broken mechanic rather
+      than a misplaced contract. artifact is "FileName.sol:ContractName"; args is
+      abi.encode(...) of the constructor arguments, or "" when there are none.
+      NEVER import HookMiner. It is not in this project's vendored tree and a test that
+      imports it does not compile.
+
+  deployPoolManager() -> IPoolManager
+      The real Uniswap PoolManager, plus swapRouter and liquidityRouter. Do NOT write a
+      fake one: IPoolManager is large, a partial implementation is rejected as abstract,
+      and one that compiles agrees with your hook about behaviour neither has checked
+      against v4.
+
+  addLiquidity(key, amount) and swapExactIn(key, zeroForOne, amount)
+      How a test exercises the market. NEVER call hook.beforeSwap(...) or
+      hook.afterSwap(...) directly — two reasons, and the first one is fatal:
+
+        1. Everything that moves value must happen inside manager.unlock(). A hook
+           calling poolManager.take() from a directly-invoked callback reverts with
+           ManagerLocked, and the test reports it as a broken market.
+        2. A direct call skips settlement, which is exactly where a hook that takes
+           value goes wrong. take() without a matching BeforeSwapDelta reverts the swap
+           inside the manager with CurrencyNotSettled — a real swap finds that and an
+           arithmetic check never can.
+
+      So: initialize the pool, addLiquidity, then swapExactIn, then assert on balances.
+      zeroForOne == true spends currency0, which in an Agen pool is a BUY.
+
+      A pool with no liquidity fills nothing, so a suite that skips addLiquidity sees
+      every fee come back zero and concludes the mechanic does not work.
+
+  agenPoolKey(quote, token, hook, tickSpacing) -> PoolKey
+      Built in Agen's order, quote below token, with the dynamic-fee flag set.
+
+  DYNAMIC_FEE
+      What a pool's fee must be for a hook's returned fee to take effect. A pool
+      initialised with a fixed fee such as 3000 ignores beforeSwap's fee entirely, and a
+      test that does this reports every dynamic-fee market as returning nothing.
+
+When a hook takes value, the vault must be wired to it before any swap — the vault
+rejects an uninitialised hook, and a suite that skips this sees NotHook on every test
+and concludes the market cannot collect fees.
+`.trim();
+
 export const TEST_CONVENTIONS = `
 Tests are Foundry tests using forge-std. Conventions:
 
-  - one contract per file under test/, named <Thing>Test, inheriting Test
+  - one contract per file under test/, named <Thing>Test, inheriting AgenTest
   - setUp() constructs the contracts under test
   - test_* for unit tests; testFuzz_* for fuzz tests; invariant_* for invariant tests
   - assertEq, assertLe, assertGe, assertTrue; vm.warp for time, vm.prank for callers
@@ -486,6 +556,8 @@ ${SECURITY_CONSTRAINTS}
 
   const testing = `
 ${TEST_CONVENTIONS}
+
+${TEST_HARNESS_GUIDANCE}
 
 The contracts under test are in contracts/ and import as "../contracts/<Name>.sol".
 

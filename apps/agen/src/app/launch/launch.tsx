@@ -31,7 +31,7 @@
  * present and failing. See `supportsAtomicDevBuy` in the compiler.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatEther, isAddress } from "viem";
 import { useAccount, useSendTransaction, useSwitchChain, useWaitForTransactionReceipt } from "wagmi";
 
@@ -147,9 +147,33 @@ export function Launch({ job }: { readonly job: PublicJob }) {
     }
   }, [job.id, address, payTo, marketCap, devBuy, image, send]);
 
+  /**
+   * Tell the server what the chain did.
+   *
+   * Until this lands, the market exists on chain and nowhere else: the build's own page
+   * would go on calling it unlaunched, because a build has no way to notice a
+   * transaction. The server re-reads the receipt and takes every field from the logs, so
+   * this is a nudge rather than a report — the worst a lost request can do is leave the
+   * page behind the chain until the indexer catches up.
+   */
+  const hash = send.data;
+  useEffect(() => {
+    if (!receipt.isSuccess || hash === undefined) return;
+
+    void fetch(`/api/markets/${job.id}/launched`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ txHash: hash }),
+    }).catch(() => {
+      // Recorded from the chain by the indexer either way. Nothing to tell the creator:
+      // their market was created, which is what they were waiting for.
+    });
+  }, [receipt.isSuccess, hash, job.id]);
+
   if (receipt.isSuccess && prepared !== null) {
     return <Launched job={job} prepared={prepared} hash={send.data!} />;
   }
+
 
   const waiting = preparing || send.isPending || receipt.isLoading;
 
@@ -324,16 +348,27 @@ function Launched({
         </div>
       </dl>
 
-      {EXPLORER_URL === undefined ? null : (
-        <p className="launch-links">
-          <a href={`${EXPLORER_URL}/tx/${hash}`} target="_blank" rel="noreferrer">
-            transaction
-          </a>
-          <a href={`${EXPLORER_URL}/address/${prepared.market.token}`} target="_blank" rel="noreferrer">
-            token
-          </a>
-        </p>
-      )}
+      <p className="launch-links">
+        {/* The only link that matters now: the market is tradable and this is where. */}
+        <a className="launch-go" href={`/markets/${job.id}`}>
+          trade ${job.symbol}
+        </a>
+
+        {EXPLORER_URL === undefined ? null : (
+          <>
+            <a href={`${EXPLORER_URL}/tx/${hash}`} target="_blank" rel="noreferrer">
+              transaction
+            </a>
+            <a
+              href={`${EXPLORER_URL}/address/${prepared.market.token}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              token
+            </a>
+          </>
+        )}
+      </p>
     </section>
   );
 }

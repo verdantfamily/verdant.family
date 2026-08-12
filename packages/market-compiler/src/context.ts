@@ -278,15 +278,34 @@ YOUR TEST CONTRACT EXTENDS AgenTest, NOT Test. It already exists at test/AgenTes
     import {AgenTest} from "./AgenTest.sol";
 
     contract MyMarketTest is AgenTest {
+        MyHook hook;
+        MyToken token;
+        PoolKey key;
+
         function setUp() public {
-            IPoolManager manager = deployPoolManager();
+            deployPoolManager();          // sets the inherited \`manager\`; do not shadow it
+            token = new MyToken(address(this));
             hook = MyHook(deployHook("MyHook.sol:MyHook", abi.encode(manager, installer)));
+
+            key = agenPoolKey(
+                Currency.wrap(address(0)),
+                Currency.wrap(address(token)),
+                IHooks(address(hook)),
+                60
+            );
+            manager.initialize(key, 79228162514264337593543950336);  // 1:1, Q64.96
+            addLiquidity(key, 10 ether);
         }
     }
 
-It gives you, and you must use rather than reimplement:
+It gives you, and you must use rather than reimplement. These are the real signatures,
+and the types in them are not decoration: Uniswap wraps a currency and a hook in their
+own types, so agenPoolKey(address(0), address(token), address(hook), 60) does not
+compile — it fails with "No matching declaration found after argument-dependent lookup",
+which names the lookup rather than the mistake. Wrap them: Currency.wrap(address(0)),
+Currency.wrap(address(token)), IHooks(address(hook)).
 
-  deployHook(artifact, args) -> address
+  deployHook(string memory artifact, bytes memory args) -> address
       Deploys the hook at an address whose bits match the permissions it declares.
       A hook's address IS its permission set, so \`new MyHook(...)\` produces a hook the
       pool manager will not call, and the failure looks like a broken mechanic rather
@@ -295,13 +314,14 @@ It gives you, and you must use rather than reimplement:
       NEVER import HookMiner. It is not in this project's vendored tree and a test that
       imports it does not compile.
 
-  deployPoolManager() -> IPoolManager
+  deployPoolManager() internal -> IPoolManager
       The real Uniswap PoolManager, plus swapRouter and liquidityRouter. Do NOT write a
       fake one: IPoolManager is large, a partial implementation is rejected as abstract,
       and one that compiles agrees with your hook about behaviour neither has checked
       against v4.
 
-  addLiquidity(key, amount) and swapExactIn(key, zeroForOne, amount)
+  addLiquidity(PoolKey memory key, int256 amount)
+  swapExactIn(PoolKey memory key, bool zeroForOne, uint256 amount) -> BalanceDelta
       How a test exercises the market. NEVER call hook.beforeSwap(...) or
       hook.afterSwap(...) directly — two reasons, and the first one is fatal:
 
@@ -319,10 +339,11 @@ It gives you, and you must use rather than reimplement:
       A pool with no liquidity fills nothing, so a suite that skips addLiquidity sees
       every fee come back zero and concludes the mechanic does not work.
 
-  agenPoolKey(quote, token, hook, tickSpacing) -> PoolKey
+  agenPoolKey(Currency quote, Currency token, IHooks hook, int24 tickSpacing) -> PoolKey
       Built in Agen's order, quote below token, with the dynamic-fee flag set.
 
-  agenPoolKey(quote, token, hook, tickSpacing, fee) -> PoolKey
+  agenPoolKey(Currency quote, Currency token, IHooks hook, int24 tickSpacing, uint24 fee)
+      -> PoolKey
       The same, at a stated fee, for a hook that requires a fixed one.
 
   DYNAMIC_FEE

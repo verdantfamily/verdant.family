@@ -322,10 +322,21 @@ It gives you, and you must use rather than reimplement:
   agenPoolKey(quote, token, hook, tickSpacing) -> PoolKey
       Built in Agen's order, quote below token, with the dynamic-fee flag set.
 
+  agenPoolKey(quote, token, hook, tickSpacing, fee) -> PoolKey
+      The same, at a stated fee, for a hook that requires a fixed one.
+
   DYNAMIC_FEE
       What a pool's fee must be for a hook's returned fee to take effect. A pool
       initialised with a fixed fee such as 3000 ignores beforeSwap's fee entirely, and a
       test that does this reports every dynamic-fee market as returning nothing.
+
+Open the pool at the fee the hook under test actually demands, which is not always the
+dynamic one. A hook whose afterInitialize checks key.fee against a constant of its own
+must be given that constant through the five-argument form; handed DYNAMIC_FEE it
+reverts in setUp before a single rule has been exercised, and no amount of repairing the
+test can satisfy it. Agen launches such a market perfectly well — the build works out
+the fee the pool needs and opens it that way — so a suite that cannot express it is
+testing something the deployment will never be.
 
 When a hook takes value, the vault must be wired to it before any swap — the vault
 rejects an uninitialised hook, and a suite that skips this sees NotHook on every test

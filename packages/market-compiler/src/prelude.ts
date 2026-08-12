@@ -757,11 +757,34 @@ abstract contract AgenTest is Test {
         pure
         returns (PoolKey memory)
     {
+        return agenPoolKey(quote, token, hook, tickSpacing, DYNAMIC_FEE);
+    }
+
+    /// @notice The same key, opened at a stated fee.
+    /// @dev For a hook that requires a fixed fee rather than a dynamic one. Such a hook
+    /// is legitimate and Agen launches it: the build works out which fee the pool must
+    /// carry and the manifest opens it that way. A harness that could only produce
+    /// DYNAMIC_FEE could not test what it was about to deploy — the hook rejected the
+    /// pool in afterInitialize, three repair attempts rewrote the test around a
+    /// constraint they could not satisfy, and a market that would have launched
+    /// correctly was reported undeployable.
+    ///
+    /// Pass the constant the hook itself checks. Passing DYNAMIC_FEE to a hook that
+    /// wants a fixed fee fails at initialize; passing a fixed fee to a hook that
+    /// returns one from beforeSwap is worse, because the pool ignores the returned fee
+    /// and the test quietly concludes the mechanic charges nothing.
+    function agenPoolKey(
+        Currency quote,
+        Currency token,
+        IHooks hook,
+        int24 tickSpacing,
+        uint24 fee
+    ) internal pure returns (PoolKey memory) {
         require(Currency.unwrap(quote) < Currency.unwrap(token), "quote must sort below token");
         return PoolKey({
             currency0: quote,
             currency1: token,
-            fee: DYNAMIC_FEE,
+            fee: fee,
             tickSpacing: tickSpacing,
             hooks: hook
         });

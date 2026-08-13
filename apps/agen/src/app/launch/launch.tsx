@@ -42,6 +42,7 @@ import { AGEN_LAUNCH } from "@verdant/config";
 import { agen } from "@verdant/sdk";
 
 import { AGEN_ADDRESSES, CHAIN_ID, EXPLORER_URL, chain, shortAddress } from "../lib/chain";
+import { rememberedImage } from "./remembered-image";
 import type { PublicJob } from "../lib/builds";
 
 interface Prepared {
@@ -81,7 +82,18 @@ export function Launch({ job }: { readonly job: PublicJob }) {
   const receipt = useWaitForTransactionReceipt({ hash: send.data });
 
   const [devBuy, setDevBuy] = useState("");
+
+  /**
+   * The picture chosen on the create screen, read back by job id.
+   *
+   * In an effect rather than in `useState`'s initialiser because `localStorage` does not
+   * exist while this renders on the server, and reading it during the first client render
+   * would make that render disagree with the server's.
+   */
   const [image, setImage] = useState("");
+  useEffect(() => {
+    setImage(rememberedImage(job.id) ?? "");
+  }, [job.id]);
   const [feeReceiver, setFeeReceiver] = useState("");
   const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -194,20 +206,33 @@ export function Launch({ job }: { readonly job: PublicJob }) {
       <h2>Ready to launch</h2>
 
       <div className="launch-fields">
+        {/*
+          Shown rather than asked for. The picture was chosen on the create screen, beside
+          the name and the ticker, which is where somebody deciding what their token is
+          called is already thinking about what it looks like. Asking again here would be
+          asking the same question twice and inviting two different answers.
+
+          The field is still here when there is no picture, because this is the last
+          moment it can be added — the address is written into the token's metadata by
+          the transaction below and is fixed from then on.
+        */}
         <div className="field">
-          <label htmlFor="image">token image</label>
-          <input
-            id="image"
-            value={image}
-            placeholder="link to an image"
-            onChange={(event) => {
-              setImage(event.currentTarget.value);
-            }}
-          />
-          <p className="field-note">
-            Recorded with the market when it is created. Optional, and cannot be changed
-            afterwards.
-          </p>
+          <span className="field-label">token image</span>
+
+          {image === "" ? (
+            <p className="field-note">
+              No picture was added. {job.symbol} launches without one, and it cannot be
+              added afterwards — go back to the first step if you want to choose one.
+            </p>
+          ) : (
+            <div className="launch-image">
+              {/* Not next/image: this is an API route serving an upload, and there is
+                  nothing for the optimiser to do with it. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={image} alt={`${job.symbol} token image`} />
+              <p className="field-note">Recorded with the market when it is created.</p>
+            </div>
+          )}
         </div>
 
         {/*

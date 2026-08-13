@@ -48,11 +48,27 @@
  * drop degrades honestly: supply only Regular and the headline stays in the fallback
  * rather than rendering as a smeared fake medium.
  */
+/*
+ * Aeonik, and what happens while only some of it is here.
+ *
+ * Each weight lists the real file first and `Aeonik-Medium.ttf` last. That last entry is
+ * the whole point: for a long time this declared Regular and Bold against files that were
+ * never added, so the browser fell through to `-apple-system` for both — meaning body
+ * text was San Francisco, headings were San Francisco, and only the handful of things set
+ * at weight 500 were actually Aeonik. A product rendered in two typefaces at once looks
+ * unresolved and nobody can say why.
+ *
+ * Falling back to Medium instead makes it one typeface today, and the moment the real
+ * Regular and Bold land in `public/fonts` they win, because they are listed first. Weight
+ * synthesis stays off, so until then a `700` renders at Medium's weight rather than being
+ * algorithmically smeared into a fake bold.
+ */
 @font-face {
   font-family: "Aeonik";
   src:
     url("/fonts/Aeonik-Regular.woff2") format("woff2"),
-    url("/fonts/Aeonik-Regular.otf") format("opentype");
+    url("/fonts/Aeonik-Regular.otf") format("opentype"),
+    url("/fonts/Aeonik-Medium.ttf") format("truetype");
   font-weight: 400;
   font-style: normal;
   /* swap, not block: block hides the text for up to three seconds, and if the file is
@@ -76,7 +92,8 @@
   font-family: "Aeonik";
   src:
     url("/fonts/Aeonik-Bold.woff2") format("woff2"),
-    url("/fonts/Aeonik-Bold.otf") format("opentype");
+    url("/fonts/Aeonik-Bold.otf") format("opentype"),
+    url("/fonts/Aeonik-Medium.ttf") format("truetype");
   font-weight: 700;
   font-style: normal;
   font-display: swap;
@@ -6478,4 +6495,724 @@ pre {
 .launch-step-failed p + p {
   margin-top: 0.5rem;
   color: var(--text-dim);
+}
+
+/* ==========================================================================
+ * 2026 — the system this product is actually designed in
+ * ==========================================================================
+ *
+ * Everything above is history: a dark teaser, then a light retrofit that inverted its
+ * tokens. Both worked and neither was designed — the result reads as a developer tool,
+ * and the three reasons are worth naming because they are the things this section undoes.
+ *
+ * 1. Ninety-one monospace declarations, most between 0.54rem and 0.62rem. Every label,
+ *    every stat caption, every eyebrow. Monospace at six-tenths of a rem is the visual
+ *    signature of a terminal, and using it for interface chrome is the single loudest
+ *    thing the old design said. It is replaced below by one typeface carrying the whole
+ *    hierarchy through size and weight, which is how a considered interface reads:
+ *    monospace survives only where the content genuinely is code or a hash.
+ *
+ * 2. No type scale. Sizes were chosen per component, so nothing lined up with anything.
+ *    There is a scale now and everything is on it.
+ *
+ * 3. Contrast tuned against near-black. On white, a border that read as a hairline at
+ *    10% on black reads as a smudge, and shadows tuned for a dark surface disappear.
+ *
+ * ## What replaces it
+ *
+ * Apple's actual discipline, which is not "minimal" so much as *confident*: large type
+ * where something matters, generous space, very few borders, depth from light rather than
+ * from lines, and motion that acknowledges every interaction without ever getting in the
+ * way. The palette stays black on white — that was right — but the greys are recut so
+ * that secondary text is genuinely readable rather than merely quiet.
+ */
+
+:root {
+  /* --- type ---------------------------------------------------------------
+   *
+   * A fifth-based scale, clamped so it responds to the viewport without a media query.
+   * The display sizes are deliberately much larger than what was here: a launchpad's
+   * headline competing with its own navigation for attention is a headline that has
+   * decided it is not important.
+   */
+  --t-display: clamp(2.4rem, 5.5vw, 4rem);
+  --t-title: clamp(1.75rem, 3.4vw, 2.5rem);
+  --t-heading: clamp(1.25rem, 2vw, 1.5rem);
+  --t-body-lg: 1.0625rem;
+  --t-body: 0.9375rem;
+  --t-small: 0.8125rem;
+  /* The floor. Nothing in this interface is smaller than this, which is the rule the old
+     0.54rem mono labels broke — text that has to be leaned into is text nobody reads. */
+  --t-label: 0.75rem;
+
+  /* Tight at display sizes, open at reading sizes. A single tracking value across a
+     scale this wide makes the large end look loose and the small end look cramped. */
+  --track-display: -0.035em;
+  --track-title: -0.025em;
+  --track-body: -0.005em;
+  --track-label: 0.02em;
+
+  /* --- colour -------------------------------------------------------------
+   *
+   * Recut for white. `--text-dim` was #6b6b70, which is 4.9:1 and technically passes;
+   * it now sits darker because secondary text on this product carries real meaning — a
+   * mechanic, a fee, a rule — and "quiet" was being read as "unimportant".
+   */
+  --text: #08080a;
+  --text-dim: #55555c;
+  --text-faint: #86868b;
+  --text-ghost: #b8b8bd;
+
+  --line: #ececee;
+  --line-strong: #dcdce0;
+
+  --surface: #ffffff;
+  --surface-lift: #fbfbfc;
+  --inset: #f5f5f7;
+  --panel: #ffffff;
+  --panel-lift: #fbfbfc;
+
+  /* The page behind the sheet. Warmer and lighter than #e8e8e8, which read as dead
+     screen grey; this reads as paper the sheet is resting on. */
+  --black: #efeff1;
+
+  --accent: #0a0a0c;
+  --up: #12a150;
+  --down: #e5484d;
+
+  /* --- form ---------------------------------------------------------------
+   *
+   * Larger radii than the old 8–10px. A 10px corner at a 320px card is a rounded
+   * rectangle; an 18px corner is a considered object, and the difference is most of
+   * what people mean when they say an interface looks modern.
+   */
+  --radius: 16px;
+  --radius-sm: 11px;
+  --radius-lg: 22px;
+  --radius-pill: 999px;
+
+  /* Depth from light rather than from lines: a hairline to define the edge, a close
+     shadow for contact, a wide soft one for lift. Stacking the three is what stops a
+     white card on a grey page looking like a rectangle of slightly different white. */
+  --lift-1:
+    0 0 0 1px rgb(0 0 0 / 4%),
+    0 1px 2px rgb(0 0 0 / 4%);
+  --lift-2:
+    0 0 0 1px rgb(0 0 0 / 4%),
+    0 2px 4px rgb(0 0 0 / 3%),
+    0 12px 24px -12px rgb(0 0 0 / 12%);
+  --lift-3:
+    0 0 0 1px rgb(0 0 0 / 5%),
+    0 4px 8px rgb(0 0 0 / 4%),
+    0 24px 48px -20px rgb(0 0 0 / 18%);
+
+  /* --- motion -------------------------------------------------------------
+   *
+   * Two curves and three durations, and the important one is `--spring`: it overshoots
+   * very slightly, which is what makes a control feel like it was pressed rather than
+   * merely redrawn. Everything interactive uses it. Nothing decorative moves at all.
+   */
+  --spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --fast: 0.16s;
+  --medium: 0.28s;
+  --slow: 0.5s;
+}
+
+body {
+  font-size: var(--t-body);
+  letter-spacing: var(--track-body);
+  line-height: 1.55;
+}
+
+/* --- the end of the terminal ------------------------------------------------
+ *
+ * One sweep, by selector, rather than editing ninety-one rules in place. Everything that
+ * was a tiny uppercase mono label becomes a small sans one at a readable size, tracked
+ * open so it still reads as a label rather than as body text.
+ *
+ * The exclusions are the point: an address, a hash, a compiler diagnostic and generated
+ * Solidity are all genuinely monospace content, where the grid carries meaning. A label
+ * saying "MARKET CAP" never was.
+ */
+.eyebrow,
+.stage-attempts,
+.field label,
+.field-label,
+.field-note,
+.card-figures dt,
+.card-mechanic-label,
+.stats dt,
+.stat-label,
+.behaviour-label,
+.assumption-term,
+.notice-label,
+.fact-label,
+.review-h2,
+.launch-check dt,
+.provenance-list dt,
+.addresses dt,
+.state-row dt,
+.mechanic-section h3,
+.clause-label,
+.rule-number,
+.component-role,
+.check-verdict,
+.tabs button,
+.steps li,
+.failure-code,
+.trade-side,
+.chart-range button {
+  font-family: var(--font-display);
+  font-size: var(--t-label);
+  letter-spacing: var(--track-label);
+  font-weight: 500;
+}
+
+/* Left as monospace, because the content is. */
+.mono,
+pre,
+code,
+.addresses dd,
+.copy-pill,
+.launch-check dd.mono,
+.provenance-list dd.mono {
+  font-family: var(--font-mono);
+}
+
+/* --- controls that respond ---------------------------------------------------
+ *
+ * Every interactive surface acknowledges the pointer and the press. The scale values are
+ * small on purpose — 1.5% on hover, 1% down — because the effect should be felt more than
+ * seen; anything larger reads as a toy.
+ */
+button,
+.primary,
+.secondary,
+a.launch-go {
+  transition:
+    transform var(--fast) var(--spring),
+    background-color var(--medium) var(--ease),
+    border-color var(--medium) var(--ease),
+    box-shadow var(--medium) var(--ease),
+    color var(--medium) var(--ease);
+}
+
+button:not(:disabled):active,
+.primary:not(:disabled):active,
+.secondary:not(:disabled):active {
+  transform: scale(0.985);
+}
+
+.primary {
+  border-radius: var(--radius-pill);
+  font-size: var(--t-body);
+  font-weight: 500;
+  letter-spacing: var(--track-body);
+  padding: 0.85rem 1.5rem;
+  box-shadow: var(--lift-1);
+}
+
+.primary:not(:disabled):hover {
+  box-shadow: var(--lift-2);
+  transform: translateY(-1px);
+}
+
+.primary-large {
+  padding: 1.05rem 1.6rem;
+  font-size: var(--t-body-lg);
+}
+
+.secondary {
+  border-radius: var(--radius-pill);
+  font-size: var(--t-small);
+  font-weight: 500;
+  padding: 0.7rem 1.2rem;
+}
+
+/* --- surfaces ---------------------------------------------------------------
+ *
+ * The sheet, and every card on it, get the new radii and the light-based depth. Borders
+ * come off wherever a shadow is already doing the work: two edge treatments on one object
+ * is what made the old cards look drawn rather than placed.
+ */
+.shell {
+  border-radius: var(--radius-lg);
+  box-shadow: var(--lift-3);
+}
+
+.card,
+.behaviour-card,
+.assumption-card,
+.edit-card,
+.progress-status,
+.progress .stages,
+.trade-panel,
+.launch-panel,
+.notice-card,
+.rule,
+.market-card {
+  border-radius: var(--radius);
+}
+
+/* A card is a thing you can pick up. */
+.card,
+.market-card {
+  border: none;
+  background: var(--surface);
+  box-shadow: var(--lift-1);
+  transition:
+    transform var(--medium) var(--spring),
+    box-shadow var(--medium) var(--ease);
+}
+
+.card:hover,
+.market-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--lift-3);
+}
+
+/* --- headings ---------------------------------------------------------------- */
+
+.explore-head h1,
+.review-title,
+.progress-title,
+.compose h1 {
+  font-size: var(--t-title);
+  letter-spacing: var(--track-title);
+  font-weight: 500;
+  line-height: 1.08;
+}
+
+.explore-head h1 {
+  font-size: var(--t-display);
+  letter-spacing: var(--track-display);
+  max-width: 14ch;
+}
+
+.explore-lede,
+.review-lede,
+.progress-lede {
+  font-size: var(--t-body-lg);
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+/* --- the token page's headline figure ----------------------------------------
+ *
+ * The one number on the page set large enough to be read across a room, because it is
+ * the number somebody came for.
+ */
+.chart-headline {
+  font-size: var(--t-display);
+  letter-spacing: var(--track-display);
+  font-weight: 500;
+  line-height: 1;
+}
+
+/* --- arrival ------------------------------------------------------------------
+ *
+ * Content settles in rather than appearing. One short translate, staggered across a grid
+ * so a shelf of cards reads as one movement instead of eight.
+ *
+ * Off entirely when the reader has asked for less motion, which is a preference about
+ * vestibular comfort rather than about taste.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .grid > *,
+  .behaviour-card,
+  .shelf > * {
+    animation: settle 0.5s var(--ease) backwards;
+  }
+
+  .grid > *:nth-child(1) { animation-delay: 0.02s; }
+  .grid > *:nth-child(2) { animation-delay: 0.06s; }
+  .grid > *:nth-child(3) { animation-delay: 0.1s; }
+  .grid > *:nth-child(4) { animation-delay: 0.14s; }
+  .grid > *:nth-child(5) { animation-delay: 0.18s; }
+  .grid > *:nth-child(6) { animation-delay: 0.22s; }
+  .grid > *:nth-child(n + 7) { animation-delay: 0.26s; }
+}
+
+@keyframes settle {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* --- focus --------------------------------------------------------------------
+ *
+ * Visible, and only for the keyboard. A ring on every mouse click is noise; no ring at
+ * all makes the product unusable without a pointer.
+ */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* --- what the first pass missed ---------------------------------------------
+ *
+ * Four things, found by looking at it rather than by reading the stylesheet.
+ */
+
+/*
+ * Section headings were the loudest survivors: TRENDING, NEW LAUNCHES, ALL TOKENS, set
+ * uppercase at 0.82rem with 0.12em of tracking. Uppercase tracked-out text is a label,
+ * and these are headings — the thing above a shelf of tokens should say "Trending" in the
+ * voice the rest of the page uses, not announce itself in small caps.
+ */
+.shelf h2,
+.mechanics h2,
+.trades h2,
+.contracts h2,
+.evidence h2 {
+  font-size: var(--t-heading);
+  font-weight: 500;
+  letter-spacing: var(--track-title);
+  text-transform: none;
+  color: var(--text);
+}
+
+.shelf-count,
+.explore-count {
+  font-family: var(--font-display);
+  font-size: var(--t-small);
+  letter-spacing: var(--track-body);
+  color: var(--text-faint);
+}
+
+/*
+ * The monogram. A token's ticker initials were set in monospace inside a black tile,
+ * which is the one place the terminal look was most visible and least defensible — it is
+ * a logo standing in for a logo, so it should be set in the brand's typeface.
+ */
+.market-mark,
+.card-mark,
+.row-mark,
+.tc-mark,
+.token-mark {
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: 0;
+  border-radius: var(--radius-sm);
+}
+
+/*
+ * Shadows came out too strong at card scale: `--lift-3` on hover lifted a 320px card as
+ * though it were a modal. Cards get their own, shorter, so the page reads as objects
+ * resting on paper rather than hovering above it.
+ */
+.card,
+.market-card {
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 4%),
+    0 1px 2px rgb(0 0 0 / 3%);
+}
+
+.card:hover,
+.market-card:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 5%),
+    0 6px 16px -8px rgb(0 0 0 / 14%);
+}
+
+/*
+ * Helper text under a field was `--text-ghost`, which is a disabled colour. A sentence
+ * explaining what a field does is not decoration and has to be readable; ghost is kept
+ * for genuinely absent values.
+ */
+.field-note,
+.edit-examples,
+.explore-lede,
+.card-mechanic {
+  color: var(--text-dim);
+}
+
+/* The information affordance, which was rendering as a bare "(i)". */
+.info-dot {
+  display: inline-grid;
+  place-items: center;
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 50%;
+  background: var(--inset);
+  color: var(--text-faint);
+  font-size: 0.68rem;
+  font-weight: 500;
+  line-height: 1;
+  cursor: help;
+  transition:
+    background-color var(--fast) var(--ease),
+    color var(--fast) var(--ease);
+}
+
+.info-dot:hover {
+  background: var(--text);
+  color: #ffffff;
+}
+
+/* --- the monospace sweep, done from the list rather than from memory ---------
+ *
+ * The first attempt at this named the selectors I could remember and missed most of
+ * them — `.shelf-hint` alone was the count beside every section heading on the busiest
+ * page. So this list was extracted from the stylesheet itself: every selector that sets
+ * `--font-mono`, minus the ones where monospace is correct.
+ *
+ * What stays monospace, and why: an address, a transaction hash, a compiler diagnostic,
+ * generated Solidity, and the `.mono` utility that marks a value as machine output. In
+ * all of those the fixed advance width is doing work — digits line up, a truncated hash
+ * is comparable to another, code reads as code. Everywhere else it was decoration, and
+ * decoration that made a product for launching tokens look like a build log.
+ *
+ * Set as one rule so the intent is legible in one place, and so the next person can see
+ * what the policy is instead of inferring it from ninety-four declarations.
+ */
+.adaptations h3,
+.addr-action,
+.addresses dt,
+.architecture h2,
+.assumptions h2,
+.base-fee,
+.card-age,
+.card-figures dd,
+.card-figures dt,
+.card-prelaunch,
+.card-tags span,
+.chart-label,
+.chart-ranges button,
+.check-verdict,
+.checks h2,
+.clause-label,
+.component-flag,
+.component-role,
+.composer-hint,
+.count,
+.crumb,
+.dependencies h2,
+.elevated h3,
+.event-age,
+.eyebrow,
+.failure-code,
+.field label,
+.field-amount span,
+.field-static .field-label,
+.launch-summary dt,
+.mechanic-section h3,
+.outcomes li,
+.param dt,
+.pill,
+.prelaunch-state,
+.provenance dt,
+.provenance h2,
+.refine label,
+.route-label,
+.row-age,
+.row-headings,
+.row-rules,
+.rule-flag,
+.rule-label,
+.rule-number,
+.shelf-count,
+.shelf-hint,
+.shelf-note-inline,
+.stage-attempts,
+.stat-label,
+.state-head h3,
+.state-row dt,
+.stats span,
+.status,
+.steps li span,
+.tab-count,
+.tabs button,
+.tc-age,
+.tc-figure-label,
+.tick-age,
+.tick-tag,
+.tp-asset,
+.tp-leg-head,
+.tp-sizes button,
+.tp-symbol,
+.trade-effects li,
+.trade-headings,
+.trade-side,
+.trade-when,
+.trade-who,
+.unsupported h2 {
+  font-family: var(--font-display);
+}
+
+/*
+ * The same list, sized and tracked.
+ *
+ * Monospace at 0.56rem was legible only because the grid held it together; the same
+ * string in a proportional face at that size is genuinely hard to read. Everything that
+ * was a micro-label comes up to the floor, and the uppercase tracking comes off the ones
+ * that are headings rather than labels.
+ */
+.card-age,
+.card-prelaunch,
+.card-tags span,
+.component-flag,
+.composer-hint,
+.count,
+.crumb,
+.event-age,
+.prelaunch-state,
+.row-age,
+.row-rules,
+.rule-flag,
+.shelf-count,
+.shelf-hint,
+.shelf-note-inline,
+.stage-attempts,
+.tab-count,
+.tc-age,
+.tick-age,
+.trade-when,
+.trade-who {
+  font-size: var(--t-small);
+  letter-spacing: var(--track-body);
+  text-transform: none;
+}
+
+/* Headings that were dressed as labels. */
+.architecture h2,
+.assumptions h2,
+.checks h2,
+.dependencies h2,
+.provenance h2,
+.unsupported h2,
+.elevated h3,
+.state-head h3,
+.adaptations h3,
+.rule h3 {
+  font-size: var(--t-heading);
+  font-weight: 500;
+  letter-spacing: var(--track-title);
+  text-transform: none;
+  color: var(--text);
+}
+
+/* The token's own ticker, which is a name and should look like one. */
+.token-ticker,
+.tp-symbol,
+.tc-monogram,
+.token-facts .token-ticker {
+  font-family: var(--font-display);
+  letter-spacing: var(--track-body);
+}
+
+/* --- the token's picture ------------------------------------------------------
+ *
+ * A square that is either a prompt or the picture itself. It sits at the head of the
+ * name and ticker row, so the three things that make a token recognisable are chosen
+ * together rather than across three screens.
+ */
+.identity-image {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.identity-art {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 3.5rem;
+  height: 3.5rem;
+  flex: none;
+  padding: 0;
+  overflow: hidden;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--inset);
+  color: var(--text-faint);
+  cursor: pointer;
+  transition:
+    border-color var(--medium) var(--ease),
+    background-color var(--medium) var(--ease),
+    color var(--medium) var(--ease),
+    transform var(--fast) var(--spring);
+}
+
+.identity-art svg {
+  width: 1.35rem;
+  height: 1.35rem;
+}
+
+.identity-art:hover {
+  border-color: var(--text);
+  color: var(--text);
+  background: var(--surface);
+}
+
+.identity-art:active {
+  transform: scale(0.97);
+}
+
+/* Once there is a picture it stops advertising itself: the dashed edge is an invitation
+   and the invitation has been accepted. */
+.identity-art-filled {
+  border: 1px solid var(--line);
+  border-style: solid;
+  background: var(--surface);
+}
+
+.identity-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Sits over the preview, which is already showing, so the wait reads as the picture
+   being saved rather than as nothing having happened. */
+.identity-art-busy {
+  position: absolute;
+  inset: 0;
+  background: rgb(255 255 255 / 55%);
+}
+
+.identity-art-busy::after {
+  content: "";
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border: 1.5px solid var(--line-strong);
+  border-top-color: var(--text);
+  border-radius: 50%;
+  animation: fact-turn 0.9s linear infinite;
+}
+
+.identity-image-error {
+  font-size: var(--t-label);
+  color: var(--down);
+  max-width: 14rem;
+}
+
+/* The read-back on the launch screen. */
+.launch-image {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  margin-top: 0.4rem;
+}
+
+.launch-image img {
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: none;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .identity-art-busy::after {
+    animation: none;
+  }
 }

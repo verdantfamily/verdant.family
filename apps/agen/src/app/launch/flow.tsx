@@ -22,6 +22,8 @@ import { useCallback, useEffect, useState } from "react";
 import type { PublicJob } from "../lib/builds";
 import { Info } from "./info";
 import { Progress } from "./progress";
+import { ImageField } from "./image-field";
+import { rememberImage } from "./remembered-image";
 import { Review } from "./review";
 
 type Phase = "describe" | "building" | "review";
@@ -129,6 +131,14 @@ export function Flow() {
   const [phase, setPhase] = useState<Phase>("describe");
   const [name, setName] = useState("");
   const [symbol, setSymbol] = useState("");
+  /**
+   * The token's picture, uploaded here and read again on the launch screen.
+   *
+   * Held in this component because it is chosen minutes before it is used: the build runs
+   * between the two screens. `rememberImage` puts it beside the job id as soon as there
+   * is one, so a reload during the build does not cost the creator their choice.
+   */
+  const [image, setImage] = useState<string | null>(null);
   const [description, setDescription] = useState("");
   const [jobId, setJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -194,6 +204,10 @@ export function Flow() {
         return;
       }
 
+      // Before the phase changes, so a creator who reloads the instant the build starts
+      // still has their picture when the launch screen asks for it.
+      rememberImage(body.jobId, image);
+
       setJobId(body.jobId);
       setPhase("building");
 
@@ -205,7 +219,7 @@ export function Flow() {
     } finally {
       setStarting(false);
     }
-  }, [name, symbol, description]);
+  }, [name, symbol, description, image]);
 
   const described = description.trim().length >= 12;
   const named = name.trim().length > 0 && symbol.trim().length > 0;
@@ -298,17 +312,7 @@ export function Flow() {
           </div>
 
           <div className="identity-row">
-            {/*
-              No upload: nothing stores an image yet, and a control that accepts a file
-              and drops it is worse than no control.
-            */}
-            <div className="identity-art" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4">
-                <rect x="3" y="4" width="18" height="16" rx="3" />
-                <circle cx="8.8" cy="9.6" r="1.5" />
-                <path d="M3.4 16.6 8.5 12l4 3.4 3.4-2.6 4.7 3.9" strokeLinejoin="round" />
-              </svg>
-            </div>
+            <ImageField value={image} onChange={setImage} />
 
             <label className="ifield" htmlFor="name">
               <span>
@@ -355,10 +359,10 @@ export function Flow() {
           </div>
 
           <p className="identity-note">
-            you can add a picture once your token is live.
+            {image === null ? "a picture is optional" : "picture added"}
             <Info id="info-image">
-              pictures are not stored yet, so there is nothing to upload here. your token
-              works without one and you can add it later from its page.
+              PNG, JPEG, GIF or WebP, up to 2MB. it is recorded with your token when it
+              goes live, and fixed from then on — so this is the one to pick.
             </Info>
           </p>
 

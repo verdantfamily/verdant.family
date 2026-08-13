@@ -358,6 +358,50 @@ contract HarnessToken {
     expect(result.outcomes.filter((outcome) => !outcome.passed)).toEqual([]);
     expect(result.passed).toBe(3);
   }, 180_000);
+
+  const SHORT_SUITE = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.26;
+
+import {AgenTest} from "./AgenTest.sol";
+import {PoolKey} from "v4-core/src/types/PoolKey.sol";
+import {SellFeeHook} from "../src/SellFeeHook.sol";
+
+contract OpenMarketTest is AgenTest {
+    SellFeeHook internal hook;
+    address internal token;
+    PoolKey internal key;
+
+    function setUp() public {
+        deployPoolManager();
+        token = deployToken("HarnessToken.sol:HarnessToken");
+        hook = SellFeeHook(deployHook("SellFeeHook.sol:SellFeeHook", abi.encode(manager)));
+        key = openMarket(token, address(hook), DYNAMIC_FEE);
+    }
+
+    function test_launch_liquidity_needs_no_quote_asset() public view {
+        assertEq(address(manager).balance, 0);
+    }
+
+    function test_the_market_opened_by_the_harness_trades() public {
+        swapExactIn(key, true, 0.01 ether);
+    }
+}
+`;
+
+  it("opens a tradable market from the two calls a suite is told to make", async () => {
+    const space = await open();
+    await space.write([
+      { path: "src/SellFeeHook.sol", content: HOOK },
+      { path: "src/HarnessToken.sol", content: TOKEN },
+      { path: "test/OpenMarket.t.sol", content: SHORT_SUITE },
+    ]);
+
+    const result = await forgeTest({ root: space.root });
+
+    expect(result.buildFailure).toBeNull();
+    expect(result.outcomes.filter((outcome) => !outcome.passed)).toEqual([]);
+    expect(result.passed).toBe(2);
+  }, 180_000);
 });
 
 describe("the token Agen writes itself", () => {

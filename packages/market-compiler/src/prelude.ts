@@ -33,9 +33,22 @@
  * market ever sees.
  */
 
-import { MAX_TICK_ABSOLUTE } from "@verdant/config";
+import {
+  AGEN_BAND_WIDTHS,
+  MAX_TICK_ABSOLUTE,
+  MIN_USABLE_TICK,
+  TICK_SPACING,
+} from "@verdant/config";
 
 import type { GeneratedSource } from "./workspace.js";
+
+/** Agen's standard one-billion-token, 1.5 ETH launch, asserted in the SDK tests. */
+const AGEN_INITIAL_TICK = 203_200;
+
+/** The allocations encoded by AgenCurve for its opening and middle bands. */
+const AGEN_OPENING_BPS = 1_484;
+const AGEN_MIDDLE_BPS = 1_858;
+const AGEN_BPS_DENOMINATOR = 10_000;
 
 /**
  * The base every generated hook extends.
@@ -624,6 +637,7 @@ import {IERC20Minimal} from "v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {PoolManager} from "v4-core/src/PoolManager.sol";
 import {PoolModifyLiquidityTest} from "v4-core/src/test/PoolModifyLiquidityTest.sol";
 import {PoolSwapTest} from "v4-core/src/test/PoolSwapTest.sol";
+import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
 import {Currency} from "v4-core/src/types/Currency.sol";
 import {ModifyLiquidityParams, SwapParams} from "v4-core/src/types/PoolOperation.sol";
@@ -828,6 +842,71 @@ abstract contract AgenTest is Test {
             tickSpacing: tickSpacing,
             hooks: hook
         });
+    }
+
+    function openMarket(address token, address hook, uint24 fee)
+        internal
+        returns (PoolKey memory key)
+    {
+        key = agenPoolKey(
+            Currency.wrap(address(0)),
+            Currency.wrap(token),
+            IHooks(hook),
+            ${String(TICK_SPACING)},
+            fee
+        );
+
+        manager.initialize(key, TickMath.getSqrtPriceAtTick(${String(AGEN_INITIAL_TICK)}));
+
+        _allowRouters(key.currency1);
+
+        uint256 supply = IERC20Minimal(token).balanceOf(address(this));
+        uint256 opening = (supply * ${String(AGEN_OPENING_BPS)}) / ${String(AGEN_BPS_DENOMINATOR)};
+        uint256 middle = (supply * ${String(AGEN_MIDDLE_BPS)}) / ${String(AGEN_BPS_DENOMINATOR)};
+
+        _addLaunchBand(
+            key,
+            ${String(AGEN_INITIAL_TICK - AGEN_BAND_WIDTHS.opening)},
+            ${String(AGEN_INITIAL_TICK)},
+            opening
+        );
+        _addLaunchBand(
+            key,
+            ${String(AGEN_INITIAL_TICK - AGEN_BAND_WIDTHS.middle)},
+            ${String(AGEN_INITIAL_TICK - AGEN_BAND_WIDTHS.opening)},
+            middle
+        );
+        _addLaunchBand(
+            key,
+            ${String(MIN_USABLE_TICK)},
+            ${String(AGEN_INITIAL_TICK - AGEN_BAND_WIDTHS.middle)},
+            supply - opening - middle
+        );
+    }
+
+    function deployToken(string memory artifact) internal returns (address) {
+        return deployCode(artifact, abi.encode(address(this)));
+    }
+
+    function _addLaunchBand(PoolKey memory key, int24 tickLower, int24 tickUpper, uint256 amount)
+        private
+    {
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmount1(
+            TickMath.getSqrtPriceAtTick(tickLower),
+            TickMath.getSqrtPriceAtTick(tickUpper),
+            amount
+        );
+
+        liquidityRouter.modifyLiquidity(
+            key,
+            ModifyLiquidityParams({
+                tickLower: tickLower,
+                tickUpper: tickUpper,
+                liquidityDelta: int256(uint256(liquidity)),
+                salt: bytes32(0)
+            }),
+            ""
+        );
     }
 }
 

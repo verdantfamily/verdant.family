@@ -136,6 +136,16 @@ body:has(.ax-page) {
   position: absolute;
   inset: 0;
   z-index: -2;
+  /*
+   * The corner, again, on the layer that actually carries the picture.
+   *
+   * The plate clips with `overflow: hidden`, which is enough on a desktop and is not on
+   * iOS: Safari does not apply an ancestor's radius to a child that is being transformed,
+   * and this layer is slowly scaling. The result was a photograph with square corners
+   * inside a rounded plate on every phone. Rounding the layer itself costs nothing and
+   * does not depend on the bug being fixed.
+   */
+  border-radius: inherit;
   background-image: url("/bg.jpg");
   background-image: image-set(
     url("/bg.avif") type("image/avif"),
@@ -230,6 +240,9 @@ body:has(.ax-page) {
   position: absolute;
   inset: 0;
   z-index: -2;
+  /* As on the cover: the radius goes on the layer holding the picture, not only on the
+     band clipping it. */
+  border-radius: inherit;
   background-image: var(--shot-jpg);
   background-image: image-set(
     var(--shot-avif) type("image/avif"),
@@ -409,37 +422,52 @@ body:has(.ax-page) {
   font-weight: 500;
 }
 
+/* No trailing padding now the wallet is a filled pill: the bar's own inset is the
+   margin, and adding more would float the button away from its right edge. */
 .ax-navpill .ax-top-right {
   margin-left: auto;
   display: flex;
   align-items: center;
-  padding-right: 12px;
+  gap: 6px;
 }
 
 /* The wallet is shared with the older surfaces, so it is restyled rather than forked —
    the connection logic in it is not worth duplicating for a paint job. */
+/*
+ * The one action in the bar, so it looks like one.
+ *
+ * It was plain text the colour of a nav link, which read as a fifth destination sitting
+ * slightly apart from the other four rather than as the thing the page wants you to do.
+ */
 .ax-page .nav-account .wallet {
-  height: 34px;
-  padding: 0 6px;
+  height: 40px;
+  padding: 0 20px;
   font-family: inherit;
   font-size: 0.85rem;
-  font-weight: 400;
-  letter-spacing: -0.01em;
+  font-weight: 500;
+  letter-spacing: -0.012em;
   text-transform: none;
-  color: var(--ax-muted);
-  background: transparent;
+  color: #fff;
+  background: var(--ax-ink);
   border: 0;
   border-radius: 999px;
   cursor: pointer;
-  transition: color 0.16s var(--ax-ease);
+  white-space: nowrap;
+  transition: transform 0.18s var(--ax-spring), box-shadow 0.18s var(--ax-ease);
 }
 
 .ax-page .nav-account .wallet:hover {
-  color: var(--ax-ink);
+  color: #fff;
+  box-shadow: 0 8px 22px -8px rgb(11 11 12 / 50%);
+}
+
+.ax-page .nav-account .wallet:active {
+  transform: scale(0.97);
 }
 
 .ax-page .nav-account .wallet-warn {
-  color: var(--ax-down);
+  color: #fff;
+  background: var(--ax-down);
 }
 
 /* ---------------------------------------------------------------- the wallet dialog */
@@ -2841,9 +2869,10 @@ body:has(.ax-page) {
     height: 36px;
   }
 
+  /* Still a pill, just one that leaves room for the burger beside it. */
   .ax-page .nav-account .wallet {
     height: 36px;
-    padding: 0 6px;
+    padding: 0 14px;
     font-size: 0.8rem;
   }
 }

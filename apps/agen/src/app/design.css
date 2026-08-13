@@ -442,6 +442,142 @@ body:has(.ax-page) {
   color: var(--ax-down);
 }
 
+/* ---------------------------------------------------------------- the sheet */
+
+/*
+ * The way into the navigation on a phone.
+ *
+ * Hidden above 780px, where the links are already on the bar and a second route to them
+ * would be a second thing to explain.
+ */
+.ax-burger {
+  display: none;
+  position: relative;
+  width: 38px;
+  height: 38px;
+  margin-left: 2px;
+  padding: 0;
+  background: var(--ax-fill);
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  flex: none;
+}
+
+.ax-burger-bar {
+  position: absolute;
+  left: 50%;
+  width: 15px;
+  height: 1.6px;
+  border-radius: 2px;
+  background: var(--ax-ink);
+  transition: transform 0.34s var(--ax-spring), opacity 0.2s var(--ax-ease);
+}
+
+.ax-burger-bar:nth-child(1) {
+  transform: translate(-50%, -3.5px);
+}
+
+.ax-burger-bar:nth-child(2) {
+  transform: translate(-50%, 3.5px);
+}
+
+/* The two bars rotate into a cross about the button's centre rather than one fading out,
+   so the control reads as the same object in two states. */
+.ax-burger-x:nth-child(1) {
+  transform: translate(-50%, 0) rotate(45deg);
+}
+
+.ax-burger-x:nth-child(2) {
+  transform: translate(-50%, 0) rotate(-45deg);
+}
+
+.ax-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgb(12 12 14 / 34%);
+  backdrop-filter: blur(3px);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.32s var(--ax-ease), visibility 0.32s;
+}
+
+.ax-scrim-on {
+  opacity: 1;
+  visibility: visible;
+}
+
+/*
+ * The panel itself, hung under the bar rather than covering the screen.
+ *
+ * A full-screen takeover on a page this short reads as a different page; a sheet that
+ * keeps the plate visible behind it reads as a menu belonging to the page underneath.
+ */
+.ax-sheet {
+  position: fixed;
+  top: calc(var(--ax-inset) + 62px);
+  left: var(--ax-inset);
+  right: var(--ax-inset);
+  z-index: 80;
+  padding: 10px;
+  background: var(--ax-paper);
+  border-radius: 22px;
+  box-shadow: 0 24px 60px -20px rgb(0 0 0 / 34%);
+  transform-origin: top center;
+  opacity: 0;
+  transform: translateY(-10px) scale(0.97);
+  transition: opacity 0.28s var(--ax-ease), transform 0.34s var(--ax-spring);
+}
+
+.ax-sheet[hidden] {
+  display: block;
+  pointer-events: none;
+}
+
+.ax-sheet-on {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+.ax-sheet nav {
+  display: flex;
+  flex-direction: column;
+}
+
+.ax-sheet a {
+  display: flex;
+  align-items: center;
+  padding: 15px 16px;
+  font-size: 1.05rem;
+  font-weight: 450;
+  letter-spacing: -0.022em;
+  color: var(--ax-body);
+  text-decoration: none;
+  border-radius: 14px;
+  transition: background 0.16s var(--ax-ease), color 0.16s var(--ax-ease);
+}
+
+.ax-sheet a + a {
+  border-top: 1px solid var(--ax-line-soft);
+}
+
+.ax-sheet a.on {
+  color: var(--ax-ink);
+  font-weight: 500;
+}
+
+.ax-sheet a:active {
+  background: var(--ax-fill);
+}
+
+/* The rows arrive in sequence once the panel itself has landed. */
+.ax-sheet-on a {
+  animation: ax-rise 0.42s var(--ax-ease) both;
+  animation-delay: calc(60ms + var(--i, 0) * 45ms);
+}
+
 /* ---------------------------------------------------------------- welcome */
 
 .ax-welcome {
@@ -2410,17 +2546,48 @@ body:has(.ax-page) {
 }
 
 /*
- * Absolute centring works only while there is room on both sides of it. Below this the
- * links flow between the mark and the wallet instead — they stay reachable, which an
- * earlier version of this rule got wrong by hiding them outright and leaving a tablet
- * with a navigation bar containing no navigation.
+ * Absolute centring works only while there is room on both sides of it. Between these
+ * two widths the links flow between the mark and the wallet instead — still on the bar,
+ * just no longer pinned to the page's midline.
  */
-@media (max-width: 900px) {
+@media (max-width: 980px) {
   .ax-nav {
     position: static;
     transform: none;
     margin-inline: auto;
     gap: 18px;
+  }
+}
+
+/*
+ * And below this they do not fit at all, so they move into the sheet.
+ *
+ * An earlier version of this rule hid them at this width and put nothing in their place,
+ * which left a phone with a navigation bar containing no navigation.
+ */
+@media (max-width: 780px) {
+  .ax-nav {
+    display: none;
+  }
+
+  .ax-burger {
+    display: block;
+  }
+
+  .ax-navpill {
+    height: 56px;
+    padding-right: 7px;
+  }
+
+  .ax-brand {
+    width: 36px;
+    height: 36px;
+  }
+
+  .ax-page .nav-account .wallet {
+    height: 36px;
+    padding: 0 6px;
+    font-size: 0.8rem;
   }
 }
 
@@ -2508,14 +2675,98 @@ body:has(.ax-page) {
   }
 }
 
+/*
+ * A phone.
+ *
+ * Two things drive most of what follows. Anything laid out in columns becomes one
+ * column, because a 390px screen divided in two is two columns of nothing. And every
+ * heading that was sized for a desktop measure comes down — the hero's `clamp` already
+ * scales, but the fixed sizes on section headings and figures do not.
+ */
 @media (max-width: 640px) {
   .ax-page {
     --ax-gutter: 18px;
-    --ax-inset: 12px;
+    --ax-inset: 10px;
   }
 
   .ax-cover {
     min-height: 440px;
+  }
+
+  /* The welcome's buttons need the room the plate's own padding was taking. */
+  .ax-welcome {
+    padding: 40px 20px 0;
+  }
+
+  .ax-bloom-shot {
+    min-height: 300px;
+    padding: 86px 0 46px;
+  }
+
+  .ax-bloom,
+  .ax-bloom-shot {
+    padding-inline: 4px;
+  }
+
+  /* One column, and the feature stops being wider than the cards under it. */
+  .ax-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ax-feature {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: start;
+    gap: 14px;
+  }
+
+  .ax-feature .ax-art {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1;
+  }
+
+  /* The create form: the picture, the name and the ticker each get the full width
+     rather than three fractions of it. */
+  .ax-ident {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .ax-go-centre .ax-cta {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* The build screen's figures stack, and the focused stage gives back the padding it
+     was using to look important on a wide screen. */
+  .ax-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ax-stage-open {
+    padding: 30px 18px 24px;
+  }
+
+  .ax-stage-open .stage-icon {
+    width: 68px;
+    height: 68px;
+    margin-bottom: 18px;
+  }
+
+  .ax-progress-head h2 {
+    font-size: 1.35rem;
+  }
+
+  .ax-explore-head h2 {
+    font-size: 1.5rem;
+  }
+
+  .ax-invite {
+    padding: 56px 16px;
+  }
+
+  .ax-footpanel {
+    padding: 24px 22px;
   }
 
   .ax-acts {

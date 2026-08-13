@@ -4117,9 +4117,21 @@ body {
   color: var(--text);
 }
 
+/*
+ * The sheet everything sits on.
+ *
+ * One gutter, used on all four sides, rather than a fixed width centred in whatever is
+ * left. Those are not the same thing and the difference is what the old rule got wrong:
+ * capped at 1240px on a 1920px screen, the sheet had 340px of grey either side and 22px
+ * above it, so it read as a column dropped onto the page rather than as a page.
+ *
+ * There is no maximum. The sheet is the window; what stops a line of text running the
+ * width of a cinema screen is `--page` on the content inside it, which is the thing that
+ * should be deciding a reading measure anyway.
+ */
 .shell {
-  max-width: 1240px;
-  margin: clamp(0.6rem, 1.6vw, 1.4rem) auto;
+  --gutter: clamp(0.6rem, 1.6vw, 1.4rem);
+  margin: var(--gutter);
   background: #ffffff;
   border-radius: 18px;
   overflow: hidden;

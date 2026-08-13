@@ -1098,19 +1098,76 @@ export function preludeApi(): string {
     // and reads as a mistake about the market rather than about the base.
     const constructor = /^\s{4}constructor\(([^)]*)\)/m.exec(content);
 
-    if (functions.length === 0 && constructor === null) continue;
+    // The getters Solidity writes for you, which this listing used to omit entirely.
+    //
+    // A public state variable is a function to everybody outside the contract, and
+    // `FeeVault` is mostly public state: `owner`, `hook`, `credited`, `withdrawn`. Listed
+    // by functions alone it appeared to offer three methods, none of which answers "where
+    // does the fee go" — so a generated PULSE test asked for `feeReceiver()`, which has
+    // never existed, and the build died four repair rounds later with a market that was
+    // never wrong. The variables were always readable. Nothing had ever said so.
+    const getters = publicGetters(content);
+
+    if (functions.length === 0 && getters.length === 0 && constructor === null) continue;
 
     const lines = [
       ...(constructor === null
         ? []
         : [`    constructor(${constructor[1]!.replace(/\s+/g, " ").trim()})`]),
       ...functions.map((signature) => `    function ${signature}`),
+      ...getters.map((signature) => `    function ${signature}   <- public state`),
     ];
 
     sections.push(`  ${name}${isAbstract ? "  (abstract — inherit it)" : ""}\n${lines.join("\n")}`);
   }
 
   return sections.join("\n\n");
+}
+
+/**
+ * The getters Solidity generates for public state, written out as the functions they are.
+ *
+ * A caller cannot tell `uint256 public currentEpoch` from `function currentEpoch()
+ * external view returns (uint256)`, and should not have to. A mapping becomes a function
+ * of its keys, which is the part most worth stating: `credited` reads as a field and is
+ * called as `credited(currency)`.
+ *
+ * Exported for the deterministic API check, which needs the same set of names.
+ */
+export function publicGetters(body: string): readonly string[] {
+  const declarations = body.matchAll(
+    /^\s{4}(?!function\b|constructor\b|event\b|error\b|struct\b|modifier\b|using\b)([^;{}\n]+?)\s+public\s+(?:immutable\s+|constant\s+)?(\w+)\s*(?:=[^;]*)?;/gm,
+  );
+
+  return [...declarations].map(([, type, name]) => `${name}(${keysOf(type!).join(", ")})`);
+}
+
+/**
+ * The parameters a public variable's getter takes.
+ *
+ * One per mapping key, in order, plus one `uint256` per array dimension. A key is never
+ * itself a mapping, so the first `=>` is always the top-level one and no bracket counting
+ * is needed.
+ */
+function keysOf(type: string): readonly string[] {
+  const keys: string[] = [];
+  let rest = type.trim();
+
+  while (rest.startsWith("mapping(")) {
+    const inner = rest.slice("mapping(".length, rest.lastIndexOf(")")).trim();
+    const arrow = inner.indexOf("=>");
+    if (arrow === -1) break;
+
+    keys.push(inner.slice(0, arrow).trim().split(/\s+/)[0]!);
+    rest = inner.slice(arrow + 2).trim();
+  }
+
+  while (rest.endsWith("[]")) {
+    keys.push("uint256");
+    rest = rest.slice(0, -2).trim();
+  }
+
+  return keys;
 }
 
 /**

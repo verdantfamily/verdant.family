@@ -664,6 +664,15 @@ ${VALUE_TYPE_ACCESSORS}
 
 The contracts under test are in contracts/ and import as "../contracts/<Name>.sol".
 
+${PRELUDE_API}
+
+A test asserts against Agen's contracts more often than a market calls them — custody is
+checked by reading the vault, not by trusting the hook — so the list above is the one
+thing a suite cannot guess at. The fee destination is FeeVault's owner(); what arrived is
+credited(currency); what has left is withdrawn(currency); the balance is the vault's own.
+There is no feeReceiver(), no recipient(), no beneficiary(). If the assertion you want
+needs a getter that is not listed, assert on a balance or an event instead.
+
 ${structs}
 
 A helper contract that inherits one of the market's contracts inherits everything its

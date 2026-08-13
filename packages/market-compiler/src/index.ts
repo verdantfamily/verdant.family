@@ -21,6 +21,7 @@ export * from "./artifacts.js";
 export * from "./blocker.js";
 export * from "./playbook.js";
 export * from "./recovery.js";
+export * from "./testapi.js";
 export * from "./context.js";
 export * from "./describe.js";
 export * from "./devbuy.js";

@@ -141,6 +141,66 @@ export const PLAYBOOK: readonly PlaybookEntry[] = [
    * The real names are listed here rather than described, because the whole cause is a
    * model guessing at them.
    */
+  /**
+   * The same compiler sentence as `invented_member`, about a different mistake, and it
+   * has to be matched first because it is the more specific of the two.
+   *
+   * A fresh PULSE build asked FeeVault for `feeReceiver()`. The vault has never had one:
+   * the fee destination is `owner()`, and what arrived is `credited(currency)`. The
+   * reason the model reached for a name that does not exist is that nothing had ever told
+   * it the ones that do — the API listing went to the contract generator and not to the
+   * test writer, and it omitted public state, which is most of what FeeVault is.
+   *
+   * That listing is fixed at the source now. This entry is what catches the next one,
+   * and its whole job is to say: the contract is right, read the list.
+   */
+  {
+    id: "invented_contract_member",
+    title: "Called a method a contract in this build does not have",
+    blame: Blame.Test,
+    matches: [
+      /Member "[^"]+" not found or not visible after argument-dependent lookup in contract/i,
+    ],
+    remedy:
+      "The contract does not have that method and the contract is not what is wrong. " +
+      "Agen's own contracts are fixed, and a generated one has already compiled and " +
+      "passed its gates, so adding the member to make a test compile is changing a " +
+      "working market to match a guess.\n" +
+      "Read what it actually offers. Public state is callable: FeeVault keeps the fee " +
+      "destination in owner(), what has arrived in credited(currency), what has left in " +
+      "withdrawn(currency) — there is no feeReceiver(), recipient() or beneficiary(). " +
+      "RewardAccumulator answers pending(account), claimable(account), shares(account) " +
+      "and totalShares. EpochAccounting answers currentEpoch(), epochIsDue() and " +
+      "epochsElapsed().\n" +
+      "If the value you want to assert on has no getter, assert on it indirectly: a " +
+      "balance, or an event the contract emits.",
+  },
+
+  /**
+   * The third way a suite gets an API wrong: the right name, the wrong shape.
+   *
+   * Worth its own entry because the obvious fix is the wrong one. Solidity permits
+   * overloads, so a model asked to make `credit(currency)` compile against
+   * `credit(address,uint256)` can add a one-argument version to the contract and every
+   * error goes away — leaving a market with a function nobody reviewed, reachable by
+   * anyone, doing whatever the test happened to need.
+   */
+  {
+    id: "wrong_arity",
+    title: "Called a real method with the wrong arguments",
+    blame: Blame.Test,
+    matches: [
+      /Wrong argument count for function call/i,
+      /Exactly \d+ arguments? expected/i,
+      /expected \d+ arguments?, but provided/i,
+    ],
+    remedy:
+      "The method exists and the call does not match it. Fix the call. Do not add an " +
+      "overload to the contract and do not change the existing signature: both make a " +
+      "reviewed market answer to a shape nobody designed, and the second breaks every " +
+      "other caller. Check the declaration and pass what it asks for.",
+  },
+
   {
     id: "invented_member",
     title: "Read a field off a Uniswap type that has no fields",

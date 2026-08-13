@@ -63,7 +63,9 @@ import {
   invariantsWereProven,
 } from "./gates.js";
 import { recogniseAll, remedyBrief } from "./playbook.js";
-import { classify, tacticFor } from "./recovery.js";
+import { classify, FailureCategory, tacticFor, Tactic } from "./recovery.js";
+import { Blame } from "./playbook.js";
+import { apiBrief, unknownMembers } from "./testapi.js";
 import type { EffectsRepair, Repair, StageOutput } from "./engineer.js";
 import {
   ArtefactError,
@@ -1046,6 +1048,63 @@ export async function runBuild(
     }
 
     job = await save(endStage({ ...job, tests }, { status: "succeeded", now: now() }));
+
+    // Before spending a compile on it: does the suite call anything that is not there?
+    //
+    // The compiler finds these too, and describes them so badly that a build can lose its
+    // whole repair budget to one — the message names Solidity's lookup rules and not the
+    // member list, so each round guesses a different plausible name. Answered here, the
+    // repair is handed the actual members and has nothing left to guess at. One pass,
+    // before the loop, so a wrong reading costs a single call and never recurs.
+    const missing = unknownMembers([...preludeSources(), ...sources], tests);
+
+    if (missing.length > 0) {
+      job = await save(beginStage(job, Stage.TestRepair, now()));
+
+      try {
+        const output = await repairTests(provider, {
+          specification,
+          sources,
+          tests,
+          failures: [],
+          attempt: 0,
+          remedy: apiBrief(missing),
+        });
+
+        diagnostics = withRepair(diagnostics, {
+          attempt: 0,
+          at: now(),
+          kind: "test",
+          diagnosis: output.value.diagnosis,
+          files: output.value.files.map((file) => file.path),
+          gaveUp: output.value.giveUp,
+          category: FailureCategory.TypeApiMismatch,
+          blame: Blame.Test,
+          playbook: "invented_contract_member",
+          tactic: Tactic.TargetedRepair,
+        });
+        await flushDiagnostics();
+
+        // Contracts are not accepted from this repair. The question asked was about the
+        // tests, the market has already compiled and passed its gates, and a repair that
+        // answers "this member is missing" by adding it is the one outcome to refuse.
+        if (!output.value.giveUp) {
+          tests = mergeSources(
+            tests,
+            output.value.files.filter((file) => file.path.startsWith(`${LAYOUT.tests}/`)),
+          );
+          job = remember(job, Stage.TestRepair, output);
+        }
+      } catch {
+        // The compiler will report the same thing in a moment, and the repair loop after
+        // it is the one with a budget. Failing the build here would turn an optimisation
+        // into a new way to lose.
+      }
+
+      job = await save(
+        endStage({ ...job, tests }, { status: "succeeded", detail: apiBrief(missing), now: now() }),
+      );
+    }
 
     job = await save(beginStage(job, Stage.TestExecution, now()));
     await workspace.write(tests);

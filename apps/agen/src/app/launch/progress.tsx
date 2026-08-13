@@ -14,6 +14,8 @@
  * like nothing at all.
  */
 
+import { blockerFor } from "@verdant/market-compiler/browser";
+
 import type { PublicJob } from "../lib/builds";
 import { StageIcon, type StageMark } from "./stage-icon";
 
@@ -31,6 +33,16 @@ const LINES: readonly {
   readonly label: string;
   readonly note: string;
   readonly mark: StageMark;
+  /**
+   * The stage that repairs this one, and what to say while it is running.
+   *
+   * A build that is repairing looks identical to a build that is stuck: the same line,
+   * the same spinner, for another ninety seconds. Saying so is the difference between
+   * "this is hung" and "this is working" — and it is the honest description, since Agen
+   * reading a compiler error and rewriting a contract is the product, not an apology
+   * for one.
+   */
+  readonly repair?: { readonly stage: string; readonly note: string };
 }[] = [
   {
     stage: "interpreting",
@@ -61,8 +73,15 @@ const LINES: readonly {
     label: "Compiling",
     note: "making them run on chain",
     mark: "compiling",
+    repair: { stage: "compilation_repair", note: "adjusting the implementation" },
   },
-  { stage: "test_execution", label: "Testing", note: "proving the rules hold", mark: "testing" },
+  {
+    stage: "test_execution",
+    label: "Testing",
+    note: "proving the rules hold",
+    mark: "testing",
+    repair: { stage: "test_repair", note: "verifying the behaviour" },
+  },
   { stage: "deployment_ready", label: "Ready", note: "prepared for launch", mark: "ready" },
 ];
 
@@ -124,6 +143,12 @@ export function Progress({ job }: { readonly job: PublicJob }) {
           const state = stateOf(job, line.stage);
           const attempts = attemptsOf(job, line.stage);
 
+          // The stage stays open across its repairs, so a line that is repairing is a
+          // line that is still running — it just isn't doing what its note says.
+          const repairing =
+            line.repair !== undefined && stateOf(job, line.repair.stage) === "running";
+          const note = repairing ? line.repair!.note : line.note;
+
           // A stage entered more than once was repaired between attempts. Shown on
           // compilation and tests, where it means something; a second pass through
           // anything else would be a bug worth seeing too.
@@ -131,13 +156,15 @@ export function Progress({ job }: { readonly job: PublicJob }) {
 
           return (
             <li className={`stage stage-${state}`} key={line.stage}>
-              <StageIcon mark={line.mark} state={state} />
+              <StageIcon mark={line.mark} state={repairing ? "running" : state} />
 
               <span className="stage-text">
                 <span className="stage-label">{line.label}</span>
                 {/* The plain-language version, and only while it is happening: seven
                     explanations at once is a paragraph, one is an answer. */}
-                {state === "running" ? <span className="stage-note">{line.note}</span> : null}
+                {state === "running" || repairing ? (
+                  <span className="stage-note">{note}</span>
+                ) : null}
               </span>
 
               {state === "skipped" ? <span className="stage-attempts">not run</span> : null}
@@ -164,44 +191,73 @@ export function Progress({ job }: { readonly job: PublicJob }) {
         </p>
       ) : null}
 
-      {job.failure === null ? null : (
-        <div className="failure">
-          <p className="failure-code">{job.failure.code.toLowerCase().replaceAll("_", " ")}</p>
-          <p className="failure-detail">{job.failure.detail}</p>
+      {job.failure === null ? null : <Failed failure={job.failure} failedAt={failedAt} />}
+    </div>
+  );
+}
 
-          {failedAt === undefined ? null : (
-            <p className="failure-where">It stopped at: {failedAt.replaceAll("_", " ")}.</p>
-          )}
+/**
+ * A build that did not finish, explained rather than reported.
+ *
+ * The failure code, the stage and the compiler's own words all used to be the first three
+ * things on this screen. They are all still here and none of them is first: what a
+ * creator needs from a red screen is what happened, whether it was their fault, and what
+ * to do — in that order, in sentences. The evidence sits underneath for the one reader in
+ * fifty who wants it, which is the right ratio for a phrase like "ManagerLocked".
+ */
+function Failed({
+  failure,
+  failedAt,
+}: {
+  readonly failure: NonNullable<PublicJob["failure"]>;
+  readonly failedAt: string | undefined;
+}) {
+  const blocker = blockerFor(failure);
+  const diagnostics = failure.diagnostics ?? [];
+  const failingTests = failure.failingTests ?? [];
 
-          {job.failure.diagnostics === undefined || job.failure.diagnostics.length === 0 ? null : (
-            <details className="failure-diagnostics">
-              <summary>compiler output</summary>
-              <pre>
-                {job.failure.diagnostics
-                  .slice(0, 6)
-                  .map(
-                    (diagnostic) =>
-                      `${diagnostic.file ?? ""}${
-                        diagnostic.line === null ? "" : `:${String(diagnostic.line)}`
-                      } ${diagnostic.message}`,
-                  )
-                  .join("\n\n")}
-              </pre>
-            </details>
-          )}
+  return (
+    <div className="failure">
+      <p className="failure-headline">{blocker.headline}</p>
+      <p className="failure-detail">{blocker.explanation}</p>
+      <p className="failure-next">{blocker.nextStep}</p>
 
-          {job.failure.failingTests === undefined || job.failure.failingTests.length === 0 ? null : (
-            <details className="failure-diagnostics">
-              <summary>failing tests</summary>
-              <pre>
-                {job.failure.failingTests
-                  .map((test) => `${test.name}\n  ${test.reason ?? "no reason given"}`)
-                  .join("\n\n")}
-              </pre>
-            </details>
-          )}
-        </div>
-      )}
+      {/* Only where a person genuinely has to decide something. A question under a
+          failure Agen caused itself reads as blame. */}
+      {blocker.ask === null ? null : <p className="failure-ask">{blocker.ask}</p>}
+
+      <details className="failure-diagnostics">
+        <summary>Technical details</summary>
+        <pre>
+          {[
+            failure.code.toLowerCase().replaceAll("_", " "),
+            ...(failedAt === undefined ? [] : [`stopped at ${failedAt.replaceAll("_", " ")}`]),
+            "",
+            failure.detail,
+            ...(diagnostics.length === 0
+              ? []
+              : [
+                  "",
+                  ...diagnostics
+                    .slice(0, 6)
+                    .map(
+                      (diagnostic) =>
+                        `${diagnostic.file ?? ""}${
+                          diagnostic.line === null ? "" : `:${String(diagnostic.line)}`
+                        } ${diagnostic.message}`,
+                    ),
+                ]),
+            ...(failingTests.length === 0
+              ? []
+              : [
+                  "",
+                  ...failingTests.map(
+                    (test) => `${test.name}\n  ${test.reason ?? "no reason given"}`,
+                  ),
+                ]),
+          ].join("\n")}
+        </pre>
+      </details>
     </div>
   );
 }

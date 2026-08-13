@@ -63,7 +63,7 @@ import {
   invariantsWereProven,
 } from "./gates.js";
 import { recogniseAll, remedyBrief } from "./playbook.js";
-import { classify } from "./recovery.js";
+import { classify, tacticFor } from "./recovery.js";
 import type { EffectsRepair, Repair, StageOutput } from "./engineer.js";
 import {
   ArtefactError,
@@ -815,6 +815,7 @@ export async function runBuild(
     }
 
     let attempt = 0;
+    let compileSignature: string | null = null;
 
     diagnostics = withCompileAttempt(diagnostics, attemptFrom(compiled, 0, now()));
     await flushDiagnostics();
@@ -829,6 +830,20 @@ export async function runBuild(
         ),
       );
 
+      // Name the failure before repairing it, so that an attempt which changes nothing
+      // costs a rung rather than a repeat. Three identical prompts were never three
+      // chances.
+      const failure = classify({
+        stage: Stage.CompilationRepair,
+        diagnostics: compiled.diagnostics,
+      });
+      const tactic = tacticFor({
+        attempt: attempt - 1,
+        previousSignature: compileSignature,
+        signature: failure.signature,
+      });
+      compileSignature = failure.signature;
+
       let repair: Repair;
       try {
         const output = await repairCompilation(provider, {
@@ -836,6 +851,7 @@ export async function runBuild(
           diagnostics: compiled.diagnostics,
           attempt,
           remedy: remedyBrief(recogniseAll(compiled.diagnostics)),
+          tactic,
         });
         repair = output.value;
         job = remember(job, Stage.CompilationRepair, output);
@@ -850,6 +866,11 @@ export async function runBuild(
         diagnosis: repair.diagnosis,
         files: repair.files.map((file) => file.path),
         gaveUp: repair.giveUp,
+        category: failure.category,
+        blame: failure.blame,
+        playbook: failure.playbook,
+        signature: failure.signature,
+        tactic,
       });
       await flushDiagnostics();
 
@@ -1034,6 +1055,7 @@ export async function runBuild(
     // rather than before — see the deep validation stage below.
     let tested = await runTests({ root: workspace.root, depth: "critical" });
     let testAttempt = 0;
+    let testSignature: string | null = null;
 
     diagnostics = withTestAttempt(diagnostics, testAttemptFrom(tested, 0, now()));
     await flushDiagnostics();
@@ -1048,6 +1070,21 @@ export async function runBuild(
       // and the model is told which one it is looking at.
       const failures = tested.outcomes.filter((outcome) => !outcome.passed);
 
+      // The rung this attempt gets. A suite failing the same way it failed last round
+      // does not get the same prompt again: the ladder widens what the model is shown
+      // and then, if that fails too, lets it change the approach rather than the lines.
+      const failure = classify({
+        stage: Stage.TestRepair,
+        diagnostics: tested.buildFailure ?? [],
+        failingTests: failures,
+      });
+      const tactic = tacticFor({
+        attempt: testAttempt - 1,
+        previousSignature: testSignature,
+        signature: failure.signature,
+      });
+      testSignature = failure.signature;
+
       let repair: Repair;
       try {
         const output =
@@ -1057,6 +1094,7 @@ export async function runBuild(
                 diagnostics: tested.buildFailure,
                 attempt: testAttempt,
                 remedy: remedyBrief(recogniseAll(tested.buildFailure)),
+                tactic,
               })
             : await repairTests(provider, {
                 specification,
@@ -1065,6 +1103,7 @@ export async function runBuild(
                 failures,
                 attempt: testAttempt,
                 remedy: remedyBrief(recogniseAll([], failures)),
+                tactic,
               });
         repair = output.value;
         job = remember(job, Stage.TestRepair, output);
@@ -1079,6 +1118,11 @@ export async function runBuild(
         diagnosis: repair.diagnosis,
         files: repair.files.map((file) => file.path),
         gaveUp: repair.giveUp,
+        category: failure.category,
+        blame: failure.blame,
+        playbook: failure.playbook,
+        signature: failure.signature,
+        tactic,
       });
       await flushDiagnostics();
 

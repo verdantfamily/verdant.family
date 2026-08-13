@@ -62,6 +62,22 @@ export interface RepairAttempt {
    */
   readonly files: readonly string[];
   readonly gaveUp: boolean;
+  /**
+   * How the failure was named, and what was tried about it.
+   *
+   * Optional because records written before the ladder existed do not have it, and a
+   * stored build is read back long after it was written. Present on everything new: the
+   * sequence of tactics is the only way to tell a build that climbed the ladder and
+   * recovered from one that spent three attempts on the bottom rung.
+   */
+  readonly category?: string;
+  readonly blame?: string;
+  /** The playbook entry that recognised it, where one did. */
+  readonly playbook?: string | null;
+  /** The failure's fingerprint. Two repairs sharing one made no progress between them. */
+  readonly signature?: string;
+  /** The rung of the ladder this attempt was. */
+  readonly tactic?: string;
 }
 
 export interface BuildDiagnostics {

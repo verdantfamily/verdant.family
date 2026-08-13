@@ -51,6 +51,81 @@ describe("failures this project has already paid for", () => {
     expect(entry?.remedy).toContain("Do not relax the hook's check");
   });
 
+  /**
+   * PULSE, live, stopped at test execution after four repair attempts on:
+   *
+   *     test/PulseTest.sol:66 Member "delta0" not found or not visible after
+   *     argument-dependent lookup in BalanceDelta.
+   *
+   * The market was fine. What went wrong was not that the ladder failed to climb — it
+   * reached attempt four — but that `overload_lookup` matched this message and handed
+   * every rung the same wrong answer, about wrapping arguments in Currency. A remedy is
+   * given to the model ahead of the evidence precisely because it is usually right, so a
+   * remedy that is wrong is worse than none: it survives all four attempts.
+   */
+  it("tells an invented member apart from a mis-wrapped argument, which used to share a remedy", () => {
+    const entry = recognise([
+      diagnostic({
+        message:
+          'Member "delta0" not found or not visible after argument-dependent lookup in BalanceDelta.',
+        file: "test/PulseTest.sol",
+        line: 66,
+      }),
+    ]);
+
+    expect(entry?.id).toBe("invented_member");
+    // The test wrote it, so the test fixes it. Growing the field on the market's
+    // contracts would be the pipeline changing a working market to satisfy a typo.
+    expect(entry?.blame).toBe(Blame.Test);
+    expect(entry?.remedy).toContain("delta.amount0()");
+    expect(entry?.remedy).toContain("Do not change the market's contracts");
+    // The remedy that used to answer this one, and should no longer come near it.
+    expect(entry?.remedy).not.toContain("Currency.wrap(address(0))");
+  });
+
+  it("names the accessor for every packed type a test is likely to read", () => {
+    const remedy = recognise([
+      diagnostic({ message: 'Member "amount0" not found or not visible after argument-dependent lookup' }),
+    ])?.remedy;
+
+    for (const accessor of ["amount0()", "getSpecifiedDelta", "slot0.tick()", "key.toId()"]) {
+      expect(remedy, accessor).toContain(accessor);
+    }
+    // The one that is not attached globally, which is its own afternoon if unstated.
+    expect(remedy).toContain("BeforeSwapDelta does not");
+  });
+
+  it("classifies an invented member as an API mismatch owned by the test", () => {
+    const found = classify({
+      stage: Stage.TestRepair,
+      diagnostics: [
+        diagnostic({
+          message:
+            'Member "delta0" not found or not visible after argument-dependent lookup in BalanceDelta.',
+        }),
+      ],
+    });
+
+    expect(found.category).toBe(FailureCategory.TypeApiMismatch);
+    expect(found.blame).toBe(Blame.Test);
+    expect(found.playbook).toBe("invented_member");
+    expect(found.terminal).toBe(false);
+  });
+
+  it("still climbs when the same invented member survives an attempt", () => {
+    const signature = classify({
+      stage: Stage.TestRepair,
+      diagnostics: [
+        diagnostic({ message: 'Member "delta0" not found or not visible after argument-dependent lookup' }),
+      ],
+    }).signature;
+
+    // Same failure, second round: the cheap rung has been shown not to work.
+    expect(tacticFor({ attempt: 1, previousSignature: signature, signature })).toBe(
+      Tactic.RethinkStrategy,
+    );
+  });
+
   it("knows a harness helper called with a bare address", () => {
     const entry = recognise([
       diagnostic({ message: "No matching declaration found after argument-dependent lookup." }),

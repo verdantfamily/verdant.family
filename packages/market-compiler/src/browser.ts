@@ -30,3 +30,12 @@ export * from "./plan.js";
 
 /** A build's stages and its record, which the progress screen reads. */
 export * from "./job.js";
+
+/**
+ * What to say when a build does not finish.
+ *
+ * Here rather than only in the barrel because the screen that renders a failure is a
+ * client component, and the alternative is a second set of failure copy written in the
+ * interface — which is how a product ends up telling somebody "stack too deep".
+ */
+export * from "./blocker.js";

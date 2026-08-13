@@ -336,6 +336,9 @@ Currency.wrap(address(token)), IHooks(address(hook)).
       So: initialize the pool, addLiquidity, then swapExactIn, then assert on balances.
       zeroForOne == true spends currency0, which in an Agen pool is a BUY.
 
+      The BalanceDelta it returns is a packed pair, not a struct: read it with
+      delta.amount0() and delta.amount1(). There is no .delta0 and no .delta1.
+
       A pool with no liquidity fills nothing, so a suite that skips addLiquidity sees
       every fee come back zero and concludes the mechanic does not work.
 
@@ -373,6 +376,50 @@ testing something the deployment will never be.
 When a hook takes value, the vault must be wired to it before any swap — the vault
 rejects an uninitialised hook, and a suite that skips this sees NotHook on every test
 and concludes the market cannot collect fees.
+`.trim();
+
+/**
+ * The accessors on Uniswap's value types, listed because they cannot be guessed.
+ *
+ * Every one of these is `type X is int256` or `type X is bytes32` — a single packed
+ * integer wearing a name, with a library of functions that shift bits out of it. Nothing
+ * about the call site says so. `delta.amount0()` looks exactly like a struct field read
+ * with parentheses on it, which is why a model that has never seen the declaration writes
+ * `delta.delta0` and gets a message naming argument-dependent lookup, a Solidity concept
+ * that has nothing to do with the mistake.
+ *
+ * A PULSE build spent four repair rounds on precisely that. The names are cheap to state
+ * and impossible to derive, so they are stated — to the generator as well as the test
+ * writer, because a hook reads its own swap deltas the same way.
+ */
+export const VALUE_TYPE_ACCESSORS = `
+Uniswap's value types are packed integers, not structs. They have no fields, only
+library functions, and inventing a field produces "Member ... not found or not visible
+after argument-dependent lookup" — which names the lookup rule rather than the mistake.
+The complete set you may use:
+
+  BalanceDelta        delta.amount0()  delta.amount1()            -> int128
+                      the two sides of a swap or a liquidity change. Signed: negative is
+                      paid in, positive is taken out, from the caller's point of view.
+
+  BeforeSwapDelta     BeforeSwapDeltaLibrary.getSpecifiedDelta(d)  -> int128
+                      BeforeSwapDeltaLibrary.getUnspecifiedDelta(d)
+                      Build one with toBeforeSwapDelta(specified, unspecified).
+
+  Slot0               slot0.tick()  slot0.lpFee()  slot0.protocolFee()
+                      sqrtPriceX96 comes back beside it from StateLibrary, not from here.
+
+  Currency            currency.balanceOf(who)  currency.balanceOfSelf()
+                      currency.isAddressZero()  Currency.unwrap(currency) -> address
+                      Currency.wrap(address)   -> Currency
+
+  PoolKey             key.toId() -> PoolId. PoolKey is a real struct, so key.fee,
+                      key.tickSpacing, key.currency0, key.currency1 and key.hooks are
+                      fields and are read directly.
+
+BalanceDelta, Slot0, Currency and PoolKey attach their libraries globally: importing the
+type is enough for the call. BeforeSwapDelta does not — name the library, or add
+\`using BeforeSwapDeltaLibrary for BeforeSwapDelta;\` at file scope.
 `.trim();
 
 export const TEST_CONVENTIONS = `
@@ -597,6 +644,8 @@ ${HOOK_SIGNATURES}
 
 ${SWAP_SEMANTICS}
 
+${VALUE_TYPE_ACCESSORS}
+
 ${CUSTODY}
 
 ${WIRING}
@@ -610,6 +659,8 @@ ${SECURITY_CONSTRAINTS}
 ${TEST_CONVENTIONS}
 
 ${TEST_HARNESS_GUIDANCE}
+
+${VALUE_TYPE_ACCESSORS}
 
 The contracts under test are in contracts/ and import as "../contracts/<Name>.sol".
 

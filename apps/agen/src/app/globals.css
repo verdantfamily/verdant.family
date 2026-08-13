@@ -593,9 +593,39 @@ body {
   color: var(--text-faint);
 }
 
+/* What happened, in one line. The largest thing in the box, because it is the only
+   part most people will read. */
+.failure-headline {
+  font-size: 1.05rem;
+  line-height: 1.45;
+  color: var(--text);
+}
+
 .failure-detail {
   margin-top: 0.7rem;
   font-size: 1rem;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.failure-headline + .failure-detail {
+  font-size: 0.92rem;
+  color: var(--text-dim, var(--text-faint));
+}
+
+.failure-next {
+  margin-top: 0.7rem;
+  font-size: 0.92rem;
+  line-height: 1.6;
+  color: var(--text-dim, var(--text-faint));
+}
+
+/* The one question worth asking, where there is one. */
+.failure-ask {
+  margin-top: 0.9rem;
+  padding-left: 0.8rem;
+  border-left: 2px solid var(--line, rgba(0, 0, 0, 0.12));
+  font-size: 0.92rem;
   line-height: 1.6;
   color: var(--text);
 }

@@ -41,6 +41,7 @@ import type { GateFinding } from "./gates.js";
 import type { JsonSchema, ModelProvider, ModelRole, StructuredResponse } from "./model.js";
 import { array, bounded, object, optional, text } from "./model.js";
 import { PRELUDE_CONTRACTS } from "./prelude.js";
+import { Tactic } from "./recovery.js";
 import type { MarketComponent, MarketImplementationPlan } from "./plan.js";
 import type { PlannedDependency } from "./plan.js";
 import { validatePlan } from "./plan.js";
@@ -2424,6 +2425,49 @@ export interface Repair {
   readonly giveUp: boolean;
 }
 
+/**
+ * What a repair is being asked to do differently this time.
+ *
+ * The rung comes from `recovery.tacticFor`, which climbs when an attempt changes nothing.
+ * What it means in practice is two things: how much of the market goes in the prompt, and
+ * what the model is permitted to do to it. A targeted repair sees the failing file and is
+ * expected to edit a line; a rethink sees everything and is told the approach itself may
+ * be the problem. Sending the whole market on the first attempt would be the same prompt
+ * every time, only slower, and the widening is what makes the later attempts a second
+ * opinion rather than a second billing.
+ */
+function tacticGuidance(tactic: Tactic): string {
+  switch (tactic) {
+    case Tactic.ExpandedContext:
+      return (
+        "A narrower attempt at this already failed the same way, so the cause is probably " +
+        "not in the file it was shown. Everything that file depends on is included below. " +
+        "Look for the mismatch between them — a base contract that declares something " +
+        "differently, a helper that does not do what its name suggests, a value set " +
+        "somewhere else — rather than editing the same lines again."
+      );
+    case Tactic.RethinkStrategy:
+      return (
+        "Two attempts have now failed to fix this by editing it, which usually means the " +
+        "approach is wrong rather than the code. You may restructure: move state to " +
+        "another contract, settle lazily instead of on a timer, account for something at a " +
+        "different point, represent it differently. What must not change is what the " +
+        "market does — the same fees, the same rules, the same events, the same outcomes " +
+        "for anyone trading it. Say in the diagnosis what you changed the approach to, and " +
+        "why the previous one could not work."
+      );
+    case Tactic.RegenerateComponent:
+      return (
+        "Every attempt to repair this has failed. Do not edit it again. Write the affected " +
+        "file from scratch against the specification, keeping only its name and the " +
+        "interface other files use to reach it, and ignore the shape of what is there now " +
+        "— the existing structure is what has been failing. This is the last attempt."
+      );
+    case Tactic.TargetedRepair:
+      return "";
+  }
+}
+
 interface RawRepair {
   diagnosis: string;
   files: { path: string; content: string }[];
@@ -2558,6 +2602,7 @@ export async function repairCompilation(
     diagnostics,
     attempt,
     remedy = null,
+    tactic = Tactic.TargetedRepair,
     timeoutMs = STAGE_TIMEOUTS.repair,
   }: {
     readonly sources: readonly GeneratedSource[];
@@ -2565,9 +2610,17 @@ export async function repairCompilation(
     readonly attempt: number;
     /** The known fix, where this failure has been met before. See `playbook.ts`. */
     readonly remedy?: string | null;
+    /** How hard to try. See `tacticGuidance`. */
+    readonly tactic?: Tactic;
     readonly timeoutMs?: number;
   },
 ): Promise<StageOutput<Repair>> {
+  // Narrowing is what makes the first attempt cheap, and it is also the thing that can
+  // hide the cause. Once the ladder has climbed, the saving is no longer worth the risk.
+  const shown =
+    tactic === Tactic.TargetedRepair ? relevantSources(sources, diagnostics) : sources;
+  const guidance = tacticGuidance(tactic);
+
   const output = await ask<RawRepair>(provider, {
     stage: "compilation_repair",
     instructions:
@@ -2580,7 +2633,8 @@ export async function repairCompilation(
       "edited. When the compiler blames one, the fault is in the file that inherits from it " +
       "or imports it: an identifier redeclared from a base contract is reported at the base. " +
       "Fix the file you were given, and do not give up merely because the named file is " +
-      "absent.",
+      "absent." +
+      (guidance === "" ? "" : `\n\n${guidance}`),
     input: [
       `This is repair attempt ${String(attempt)}.`,
       "",
@@ -2596,9 +2650,7 @@ export async function repairCompilation(
       // time in tokens the model had already seen and could not act on, and the larger
       // the prompt the likelier a repair rewrites something that was working.
       "The files that failed, which are the only ones to return:",
-      relevantSources(sources, diagnostics)
-        .map((source) => `--- ${source.path} ---\n${source.content}`)
-        .join("\n\n"),
+      shown.map((source) => `--- ${source.path} ---\n${source.content}`).join("\n\n"),
     ].join("\n"),
     schemaName: "compilation_repair",
     schema: repairSchema,
@@ -2702,6 +2754,7 @@ export async function repairTests(
     failures,
     attempt,
     remedy = null,
+    tactic = Tactic.TargetedRepair,
     timeoutMs = STAGE_TIMEOUTS.repair,
   }: {
     readonly specification: MarketSpecification;
@@ -2711,9 +2764,16 @@ export async function repairTests(
     readonly attempt: number;
     /** The known fix, where this failure has been met before. See `playbook.ts`. */
     readonly remedy?: string | null;
+    /** How hard to try. See `tacticGuidance`. */
+    readonly tactic?: Tactic;
     readonly timeoutMs?: number;
   },
 ): Promise<StageOutput<Repair>> {
+  const targeted = tactic === Tactic.TargetedRepair;
+  const shownTests = targeted ? failing(tests, failures) : tests;
+  const shownSources = targeted ? exercised(sources, shownTests) : sources;
+  const guidance = tacticGuidance(tactic);
+
   const output = await ask<RawRepair>(provider, {
     stage: "test_repair",
     instructions:
@@ -2727,7 +2787,8 @@ export async function repairTests(
       "never the answer. When a compiler error names one, the fault is in whatever inherits " +
       "from it: Solidity reports a redeclared identifier at the base, so a test helper " +
       "declaring an error or event a base already declares is reported in the base file. " +
-      "Rename it in the test.",
+      "Rename it in the test." +
+      (guidance === "" ? "" : `\n\n${guidance}`),
     input: [
       `This is repair attempt ${String(attempt)}.`,
       "",
@@ -2752,15 +2813,13 @@ export async function repairTests(
       // that is shown the whole market rewrites parts of it that were passing: the
       // largest of these prompts ran to seven thousand input tokens and the model had no
       // use for most of them.
-      "The failing tests, which are the only test files to return:",
-      failing(tests, failures)
-        .map((source) => `--- ${source.path} ---\n${source.content}`)
-        .join("\n\n"),
+      targeted
+        ? "The failing tests, which are the only test files to return:"
+        : "The test suite:",
+      shownTests.map((source) => `--- ${source.path} ---\n${source.content}`).join("\n\n"),
       "",
-      "The contracts they exercise:",
-      exercised(sources, failing(tests, failures))
-        .map((source) => `--- ${source.path} ---\n${source.content}`)
-        .join("\n\n"),
+      targeted ? "The contracts they exercise:" : "The market's contracts:",
+      shownSources.map((source) => `--- ${source.path} ---\n${source.content}`).join("\n\n"),
     ].join("\n"),
     schemaName: "test_repair",
     schema: repairSchema,

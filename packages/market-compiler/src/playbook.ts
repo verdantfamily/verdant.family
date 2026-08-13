@@ -126,14 +126,49 @@ export const PLAYBOOK: readonly PlaybookEntry[] = [
       "places the hook at an address whose bits match the permissions it declares.",
   },
 
+  /**
+   * Placed above `overload_lookup`, and split out of it, because the two share a phrase
+   * and want opposite advice.
+   *
+   * A PULSE build died on `Member "delta0" not found ... in BalanceDelta` after four
+   * repair attempts. Every one of them was handed the overload remedy — wrap the
+   * arguments in `Currency`, pass `IHooks` — which is sound guidance for a helper called
+   * with bare addresses and no guidance at all for a member that does not exist. The
+   * ladder climbed as designed and carried the same wrong answer up every rung, which is
+   * the failure mode a playbook has that a bare retry does not: confident misdirection
+   * costs more than silence.
+   *
+   * The real names are listed here rather than described, because the whole cause is a
+   * model guessing at them.
+   */
+  {
+    id: "invented_member",
+    title: "Read a field off a Uniswap type that has no fields",
+    blame: Blame.Test,
+    matches: [/Member "[^"]+" not found or not visible after argument-dependent lookup/i],
+    remedy:
+      "That member does not exist. Uniswap's types are packed integers rather than " +
+      "structs — BalanceDelta is one int256, Slot0 is one bytes32 — so they have " +
+      "accessor functions and no fields at all, and .delta0, .amount0 without the " +
+      "parentheses, .tick as a field and the like are inventions. The real ones:\n" +
+      "    BalanceDelta:     delta.amount0(), delta.amount1()            -> int128\n" +
+      "    BeforeSwapDelta:  BeforeSwapDeltaLibrary.getSpecifiedDelta(d)\n" +
+      "                      BeforeSwapDeltaLibrary.getUnspecifiedDelta(d)\n" +
+      "    Slot0:            slot0.tick(), slot0.lpFee(), slot0.protocolFee()\n" +
+      "    Currency:         currency.balanceOf(who), Currency.unwrap(currency)\n" +
+      "    PoolKey:          key.toId()\n" +
+      "BalanceDelta, Slot0, Currency and PoolKey attach their library globally, so the " +
+      "call works from the type alone. BeforeSwapDelta does not: name the library, or " +
+      "add `using BeforeSwapDeltaLibrary for BeforeSwapDelta;`.\n" +
+      "This is the test's mistake. Do not change the market's contracts to grow the " +
+      "field the test asked for.",
+  },
+
   {
     id: "overload_lookup",
     title: "Harness helper called with unwrapped types",
     blame: Blame.HarnessMisuse,
-    matches: [
-      /No matching declaration found after argument-dependent lookup/i,
-      /Member "[^"]+" not found or not visible after argument-dependent lookup/i,
-    ],
+    matches: [/No matching declaration found after argument-dependent lookup/i],
     remedy:
       "The argument types are wrong, not the function. Uniswap wraps these in types of " +
       "its own and the harness takes them wrapped: Currency.wrap(address(0)) for the " +

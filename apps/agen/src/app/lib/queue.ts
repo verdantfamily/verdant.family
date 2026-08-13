@@ -36,9 +36,20 @@
 import "server-only";
 
 import type { GenerationJob } from "@verdant/market-compiler";
-import { isTerminal, newJob, restartJob, runBuild, Stage } from "@verdant/market-compiler";
+import {
+  answerBuild,
+  isTerminal,
+  newJob,
+  restartJob,
+  runBuild,
+  Stage,
+} from "@verdant/market-compiler";
 
-import type { AgenDeploymentAddresses, ModelProvider } from "@verdant/market-compiler";
+import type {
+  AgenDeploymentAddresses,
+  ClarificationAnswer,
+  ModelProvider,
+} from "@verdant/market-compiler";
 
 import { GENERATED_ROOT, jobStore, VENDOR_ROOT } from "./builds";
 import { AGEN_ADDRESSES, AGEN_ROUTER, EXTERNAL } from "./chain";
@@ -104,6 +115,16 @@ export interface QueuePosition {
 interface Pending {
   readonly job: GenerationJob;
   readonly provider: ModelProvider;
+  /**
+   * Present when this entry is a creator answering a question rather than a build
+   * starting or resuming.
+   *
+   * It goes through the same queue and the same capacity bound for the obvious reason:
+   * answering a question restarts the whole remainder of a build — architecture, code,
+   * compile, tests — so a server at its limit that let answers straight through would
+   * have no limit at all on the days people are actually using it.
+   */
+  readonly answers?: readonly ClarificationAnswer[];
 }
 
 interface State {
@@ -184,6 +205,39 @@ export async function submit(
 }
 
 /**
+ * Answer what Agen asked, and let the build carry on.
+ *
+ * A build that stops at `awaiting_clarification` is waiting on a person, so nothing in
+ * the process will ever move it again — not `pump`, and deliberately not
+ * `recoverInterrupted`, which skips this stage precisely because the job is not
+ * interrupted. Until this existed there was no route into `answerBuild` at all, which
+ * meant every question Agen asked was a build that could never finish.
+ *
+ * Returns null when there is no such job, and refuses politely when the job is not
+ * actually waiting on an answer — a double submission from an impatient click must not
+ * start the remainder of a build twice.
+ */
+export async function answer(
+  jobId: string,
+  answers: readonly ClarificationAnswer[],
+  provider: ModelProvider,
+): Promise<GenerationJob | null> {
+  const job = await jobStore().read(jobId);
+  if (job === null) return null;
+  if (job.stage !== Stage.AwaitingClarification) return job;
+
+  const current = state();
+  if (current.running.has(jobId) || current.waiting.some((entry) => entry.job.id === jobId)) {
+    return job;
+  }
+
+  current.waiting.push({ job, provider, answers });
+  pump();
+
+  return job;
+}
+
+/**
  * Start whatever the free slots allow.
  *
  * Synchronous and re-entrant-safe: it only ever moves entries from `waiting` into
@@ -215,24 +269,29 @@ function pump(): void {
  * rejection — that would take the process down and every other build with it, which is
  * precisely the "one failed build affects another" property this file exists to remove.
  */
-async function execute({ job, provider }: Pending): Promise<void> {
+async function execute({ job, provider, answers }: Pending): Promise<void> {
   const deployment = probeDeployment();
 
+  const options = {
+    provider,
+    store: jobStore(),
+    vendorRoot: VENDOR_ROOT,
+    generatedRoot: GENERATED_ROOT,
+    // Probe against the chain this will actually launch on, so a market that needs
+    // the router discovers at build time whether there is one — rather than after a
+    // creator has read a review screen and pressed launch.
+    ...(deployment === undefined ? {} : { deployment }),
+  };
+
   try {
-    await runBuild(
-      { prompt: job.prompt, name: job.name, symbol: job.symbol },
-      {
-        provider,
-        store: jobStore(),
-        vendorRoot: VENDOR_ROOT,
-        generatedRoot: GENERATED_ROOT,
-        resume: job,
-        // Probe against the chain this will actually launch on, so a market that needs
-        // the router discovers at build time whether there is one — rather than after a
-        // creator has read a review screen and pressed launch.
-        ...(deployment === undefined ? {} : { deployment }),
-      },
-    );
+    if (answers === undefined) {
+      await runBuild(
+        { prompt: job.prompt, name: job.name, symbol: job.symbol },
+        { ...options, resume: job },
+      );
+    } else {
+      await answerBuild(job.id, answers, options);
+    }
   } catch (error) {
     console.error(`[agen] build ${job.id} threw outside the pipeline:`, error);
 

@@ -36,10 +36,15 @@ import "server-only";
 
 import { resolve } from "node:path";
 
-import type { GenerationJob, JobStore, ModelProvider } from "@verdant/market-compiler";
+import type {
+  ClarificationAnswer,
+  GenerationJob,
+  JobStore,
+  ModelProvider,
+} from "@verdant/market-compiler";
 import { fileJobStore, openAiProvider } from "@verdant/market-compiler";
 
-import { positionOf, recoverInterrupted, submit, type QueuePosition } from "./queue";
+import { answer, positionOf, recoverInterrupted, submit, type QueuePosition } from "./queue";
 
 /**
  * The repository root.
@@ -147,6 +152,34 @@ export async function startBuild(request: {
   });
 
   const job = await submit(request, provider);
+  return { ok: true, jobId: job.id };
+}
+
+/**
+ * Answer the question a build stopped on.
+ *
+ * The counterpart to `startBuild`, and it returns on the same terms: the answer is
+ * recorded and queued, the remainder of the build happens behind the same bound, and the
+ * screen finds out by polling. An answer restarts architecture, generation, compilation
+ * and tests, so holding the request open for it would be holding it open for minutes.
+ */
+export async function answerBuildQuestions(
+  jobId: string,
+  answers: readonly ClarificationAnswer[],
+): Promise<StartResult> {
+  const provider = providerOrNull();
+  if (provider === null) {
+    return {
+      ok: false,
+      error:
+        "No model endpoint is configured, so Agen cannot continue this build. " +
+        "Set OPENAI_API_KEY on the server and try again.",
+    };
+  }
+
+  const job = await answer(jobId, answers, provider);
+  if (job === null) return { ok: false, error: "There is no build with that id." };
+
   return { ok: true, jobId: job.id };
 }
 

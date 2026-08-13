@@ -655,6 +655,46 @@ describe("the test repair loop", () => {
     expect(job.failure?.code).toBe(FailureCode.TestsUnrepairable);
     expect(job.failure?.failingTests?.length).toBeGreaterThan(0);
   });
+
+  it("stops asking once two repairs have left the failure unchanged", async () => {
+    // Running the suite costs seconds; a repair round costs a model call. Every test
+    // failure in this repository's history that exhausted the budget spent all three
+    // rounds on the same failure, so the cost of a doomed build was almost entirely
+    // rounds that were never going to work.
+    //
+    // One repetition is not a stall — the ladder answers it by widening the prompt. Two
+    // is: the escalation happened and the outcome did not move.
+    const noop = {
+      diagnosis: "no change",
+      files: [
+        {
+          path: "test/Other.t.sol",
+          content: "// SPDX-License-Identifier: MIT\npragma solidity 0.8.26;\ncontract OtherTest {}\n",
+        },
+      ],
+      giveUp: false,
+    };
+
+    const { options, provider } = pipeline([
+      ...interpretationAnswers(),
+      matchAnswer(),
+      planAnswer(),
+      sources(GOOD_HOOK),
+      tests(FAILING_TESTS),
+      noop,
+      noop,
+      noop,
+    ]);
+
+    const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
+
+    expect(job.failure?.code).toBe(FailureCode.TestsUnrepairable);
+
+    // Two rounds, not the budget's three: the third would have asked the same question.
+    const rounds = provider.calls.filter((call) => call.stage === "test_repair").length;
+    expect(rounds).toBe(2);
+    expect(job.testAttempts).toBe(2);
+  });
 });
 
 describe("failing closed", () => {

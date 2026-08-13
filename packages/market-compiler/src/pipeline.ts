@@ -1138,16 +1138,25 @@ export async function runBuild(
     let tested = await runTests({ root: workspace.root, depth: "critical" });
     let testAttempt = 0;
     let testSignature: string | null = null;
+    /**
+     * How many rounds in a row have produced the identical failure.
+     *
+     * Running the suite costs about two seconds; a repair round costs a model call, which
+     * measured across this repository's build history is closer to forty-six. Every test
+     * failure that has ever exhausted this budget spent all three rounds, so the whole
+     * cost of a doomed build is in rounds that were never going to work.
+     *
+     * The escalation ladder already answers a repeat by widening the prompt, so one
+     * repetition is not evidence of a stall — it is the signal that produces a better
+     * attempt. Two in a row is different: the ladder has escalated and the outcome did not
+     * move, so the next round is the same question a third time.
+     */
+    let stalled = 0;
 
     diagnostics = withTestAttempt(diagnostics, testAttemptFrom(tested, 0, now()));
     await flushDiagnostics();
 
     while (!tested.ok && testAttempt < budget.testRepairs) {
-      testAttempt += 1;
-      job = await save(
-        beginStage({ ...job, testAttempts: testAttempt }, Stage.TestRepair, now()),
-      );
-
       // A suite that will not compile is a different question from a suite that fails,
       // and the model is told which one it is looking at.
       const failures = tested.outcomes.filter((outcome) => !outcome.passed);
@@ -1161,11 +1170,37 @@ export async function runBuild(
         failingTests: failures,
       });
       const tactic = tacticFor({
-        attempt: testAttempt - 1,
+        attempt: testAttempt,
         previousSignature: testSignature,
         signature: failure.signature,
       });
+
+      stalled = failure.signature === testSignature ? stalled + 1 : 0;
       testSignature = failure.signature;
+
+      // Escalating twice without moving the failure means the remaining rounds are the
+      // same question a third time. Stop and report what is actually in the way, rather
+      // than spending another model call to arrive here. Checked before the attempt is
+      // counted or the stage opened, so the record shows the rounds that happened.
+      if (stalled >= 2) {
+        return await fail({
+          code: FailureCode.TestsUnrepairable,
+          stage: Stage.TestRepair,
+          detail:
+            tested.outcomes.length === 0
+              ? "The generated test suite could not be made to compile, and two repair " +
+                "attempts left it failing in exactly the same way."
+              : `The same ${String(failures.length)} test${failures.length === 1 ? "" : "s"} ` +
+                `failed unchanged across two repair attempts.`,
+          failingTests: failures,
+          ...(tested.buildFailure === null ? {} : { diagnostics: tested.buildFailure }),
+        });
+      }
+
+      testAttempt += 1;
+      job = await save(
+        beginStage({ ...job, testAttempts: testAttempt }, Stage.TestRepair, now()),
+      );
 
       let repair: Repair;
       try {

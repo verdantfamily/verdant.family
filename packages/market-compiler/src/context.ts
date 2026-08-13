@@ -341,6 +341,22 @@ fails inside beforeSwap, v4 wraps the failure, and the whole suite reports
 three repair rounds to exactly that. Wire it in setUp and the tests describe the mechanic
 instead.
 
+DO NOT REDECLARE ANYTHING AgenTest ALREADY HAS.
+
+Your contract inherits these. Writing your own version of one does not replace it, it
+collides with it, and solc rejects the file with "Overriding function is missing
+\`override\` specifier" — a compile error about inheritance in a suite whose actual
+problem is that a helper was rewritten instead of called. These names are taken:
+
+    deployHook   deployPoolManager   addLiquidity   swapExactIn
+    agenPoolKey  approveSwapRouter   permissionFlags
+    manager      swapRouter          liquidityRouter
+
+Call them. If one does not do what your market needs, work around it in your test body
+rather than shadowing it — a redefined helper is a compile failure, and a redefined
+helper marked \`override\` is worse, because it silently replaces the one thing standing
+between your test and v4's locking rules.
+
 THE TEST CONTRACT MUST HOLD THE SUPPLY.
 
 The generated token mints its entire supply to one recipient named at construction. At

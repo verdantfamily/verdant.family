@@ -108,6 +108,17 @@ body:has(.ax-page) {
  * retracted, which it is not when the page first paints: the plate would be taller than
  * the screen on arrival and its bottom margin would only appear after a scroll.
  *
+ * ## Why the photograph does not move
+ *
+ * It used to drift, scaling to 1.06 over forty seconds. On a desktop that is a nice thing
+ * nobody consciously notices. On iOS it produced square corners: Safari does not clip a
+ * transformed child to an ancestor's radius, and giving the layer its own radius does not
+ * help either, because at 1.06 the rounded corners have been pushed outside the frame and
+ * what remains inside it is the straight part of the edge.
+ *
+ * A still photograph in a correctly rounded plate beats a moving one in a square box, so
+ * the drift is gone here as it already was on the other two banners.
+ *
  * Called `cover` and not `stage`, which is what it was. A build has stages too, and when
  * the build screen was written the two meanings collided on one class name: every step in
  * the pipeline inherited a full-viewport height and this block's scrim, which rendered
@@ -154,15 +165,6 @@ body:has(.ax-page) {
   );
   background-size: cover;
   background-position: center 42%;
-  /* A very slow push in. The photograph is the only thing on this screen with any
-     texture, and holding it perfectly still is what makes a hero read as a screenshot. */
-  animation: ax-breathe 42s ease-in-out infinite alternate;
-}
-
-@keyframes ax-breathe {
-  to {
-    transform: scale(1.06);
-  }
 }
 
 /* Type over a photograph needs its own ground or it is legible only where the picture

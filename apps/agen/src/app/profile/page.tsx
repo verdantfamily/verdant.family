@@ -23,30 +23,33 @@ export default async function Profile() {
 
   return (
     <div className="ax-page">
-      <Bloom active="profile">
-        <h1>Your tokens</h1>
-        <p>
-          Everything this wallet has created, from first description through to a live
-          market.
-        </p>
+      <Bloom active="profile" photo="profilebg" centred>
+        <h1>Your Profile</h1>
       </Bloom>
 
       <main className="ax-wrap">
-        <section className="ax-section ax-reveal">
-          <div className="ax-section-head">
-            <h2>Created by you</h2>
+        <Portfolio markets={markets} now={now} />
+
+        <footer className="ax-footpanel ax-reveal">
+          <div>
+            <span className="ax-footmark">
+              <img src="/mark.png" width={24} height={24} alt="" aria-hidden="true" />
+              agen.space
+            </span>
+            <p>Tokens whose markets have their own rules</p>
           </div>
 
-          <div style={{ marginTop: "22px" }}>
-            <Portfolio markets={markets} now={now} />
+          <div className="ax-footlinks">
+            <a href="https://x.com/agendotspace" target="_blank" rel="noreferrer">
+              Twitter / X
+            </a>
+            <a href="https://verdant.family" target="_blank" rel="noreferrer">
+              Canopy Website
+            </a>
+            <a href="https://t.me" target="_blank" rel="noreferrer">
+              Telegram
+            </a>
           </div>
-        </section>
-
-        <footer className="ax-foot">
-          <span>agen — tokens whose markets have their own rules</span>
-          <a href="https://x.com/agendotspace" target="_blank" rel="noreferrer">
-            x
-          </a>
         </footer>
       </main>
     </div>

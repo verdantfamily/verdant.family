@@ -5,6 +5,7 @@ import { useAccount } from "wagmi";
 
 import type { MarketSummary } from "../lib/markets";
 import { TokenRow } from "../markets/row";
+import { Wallet } from "../wallet";
 
 /**
  * What this wallet has made.
@@ -27,15 +28,25 @@ export function Portfolio({
   const { address, status } = useAccount();
 
   if (status === "connecting" || status === "reconnecting") {
-    return <p className="ax-empty">Looking for your wallet…</p>;
+    return <p className="ax-invite-note">Looking for your wallet…</p>;
   }
 
+  /*
+   * The same control as the one in the bar, deliberately.
+   *
+   * A second button that opened the same dialog would be a second implementation of
+   * connecting — and connecting is four states, two failure modes and a chain switch.
+   * This renders the real one and lets the stylesheet make it the size the empty page
+   * needs, so there is one connect flow in the product and always will be.
+   */
   if (address === undefined) {
     return (
-      <p className="ax-empty">
-        Connect a wallet to see the tokens you have created. Nothing is signed by
-        connecting — it only shows Agen which address you are.
-      </p>
+      <section className="ax-invite">
+        <p className="ax-invite-note">Connect your wallet to load your profile</p>
+        <div className="ax-invite-act">
+          <Wallet />
+        </div>
+      </section>
     );
   }
 
@@ -45,21 +56,27 @@ export function Portfolio({
 
   if (mine.length === 0) {
     return (
-      <p className="ax-empty">
-        This wallet has not created a token yet.{" "}
-        <Link href="/launch" style={{ color: "inherit", textDecoration: "underline" }}>
-          Describe one
-        </Link>{" "}
-        and it will appear here.
-      </p>
+      <section className="ax-invite">
+        <p className="ax-invite-note">This wallet has not created a token yet.</p>
+        <Link className="ax-cta" href="/launch">
+          Create a token
+        </Link>
+      </section>
     );
   }
 
   return (
-    <div className="ax-index">
-      {mine.map((market, position) => (
-        <TokenRow market={market} now={now} index={position} key={market.id} />
-      ))}
-    </div>
+    <section className="ax-section ax-reveal">
+      <div className="ax-section-head">
+        <h2>Created by you</h2>
+        <span className="ax-tag">{mine.length}</span>
+      </div>
+
+      <div className="ax-index" style={{ marginTop: "8px" }}>
+        {mine.map((market, position) => (
+          <TokenRow market={market} now={now} index={position} key={market.id} />
+        ))}
+      </div>
+    </section>
   );
 }

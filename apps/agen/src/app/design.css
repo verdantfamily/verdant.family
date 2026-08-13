@@ -196,6 +196,51 @@ body:has(.ax-page) {
   z-index: -1;
 }
 
+/* --- the photographed form ------------------------------------------------ */
+
+.ax-bloom-shot {
+  padding: 78px 0 68px;
+  min-height: 300px;
+  background: #1b1a20;
+}
+
+/* Square rather than round, and unblurred: this one is a picture. */
+.ax-bloom-photo {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  border-radius: 0;
+  filter: none;
+  background-image: var(--shot-jpg);
+  background-image: image-set(
+    var(--shot-avif) type("image/avif"),
+    var(--shot-webp) type("image/webp"),
+    var(--shot-jpg) type("image/jpeg")
+  );
+  background-size: cover;
+  background-position: center 58%;
+  animation: ax-breathe 52s ease-in-out infinite alternate;
+}
+
+/* Type over a photograph needs its own ground, or it is legible only where the picture
+   happens to be dark. */
+.ax-bloom-shot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(ellipse 74% 66% at 50% 50%, rgb(0 0 0 / 32%) 0%, transparent 76%);
+  pointer-events: none;
+}
+
+.ax-bloom-mid .ax-bloom-in {
+  text-align: center;
+}
+
+.ax-bloom-mid .ax-bloom-in p {
+  margin-inline: auto;
+}
+
 .ax-bloom-a {
   width: 46%;
   height: 150%;
@@ -2039,6 +2084,55 @@ body:has(.ax-page) {
   font-size: 0.8rem;
   line-height: 1.5;
   color: var(--ax-muted);
+}
+
+/* ---------------------------------------------------------------- the invitation */
+
+/*
+ * A page that cannot say anything until a wallet is connected.
+ *
+ * Centred and given room rather than boxed as an empty state, because nothing has gone
+ * wrong here: this is the first thing a visitor is meant to do, so it is the only thing
+ * on the screen.
+ */
+.ax-invite {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  padding: clamp(72px, 12vh, 132px) 20px;
+  text-align: center;
+}
+
+.ax-invite-note {
+  margin: 0;
+  font-size: 1.05rem;
+  letter-spacing: -0.018em;
+  color: var(--ax-muted);
+}
+
+/*
+ * The shared wallet control, grown to the size this page needs.
+ *
+ * It is the same component as the one in the bar — see the note in `Portfolio` — so the
+ * bar's compact text styling is overridden here rather than a second button existing.
+ */
+.ax-invite-act .nax,
+.ax-page .ax-invite-act .nav-account .wallet {
+  height: 54px;
+  padding: 0 30px;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: #fff;
+  background: var(--ax-ink);
+  border-radius: 999px;
+  transition: transform 0.2s var(--ax-spring), box-shadow 0.2s var(--ax-ease);
+}
+
+.ax-page .ax-invite-act .nav-account .wallet:hover {
+  color: #fff;
+  transform: translateY(-1.5px);
+  box-shadow: 0 12px 30px -10px rgb(11 11 12 / 45%);
 }
 
 /* ---------------------------------------------------------------- empty + foot */

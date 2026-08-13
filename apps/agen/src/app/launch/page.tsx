@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
 
-import { Nav } from "../nav";
+import { TopBar } from "../topbar";
 import { Flow } from "./flow";
+
+export const metadata: Metadata = {
+  title: "create — agen.space",
+  description: "Describe your market. Agen builds it.",
+};
 
 /**
  * The launch page.
@@ -9,26 +14,19 @@ import { Flow } from "./flow";
  * A thin server shell around a client flow, because everything interesting here is a
  * conversation with a build that is already running. The flow still prerenders — see the
  * note on `fromUrl` for why it reads the query string the long way round.
+ *
+ * The banner, the steps and the form all live inside `Flow` rather than here: which of
+ * the three steps is current is state, and a title block that could not say so would
+ * have to be duplicated in the component that can.
  */
-export const metadata: Metadata = {
-  title: "launch — agen.space",
-  description: "Describe your market. Agen builds it.",
-};
-
 export default function Launch() {
   return (
-    <>
-      <div className="canvas" aria-hidden="true">
-        <span className="mass mass-a" />
-        <span className="mass mass-b" />
-      </div>
-      <div className="grain" aria-hidden="true" />
+    <div className="ax-page">
+      <TopBar active="create" plain />
 
-      <Nav active="create" />
-
-      <main className="page launch">
+      <main className="ax-wrap">
         <Flow />
       </main>
-    </>
+    </div>
   );
 }

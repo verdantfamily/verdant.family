@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter_Tight } from "next/font/google";
 
 import "./globals.css";
+import "./design.css";
 import { Providers } from "./providers";
 
 /**
@@ -100,9 +101,9 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  // The grey the page sits on, so the phone's own chrome continues it rather than
-  // framing the white card with a black band.
-  themeColor: "#e8e8e8",
+  // The white the page sits on, so the phone's own chrome continues it rather than
+  // framing the page with a band in another colour.
+  themeColor: "#ffffff",
   colorScheme: "light",
 };
 

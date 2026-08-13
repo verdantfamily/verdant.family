@@ -38,21 +38,6 @@ const SUGGESTIONS: readonly string[] = [
 const PLACEHOLDER =
   "every hour the largest buyer becomes king and earns 20% of trading fees, until someone overtakes them.";
 
-/**
- * What happens after the button, in words a first-time creator can read.
- *
- * This line used to say "generate the contracts → compile → test". Compiling is not a
- * thing anybody launching a token has asked for; it is a thing that has to happen. So
- * the steps are named by what they achieve rather than by what the toolchain calls them.
- */
-const PATH: readonly string[] = [
-  "reads your idea",
-  "designs the market",
-  "writes the code",
-  "tests it",
-  "gets it ready",
-];
-
 /** Poll while a build is in flight; stop the moment it is not. */
 function useJob(jobId: string | null, onMissing: () => void): PublicJob | null {
   const [job, setJob] = useState<PublicJob | null>(null);
@@ -109,9 +94,9 @@ function useJob(jobId: string | null, onMissing: () => void): PublicJob | null {
 }
 
 const STEPS: readonly { readonly phase: Phase; readonly label: string }[] = [
-  { phase: "describe", label: "describe" },
-  { phase: "building", label: "build" },
-  { phase: "review", label: "review" },
+  { phase: "describe", label: "Describe" },
+  { phase: "building", label: "Build" },
+  { phase: "review", label: "Review" },
 ];
 
 /**
@@ -234,44 +219,48 @@ export function Flow() {
    */
   const blocked =
     ready === false
-      ? "agen cannot build anything right now. the server has no model connected to it."
+      ? "Agen cannot build anything right now — the server has no model connected to it."
       : !described && !named
-        ? "say what your token should do, and give it a name and a ticker."
+        ? "Say what your token should do, and give it a name and a ticker."
         : !described
-          ? "say what your token should do, in the box above."
+          ? "Say what your token should do, in the box above."
           : !named
-            ? "give your token a name and a ticker."
+            ? "Give your token a name and a ticker."
             : null;
 
   return (
-    <div className="flow">
-      <ol className="steps" aria-label="progress">
-        {STEPS.map((step, index) => (
-          <li key={step.phase} className={phase === step.phase ? "on" : ""}>
-            <span>{String(index + 1).padStart(2, "0")}</span>
-            {step.label}
-          </li>
-        ))}
-      </ol>
+    <div className="ax-create">
+      <section className="ax-banner">
+        <div className="ax-banner-bg" aria-hidden="true" />
+
+        <h1>Launch your custom v4 token</h1>
+
+        <ol className="ax-steps" aria-label="progress">
+          {STEPS.map((step, index) => (
+            <li key={step.phase} className={phase === step.phase ? "on" : ""}>
+              <b>{String(index + 1)}.</b>
+              {step.label}
+            </li>
+          ))}
+        </ol>
+      </section>
 
       {phase === "describe" ? (
-        <section className="create">
-          <header className="create-head">
-            <h1>what should your token be able to do?</h1>
-            <p>
-              explain it here in your own words, and agen will build it.
+        <section>
+          <div className="ax-block">
+            <span className="ax-label">
+              Describe your token
               <Info id="info-idea">
-                write it like you would say it to a friend. no code, no crypto words
-                needed. things like: who pays a fee, who gets rewarded, and when it
+                Write it like you would say it to a friend. No code and no crypto words
+                needed — things like who pays a fee, who gets rewarded, and when it
                 happens.
               </Info>
-            </p>
-          </header>
+            </span>
+          </div>
 
-          <div className="prompt">
+          <div className="ax-composer">
             <textarea
               id="prompt"
-              className="prompt-field"
               value={description}
               rows={6}
               maxLength={4_000}
@@ -290,14 +279,14 @@ export function Flow() {
               }}
             />
 
-            <div className="prompt-foot">
-              <span className="prompt-shortcut">⌘ + return to build</span>
-              <span className="prompt-count">{String(description.length)} / 4000</span>
+            <div className="ax-composer-foot">
+              <span>⌘ + return to build</span>
+              <span>{String(description.length)} / 4000</span>
             </div>
           </div>
 
-          <div className="examples">
-            <span className="examples-note">or start from an idea</span>
+          <div className="ax-suggest">
+            <span className="ax-suggest-note">Or start from an idea:</span>
             {SUGGESTIONS.map((suggestion) => (
               <button
                 type="button"
@@ -311,14 +300,18 @@ export function Flow() {
             ))}
           </div>
 
-          <div className="identity-row">
+          <div className="ax-block">
+            <span className="ax-label">Token information</span>
+          </div>
+
+          <div className="ax-ident">
             <ImageField value={image} onChange={setImage} />
 
-            <label className="ifield" htmlFor="name">
+            <label className="ax-field" htmlFor="name">
               <span>
-                name
+                Token name
                 <Info id="info-name">
-                  the full name of your token, the way people will read it. this is set
+                  The full name of your token, the way people will read it. This is set
                   when your token goes live and cannot be changed after that.
                 </Info>
               </span>
@@ -334,15 +327,15 @@ export function Flow() {
               />
             </label>
 
-            <label className="ifield" htmlFor="symbol">
+            <label className="ax-field" htmlFor="symbol">
               <span>
-                ticker
+                Ticker
                 <Info id="info-ticker">
-                  the short name traders use, like $KING. three to five letters is normal.
-                  it also cannot be changed once your token is live.
+                  The short name traders use, like $KING. Three to five letters is normal.
+                  It also cannot be changed once your token is live.
                 </Info>
               </span>
-              <div className="ifield-affix">
+              <div className="ax-affix">
                 <em>$</em>
                 <input
                   id="symbol"
@@ -358,46 +351,30 @@ export function Flow() {
             </label>
           </div>
 
-          <p className="identity-note">
-            {image === null ? "a picture is optional" : "picture added"}
-            <Info id="info-image">
-              PNG, JPEG, GIF or WebP, up to 2MB. it is recorded with your token when it
-              goes live, and fixed from then on — so this is the one to pick.
-            </Info>
-          </p>
-
-          <div className="create-go">
-            <button type="button" className="cta" disabled={!canBuild} onClick={() => void start()}>
-              {starting ? "starting…" : "build my token"}
+          <div className="ax-go-centre">
+            <button
+              type="button"
+              className="ax-cta"
+              disabled={!canBuild}
+              onClick={() => void start()}
+            >
+              {starting ? "Starting…" : "Build my token"}
             </button>
 
-            {blocked === null ? null : <p className="create-blocked">{blocked}</p>}
+            <p className="ax-after">
+              {blocked ??
+                "You will be able to review your token before it goes live. Nothing is deployed until you press launch."}
+            </p>
           </div>
 
-          {error === null ? null : <p className="notice">{error}</p>}
-
-          <div className="create-path">
-            <span className="create-path-note">
-              nothing goes live yet
-              <Info id="info-next">
-                building is free and private. agen writes and tests your token first — you
-                read it, change anything you want, and only then choose to launch it.
-              </Info>
-            </span>
-
-            <ol aria-label="what happens next">
-              {PATH.map((step) => (
-                <li key={step}>{step}</li>
-              ))}
-            </ol>
-          </div>
+          {error === null ? null : <p className="ax-notice">{error}</p>}
         </section>
       ) : null}
 
       {phase === "building" ? (
-        <section className="panel-wide">
+        <section>
           {job === null ? (
-            <p className="lede">Waiting for the first stage to report.</p>
+            <p className="ax-blocked">Waiting for the first stage to report.</p>
           ) : (
             <Progress job={job} />
           )}
@@ -416,16 +393,16 @@ export function Flow() {
           ) : (
             <>
               <Progress job={job} />
-              <div className="review-actions">
+              <div className="ax-go">
                 <button
                   type="button"
-                  className="secondary"
+                  className="ax-cta"
                   onClick={() => {
                     setJobId(null);
                     setPhase("describe");
                   }}
                 >
-                  change the description
+                  Change the description
                 </button>
               </div>
             </>

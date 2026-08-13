@@ -14,9 +14,12 @@
  * like nothing at all.
  */
 
+import Link from "next/link";
+
 import { blockerFor } from "@verdant/market-compiler/browser";
 
 import type { PublicJob } from "../lib/builds";
+import { Clarify } from "./clarify";
 import { StageIcon, type StageMark } from "./stage-icon";
 
 /**
@@ -148,6 +151,32 @@ function attemptsOf(job: PublicJob, stage: string): number {
 }
 
 /**
+ * Which stage gets the room.
+ *
+ * Normally the one that is running. But a build is often between stages, and it is always
+ * between them while it waits for an answer — and in both cases nothing was running, so
+ * the list collapsed into seven identical rows with no indication of where the build had
+ * got to. That is the same "looks stuck" problem the growing card exists to solve.
+ *
+ * So when nothing is running the focus falls back to the furthest stage that finished,
+ * which is a true statement about where the build is and keeps exactly one card open at
+ * all times. A failed build is excluded: its own stage is already the loud one.
+ */
+function focusOf(job: PublicJob): string | null {
+  const running = LINES.find(
+    (line) =>
+      stateOf(job, line.stage) === "running" ||
+      (line.repair !== undefined && stateOf(job, line.repair.stage) === "running"),
+  );
+  if (running !== undefined) return running.stage;
+
+  if (job.failure !== null) return null;
+
+  const done = [...LINES].reverse().find((line) => stateOf(job, line.stage) === "done");
+  return done?.stage ?? null;
+}
+
+/**
  * How long this has left, said no more precisely than it is known.
  *
  * The estimate is built from where the build actually is plus what its repairs have
@@ -174,104 +203,84 @@ function remainingFor(job: PublicJob, now: number): string {
   return `~${String(Math.round(left / 60))} min remaining`;
 }
 
-/** The stage a creator would name if asked what it is doing. */
-function currentLabel(job: PublicJob): string {
-  if (job.queue !== null) return "Queued";
-  if (job.failure !== null) return "Stopped";
-
-  const running = [...LINES]
-    .reverse()
-    .find(
-      (line) =>
-        stateOf(job, line.stage) === "running" ||
-        (line.repair !== undefined && stateOf(job, line.repair.stage) === "running"),
-    );
-
-  if (running !== undefined) return running.label;
-
-  return stateOf(job, "deployment_ready") === "done" ? "Ready" : "Working";
-}
-
-/** One line of the side panel. */
-function Fact({
-  label,
-  value,
-  spinner = false,
-}: {
-  readonly label: string;
-  readonly value: string;
-  readonly spinner?: boolean;
-}) {
-  return (
-    <div className="fact">
-      <span className="fact-label">
-        {spinner ? <span className="fact-spinner" aria-hidden /> : null}
-        {label}
-      </span>
-      <span className="fact-value">{value}</span>
-    </div>
-  );
-}
-
-/**
- * The panel beside the stages.
- *
- * Everything on it is read off the job. "Contracts planned" is the length of the plan
- * and is absent until there is one, rather than showing a zero that would read as a
- * build which decided to write nothing.
- */
-function Status({ job }: { readonly job: PublicJob }) {
-  const planned = job.plan?.components.length ?? null;
-  const repairs = job.compilationAttempts + job.testAttempts;
-  const working = job.failure === null && job.queue === null;
-
-  return (
-    <aside className="progress-status">
-      <Fact label="Current stage" value={currentLabel(job)} spinner={working} />
-      <Fact label="Estimated time" value={remainingFor(job, Date.now())} />
-      <Fact label="Contracts planned" value={planned === null ? "—" : String(planned)} />
-      <Fact label="Repair rounds used" value={String(repairs)} />
-    </aside>
-  );
-}
-
 export function Progress({ job }: { readonly job: PublicJob }) {
   const failedAt = job.failure?.stage;
   const queued = job.queue;
 
+  const planned = job.plan?.components.length ?? null;
+  const focus = focusOf(job);
+  const waitingOnYou = job.stage === "awaiting_clarification";
+
   return (
-    <div className="progress">
-      <h1 className="progress-title">
-        {queued === null ? "building" : "queued —"} {job.name}{" "}
-        <span className="ticker">${job.symbol}</span>
-      </h1>
+    <div className="ax-progress">
+      <Link className="ax-back" href="/launch">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path
+            d="M12.5 8h-9m0 0L7 4.5M3.5 8 7 11.5"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+        Go back
+      </Link>
+
+      <header className="ax-progress-head">
+        <h2>
+          {queued === null ? "Building your token" : "Queued —"}{" "}
+          <span className="ax-ticker">${job.symbol}</span>
+        </h2>
+
+        {/*
+          A waiting build has no running stage, so without this the list below sits
+          entirely grey and the screen reads as a build that has stalled. Saying the
+          position is the difference between "this is broken" and "this is a line".
+        */}
+        <p>
+          {queued === null
+            ? "This can take a few minutes, you can keep this page open."
+            : queued.position === 1
+              ? "Next to build. Your market starts as soon as a slot frees up."
+              : `${String(queued.position - 1)} ${
+                  queued.position === 2 ? "build is" : "builds are"
+                } ahead of yours. It will start on its own — you can leave this page open.`}
+        </p>
+      </header>
 
       {/*
-        A waiting build has no running stage, so without this the list below sits
-        entirely grey and the screen reads as a build that has stalled. Saying the
-        position is the difference between "this is broken" and "this is a line".
+        The three figures worth glancing at, and no more. Everything here is read off the
+        job except the last, which is a fact about Agen rather than about this build —
+        it earns its place because the panel is otherwise all waiting.
       */}
-      <p className="progress-lede">
-        {queued === null
-          ? "this usually takes a minute or two. you can leave this page open."
-          : queued.position === 1
-            ? "next to build. your market starts as soon as a slot frees up."
-            : `${String(queued.position - 1)} ${
-                queued.position === 2 ? "build is" : "builds are"
-              } ahead of yours. it will start on its own — you can leave this page open.`}
-      </p>
+      <div className="ax-facts">
+        <span className="ax-factpill">Remaining: {remainingFor(job, Date.now())}</span>
+        <span className="ax-factpill">
+          Contracts written: {planned === null ? "—" : String(planned)}
+        </span>
+        <span className="ax-factpill">Agen is powered by $CNPY</span>
+      </div>
 
-      <div className="progress-body">
-        <ol className="stages">
+      <div className="ax-progress-body">
+        <ol className="ax-stages">
           {LINES.map((line) => {
             const state = stateOf(job, line.stage);
             const attempts = attemptsOf(job, line.stage);
+            const open = line.stage === focus;
 
             // The stage stays open across its repairs, so a line that is repairing is a
             // line that is still running — it just isn't doing what its note says.
             const repairing =
               line.repair !== undefined && stateOf(job, line.repair.stage) === "running";
-            const note = repairing ? line.repair!.note : line.note;
+
+            // A build parked on a question is not doing the thing its note describes, and
+            // saying so here is what stops the panel beside it being missed.
+            const note =
+              open && waitingOnYou
+                ? "Waiting for your answer in the panel beside this."
+                : repairing
+                  ? line.repair!.note
+                  : line.note;
 
             // A stage entered more than once was repaired between attempts. Shown on
             // compilation and tests, where it means something; a second pass through
@@ -279,40 +288,37 @@ export function Progress({ job }: { readonly job: PublicJob }) {
             const repeated = attempts > 1;
 
             return (
-              <li className={`stage stage-${state}`} key={line.stage}>
+              <li
+                className={`ax-stage ax-stage-${state}${open ? " ax-stage-open" : ""}`}
+                key={line.stage}
+              >
                 <StageIcon mark={line.mark} state={repairing ? "running" : state} />
 
-                <span className="stage-text">
-                  <span className="stage-label">{line.label}</span>
-                  <span className="stage-note">{note}</span>
+                <span className="ax-stage-text">
+                  <span className="ax-stage-label">{line.label}</span>
+
+                  {/*
+                    Collapsed with a `0fr` grid row rather than by removing it, so the
+                    box can animate between its two heights. A note that is display:none
+                    when inactive has no height to transition from, and the stage would
+                    snap open instead of growing.
+                  */}
+                  <span className="ax-stage-more">
+                    <span className="ax-stage-note">{note}</span>
+                  </span>
                 </span>
 
-                {state === "skipped" ? <span className="stage-attempts">not run</span> : null}
+                {state === "skipped" ? <span className="ax-stage-tag">not run</span> : null}
                 {repeated ? (
-                  <span className="stage-attempts">attempt {String(attempts)}</span>
+                  <span className="ax-stage-tag">attempt {String(attempts)}</span>
                 ) : null}
               </li>
             );
           })}
         </ol>
 
-        <Status job={job} />
+        <Clarify job={job} />
       </div>
-
-      {job.compilationAttempts > 0 || job.testAttempts > 0 ? (
-        <p className="repairs">
-          {job.compilationAttempts > 0
-            ? `Agen rewrote the contracts ${String(job.compilationAttempts)} ${
-                job.compilationAttempts === 1 ? "time" : "times"
-              } to get them compiling. `
-            : ""}
-          {job.testAttempts > 0
-            ? `It revised the implementation ${String(job.testAttempts)} ${
-                job.testAttempts === 1 ? "time" : "times"
-              } after running the tests.`
-            : ""}
-        </p>
-      ) : null}
 
       {job.failure === null ? null : <Failed failure={job.failure} failedAt={failedAt} />}
     </div>

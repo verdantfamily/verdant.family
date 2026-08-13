@@ -30,45 +30,28 @@
  */
 
 /*
- * Aeonik, if it is here.
+ * Aeonik.
  *
- * These files are not committed — the face is licensed. Drop them into `public/fonts/`
- * under exactly these names and the page picks them up on the next load; there is no
- * build step and nothing to change in the code.
+ * The face is licensed and the files are not committed; they live in `public/fonts/` and
+ * the page picks them up with no build step. Declared as plain `@font-face` rather than
+ * through `next/font/local` for exactly that reason — a `next/font/local` call names its
+ * files at build time and fails the build when they are absent, which would make a
+ * checkout without the licensed files unbuildable.
  *
- * Declaring it this way rather than through `next/font/local` is the whole reason it can
- * be optional: a missing font file is a 404, and a 404 makes the browser fall through to
- * the next family in the stack, which is Inter Tight. A `next/font/local` call names its
- * files at build time and fails the build when they are absent.
+ * Only the two weights that exist are declared, and each names the one file that is
+ * actually on disk. An earlier version listed a woff2 and an OTF ahead of each TTF so
+ * that better formats would win if they were ever added. Nothing was ever added, so the
+ * only thing that arrangement produced was four 404s on every page load — the browser
+ * has to try and fail each entry before reaching the file that works.
  *
- * Both formats are listed per weight so either a woff2 or the raw OTF a foundry ships
- * will work. woff2 first, because it is roughly half the bytes.
- *
- * Each weight is declared separately and `font-synthesis-weight` is off, so a partial
- * drop degrades honestly: supply only Regular and the headline stays in the fallback
- * rather than rendering as a smeared fake medium.
- */
-/*
- * Aeonik, and what happens while only some of it is here.
- *
- * Each weight lists the real file first and `Aeonik-Medium.ttf` last. That last entry is
- * the whole point: for a long time this declared Regular and Bold against files that were
- * never added, so the browser fell through to `-apple-system` for both — meaning body
- * text was San Francisco, headings were San Francisco, and only the handful of things set
- * at weight 500 were actually Aeonik. A product rendered in two typefaces at once looks
- * unresolved and nobody can say why.
- *
- * Falling back to Medium instead makes it one typeface today, and the moment the real
- * Regular and Bold land in `public/fonts` they win, because they are listed first. Weight
- * synthesis stays off, so until then a `700` renders at Medium's weight rather than being
- * algorithmically smeared into a fake bold.
+ * Weight 700 points at Medium because there is no Bold, and `font-synthesis-weight` is
+ * off further down: a heading asking for bold renders at Medium's weight rather than
+ * being algorithmically smeared into a fake one. If a real Bold or a woff2 ever lands,
+ * add it here.
  */
 @font-face {
   font-family: "Aeonik";
-  src:
-    url("/fonts/Aeonik-Regular.woff2") format("woff2"),
-    url("/fonts/Aeonik-Regular.otf") format("opentype"),
-    url("/fonts/Aeonik-Medium.ttf") format("truetype");
+  src: url("/fonts/Aeonik-Regular.ttf") format("truetype");
   font-weight: 400;
   font-style: normal;
   /* swap, not block: block hides the text for up to three seconds, and if the file is
@@ -79,10 +62,7 @@
 
 @font-face {
   font-family: "Aeonik";
-  src:
-    url("/fonts/Aeonik-Medium.woff2") format("woff2"),
-    url("/fonts/Aeonik-Medium.otf") format("opentype"),
-    url("/fonts/Aeonik-Medium.ttf") format("truetype");
+  src: url("/fonts/Aeonik-Medium.ttf") format("truetype");
   font-weight: 500;
   font-style: normal;
   font-display: swap;
@@ -90,10 +70,7 @@
 
 @font-face {
   font-family: "Aeonik";
-  src:
-    url("/fonts/Aeonik-Bold.woff2") format("woff2"),
-    url("/fonts/Aeonik-Bold.otf") format("opentype"),
-    url("/fonts/Aeonik-Medium.ttf") format("truetype");
+  src: url("/fonts/Aeonik-Medium.ttf") format("truetype");
   font-weight: 700;
   font-style: normal;
   font-display: swap;

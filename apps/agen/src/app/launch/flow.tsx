@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { Bloom } from "../bloom";
 import type { PublicJob } from "../lib/builds";
 import { Info } from "./info";
 import { Progress } from "./progress";
@@ -229,10 +230,14 @@ export function Flow() {
             : null;
 
   return (
-    <div className="ax-create">
-      <section className="ax-banner">
-        <div className="ax-banner-bg" aria-hidden="true" />
-
+    <>
+      {/*
+        The banner is outside the measure and the form is inside it, so it has to be
+        rendered here rather than by the page: which of the three steps is current is
+        state, and a title block that could not say so would have to be duplicated in the
+        component that can.
+      */}
+      <Bloom active="create" photo="launchbg" centred>
         <h1>Launch your custom v4 token</h1>
 
         <ol className="ax-steps" aria-label="progress">
@@ -243,8 +248,9 @@ export function Flow() {
             </li>
           ))}
         </ol>
-      </section>
+      </Bloom>
 
+      <main className="ax-wrap ax-create">
       {phase === "describe" ? (
         <section>
           <div className="ax-block">
@@ -409,6 +415,29 @@ export function Flow() {
           )}
         </section>
       ) : null}
-    </div>
+
+        <footer className="ax-footpanel">
+          <div>
+            <span className="ax-footmark">
+              <img src="/mark.png" width={24} height={24} alt="" aria-hidden="true" />
+              agen.space
+            </span>
+            <p>Tokens whose markets have their own rules</p>
+          </div>
+
+          <div className="ax-footlinks">
+            <a href="https://x.com/agendotspace" target="_blank" rel="noreferrer">
+              Twitter / X
+            </a>
+            <a href="https://verdant.family" target="_blank" rel="noreferrer">
+              Canopy Website
+            </a>
+            <a href="https://t.me" target="_blank" rel="noreferrer">
+              Telegram
+            </a>
+          </div>
+        </footer>
+      </main>
+    </>
   );
 }

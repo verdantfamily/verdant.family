@@ -188,7 +188,19 @@ body:has(.ax-page) {
   background: linear-gradient(155deg, #35492c 0%, #22301f 46%, #2c3a2c 100%);
 }
 
-.ax-bloom > span {
+/*
+ * The four drifting masses, named individually rather than as `.ax-bloom > span`.
+ *
+ * They used to be selected by child-of-span, which also caught the photograph in the
+ * band's other form — and at a higher specificity than the photograph's own rules, so a
+ * picture that asked for `filter: none` got a 58px blur and a 50% border radius anyway.
+ * A selector that describes a position in the markup rather than a thing will eventually
+ * match a different thing.
+ */
+.ax-bloom-a,
+.ax-bloom-b,
+.ax-bloom-c,
+.ax-bloom-d {
   position: absolute;
   border-radius: 50%;
   filter: blur(58px);
@@ -199,18 +211,25 @@ body:has(.ax-page) {
 /* --- the photographed form ------------------------------------------------ */
 
 .ax-bloom-shot {
-  padding: 78px 0 68px;
-  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 96px 0 76px;
+  min-height: 420px;
   background: #1b1a20;
 }
 
-/* Square rather than round, and unblurred: this one is a picture. */
+/*
+ * The photograph, shown as it was given.
+ *
+ * No scrim over it and no drift across it: both were here, and both meant the picture on
+ * screen was not quite the picture that was handed over. Legibility of the title is paid
+ * for by a shadow on the type instead, which costs the image nothing.
+ */
 .ax-bloom-photo {
   position: absolute;
   inset: 0;
   z-index: -2;
-  border-radius: 0;
-  filter: none;
   background-image: var(--shot-jpg);
   background-image: image-set(
     var(--shot-avif) type("image/avif"),
@@ -218,23 +237,16 @@ body:has(.ax-page) {
     var(--shot-jpg) type("image/jpeg")
   );
   background-size: cover;
-  background-position: center 58%;
-  animation: ax-breathe 52s ease-in-out infinite alternate;
-}
-
-/* Type over a photograph needs its own ground, or it is legible only where the picture
-   happens to be dark. */
-.ax-bloom-shot::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: radial-gradient(ellipse 74% 66% at 50% 50%, rgb(0 0 0 / 32%) 0%, transparent 76%);
-  pointer-events: none;
+  background-position: center center;
 }
 
 .ax-bloom-mid .ax-bloom-in {
   text-align: center;
+}
+
+.ax-bloom-mid .ax-bloom-in h1 {
+  max-width: 16ch;
+  margin-inline: auto;
 }
 
 .ax-bloom-mid .ax-bloom-in p {
@@ -317,7 +329,12 @@ body:has(.ax-page) {
   letter-spacing: -0.036em;
   text-transform: none;
   color: #fff;
-  text-shadow: 0 2px 24px rgb(0 0 0 / 22%);
+  /* Two shadows: a tight one for edge contrast against foliage, a wide soft one for the
+     bright parts of a sky. This is what replaces the scrim that used to sit on the
+     photograph — the type carries the cost of being legible, not the picture. */
+  text-shadow:
+    0 1px 3px rgb(0 0 0 / 34%),
+    0 4px 30px rgb(0 0 0 / 40%);
 }
 
 .ax-bloom-in p {
@@ -423,110 +440,6 @@ body:has(.ax-page) {
 
 .ax-page .nav-account .wallet-warn {
   color: var(--ax-down);
-}
-
-/* ---------------------------------------------------------------- plain bar */
-
-/*
- * The navigation for pages with no photograph behind it.
- *
- * The floating pill exists because it has to sit on top of an image and stay legible.
- * On a white page there is nothing to sit on top of, and the pill's shadow and fill
- * become an object for no reason — so the same links are laid out directly on the page
- * with the hairline underneath doing the separating.
- */
-.ax-navbar {
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  height: 74px;
-  width: 100%;
-  max-width: var(--ax-measure);
-  margin-inline: auto;
-  padding-inline: var(--ax-gutter);
-  background: rgb(255 255 255 / 88%);
-  backdrop-filter: saturate(180%) blur(14px);
-}
-
-.ax-navbar .ax-brand {
-  width: auto;
-  height: auto;
-  background: transparent;
-}
-
-.ax-navbar .ax-brand img {
-  width: 30px;
-  height: 30px;
-}
-
-.ax-navbar .ax-nav a {
-  font-size: 0.92rem;
-}
-
-.ax-navbar .ax-top-right {
-  margin-left: auto;
-  padding-right: 0;
-}
-
-/* ---------------------------------------------------------------- banner */
-
-/*
- * A photograph the width of the content rather than the width of the window.
- *
- * The welcome's plate is the whole screen because the front page has nothing else to
- * say first. Here the picture is a title block for a form, so it is the measure of the
- * form and no taller than the words it carries.
- */
-.ax-banner {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 232px;
-  padding: 40px 26px;
-  border-radius: var(--ax-plate);
-  overflow: hidden;
-  isolation: isolate;
-  text-align: center;
-}
-
-.ax-banner-bg {
-  position: absolute;
-  inset: 0;
-  z-index: -2;
-  background-image: url("/launchbg.jpg");
-  background-image: image-set(
-    url("/launchbg.avif") type("image/avif"),
-    url("/launchbg.webp") type("image/webp"),
-    url("/launchbg.jpg") type("image/jpeg")
-  );
-  background-size: cover;
-  background-position: center 58%;
-  animation: ax-breathe 48s ease-in-out infinite alternate;
-}
-
-.ax-banner::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: radial-gradient(ellipse 76% 62% at 50% 46%, rgb(0 0 0 / 34%) 0%, transparent 74%);
-  pointer-events: none;
-}
-
-.ax-banner h1 {
-  margin: 0;
-  max-width: 16ch;
-  font-size: clamp(1.7rem, 1.2rem + 1.9vw, 2.45rem);
-  font-weight: 500;
-  line-height: 1.08;
-  letter-spacing: -0.036em;
-  text-transform: none;
-  color: #fff;
-  text-shadow: 0 2px 26px rgb(0 0 0 / 30%);
 }
 
 /* ---------------------------------------------------------------- welcome */
@@ -1224,9 +1137,13 @@ body:has(.ax-page) {
 
 /* ---------------------------------------------------------------- create */
 
+/* The form sits inside a narrower measure than the banner above it. */
 .ax-create {
   max-width: 780px;
-  margin-inline: auto;
+}
+
+.ax-create > section:first-of-type {
+  padding-top: 34px;
 }
 
 /* Three states, and the one you are in. Not a wizard's chevrons: the steps are not
@@ -1415,13 +1332,13 @@ body:has(.ax-page) {
   margin-top: 28px;
 }
 
-/* The steps, when they sit on the banner rather than on the page. */
-.ax-banner .ax-steps {
+/* The steps, when they sit on a photograph rather than on the page. */
+.ax-bloom .ax-steps {
   justify-content: center;
   margin: 24px 0 0;
 }
 
-.ax-banner .ax-steps li {
+.ax-bloom .ax-steps li {
   height: 33px;
   padding: 0 17px;
   color: rgb(255 255 255 / 74%);
@@ -1430,11 +1347,11 @@ body:has(.ax-page) {
   backdrop-filter: blur(8px);
 }
 
-.ax-banner .ax-steps li b {
+.ax-bloom .ax-steps li b {
   opacity: 0.75;
 }
 
-.ax-banner .ax-steps li.on {
+.ax-bloom .ax-steps li.on {
   color: var(--ax-ink);
   background: #fff;
   border-color: #fff;

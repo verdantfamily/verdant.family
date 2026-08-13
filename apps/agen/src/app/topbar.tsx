@@ -11,20 +11,11 @@ import { Wallet } from "./wallet";
  */
 export function TopBar({
   active,
-  plain = false,
 }: {
   readonly active?: "explore" | "create" | "profile" | "docs" | undefined;
-  /**
-   * Laid on the page rather than floated on a photograph.
-   *
-   * The pill's fill and shadow exist to keep it legible over an image. On a white page
-   * there is nothing to be legible against, and the same treatment reads as an object
-   * placed there for no reason.
-   */
-  readonly plain?: boolean;
 }) {
   return (
-    <header className={plain ? "ax-navbar" : "ax-navpill"}>
+    <header className="ax-navpill">
       <Link className="ax-brand" href="/" aria-label="agen">
         <img src="/mark.png" width={22} height={22} alt="" aria-hidden="true" />
       </Link>

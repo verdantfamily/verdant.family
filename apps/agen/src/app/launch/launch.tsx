@@ -39,6 +39,7 @@ import { formatEther, isAddress } from "viem";
 import { useAccount, useSendTransaction, useSwitchChain, useWaitForTransactionReceipt } from "wagmi";
 
 import { AGEN_LAUNCH } from "@verdant/config";
+import { agen } from "@verdant/sdk";
 
 import { AGEN_ADDRESSES, CHAIN_ID, EXPLORER_URL, chain, shortAddress } from "../lib/chain";
 import type { PublicJob } from "../lib/builds";
@@ -51,6 +52,17 @@ interface Prepared {
     readonly initialTick: number;
     readonly valuationWei: string;
     readonly contracts: number;
+  };
+  readonly initialBuy?: {
+    readonly router: `0x${string}`;
+    readonly amountWei: string;
+    readonly poolKey: {
+      readonly currency0: `0x${string}`;
+      readonly currency1: `0x${string}`;
+      readonly fee: number;
+      readonly tickSpacing: number;
+      readonly hooks: `0x${string}`;
+    };
   };
 }
 
@@ -175,7 +187,6 @@ export function Launch({ job }: { readonly job: PublicJob }) {
     return <Launched job={job} prepared={prepared} hash={send.data!} />;
   }
 
-
   const waiting = preparing || send.isPending || receipt.isLoading;
 
   return (
@@ -199,38 +210,34 @@ export function Launch({ job }: { readonly job: PublicJob }) {
           </p>
         </div>
 
-        {launch?.supportsAtomicDevBuy === true ? (
-          <div className="field">
-            <label htmlFor="buy">your first buy</label>
-            <div className="field-amount">
-              <input
-                id="buy"
-                value={devBuy}
-                inputMode="decimal"
-                placeholder="0"
-                onChange={(event) => {
-                  setDevBuy(event.currentTarget.value);
-                }}
-              />
-              <span>{chain.nativeCurrency.symbol}</span>
-            </div>
-            <p className="field-note">
-              Bought in the same transaction that creates the market, so nobody can take
-              the opening price first. Optional.
-            </p>
+        {/*
+          Offered on every market now, which it was not before.
+          It used to be taken away from about half of them: the launch bought on the
+          creator's behalf from inside the factory, so a hook that authenticates its route
+          or reads the trader saw a contract rather than a person and reverted the whole
+          launch. Routing it through AgenRouter makes it an ordinary buy by the creator,
+          which every market accepts, at the cost of a second signature.
+        */}
+        <div className="field">
+          <label htmlFor="buy">your first buy</label>
+          <div className="field-amount">
+            <input
+              id="buy"
+              value={devBuy}
+              inputMode="decimal"
+              placeholder="0"
+              onChange={(event) => {
+                setDevBuy(event.currentTarget.value);
+              }}
+            />
+            <span>{chain.nativeCurrency.symbol}</span>
           </div>
-        ) : (
-          <div className="field field-pending">
-            <label htmlFor="buy-off">your first buy</label>
-            <input id="buy-off" disabled placeholder="unavailable for this market" />
-            <p className="field-note">
-              {launch?.devBuyUnavailableReason ??
-                "Initial buy unavailable for this market mechanic."}{" "}
-              You can buy from {job.symbol} as soon as it is live, the same way anybody
-              else does.
-            </p>
-          </div>
-        )}
+          <p className="field-note">
+            Bought for you immediately after the market is created, as a second
+            transaction, so the market credits it to you the same way it will credit
+            anybody else. Optional.
+          </p>
+        </div>
 
         <div className="field">
           <label htmlFor="fees">fee receiver</label>
@@ -332,6 +339,97 @@ export function Launch({ job }: { readonly job: PublicJob }) {
   );
 }
 
+/**
+ * The creator's opening buy, once the market exists.
+ *
+ * Its own transaction, and its own component, because the two things it is between are
+ * not equally important. The market is created and permanent by the time this renders;
+ * the buy is optional and may fail. So nothing here is allowed to imply the launch is
+ * unfinished — a failure states plainly that the token is live and only the buy did not
+ * happen, with the way to do it again being the ordinary trade panel.
+ *
+ * It routes through `AgenRouter` like any other buy, which is the entire reason this is
+ * a second transaction rather than part of the launch. The hook sees the creator as the
+ * trader, so a streak, a counter or a reward credits them exactly as it would credit
+ * anybody buying a minute later.
+ */
+function InitialBuy({
+  buy,
+  symbol,
+  marketHref,
+}: {
+  readonly buy: NonNullable<Prepared["initialBuy"]>;
+  readonly symbol: string;
+  readonly marketHref: string;
+}) {
+  const send = useSendTransaction();
+  const receipt = useWaitForTransactionReceipt({ hash: send.data });
+
+  const amount = BigInt(buy.amountWei);
+
+  const go = useCallback(() => {
+    const call = agen.buildAgenBuy({
+      router: buy.router,
+      poolKey: {
+        currency0: buy.poolKey.currency0,
+        currency1: buy.poolKey.currency1,
+        fee: buy.poolKey.fee,
+        tickSpacing: buy.poolKey.tickSpacing,
+        hooks: buy.poolKey.hooks,
+      },
+      amountIn: amount,
+      // No floor. The creator is buying from liquidity that was created moments ago at a
+      // price nobody has moved, and a bound set here would be a number the interface
+      // invented rather than one they chose.
+      minAmountOut: 0n,
+    });
+
+    send.sendTransaction({ to: call.to, data: call.data, value: call.value, chainId: CHAIN_ID });
+  }, [buy, amount, send]);
+
+  // Fire once, without asking. The creator already said they wanted this on the form
+  // before they signed the launch; making them press a second button would be asking the
+  // same question twice.
+  useEffect(() => {
+    if (send.data === undefined && !send.isPending && send.error === null) go();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on arrival
+  }, []);
+
+  if (receipt.isSuccess) {
+    return (
+      <p className="launch-step launch-step-done">
+        2/2 · Your opening buy of {ether(buy.amountWei)} {chain.nativeCurrency.symbol} went
+        through.
+      </p>
+    );
+  }
+
+  const failed = receipt.isError || (send.error !== null && !isRejection(send.error));
+
+  if (failed || (send.error !== null && isRejection(send.error))) {
+    return (
+      <div className="launch-step launch-step-failed">
+        <p>
+          Your token is live. The opening buy did not go through
+          {isRejection(send.error ?? new Error("")) ? " — you declined it" : ""}, and nothing
+          about the market was affected by that.
+        </p>
+        <p>
+          You can buy the same way anybody else does, on{" "}
+          <a href={marketHref}>the ${symbol} page</a>.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <p className="launch-step">
+      2/2 · Buying {ether(buy.amountWei)} {chain.nativeCurrency.symbol} of ${symbol}
+      {send.isPending ? " — confirm in your wallet…" : "…"}
+    </p>
+  );
+}
+
 function Launched({
   job,
   prepared,
@@ -346,6 +444,14 @@ function Launched({
       <h2>
         {job.name} is live <span className="ticker">${job.symbol}</span>
       </h2>
+
+      {prepared.initialBuy === undefined ? null : (
+        <InitialBuy
+          buy={prepared.initialBuy}
+          symbol={job.symbol}
+          marketHref={`/markets/${job.id}`}
+        />
+      )}
 
       <dl className="launch-summary">
         <div>

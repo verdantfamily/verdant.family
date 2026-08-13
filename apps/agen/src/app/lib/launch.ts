@@ -77,6 +77,19 @@ export interface PreparedLaunch {
     readonly valuationWei: string;
     readonly contracts: number;
   };
+  /** Present only when the creator asked for an opening buy. See `prepareLaunch`. */
+  readonly initialBuy?: {
+    readonly router: Address;
+    /** Wei of the quote asset. A decimal string, because this crosses JSON. */
+    readonly amountWei: string;
+    readonly poolKey: {
+      readonly currency0: Address;
+      readonly currency1: Address;
+      readonly fee: number;
+      readonly tickSpacing: number;
+      readonly hooks: Address;
+    };
+  };
 }
 
 export class LaunchError extends Error {
@@ -162,18 +175,24 @@ export async function prepareLaunch(request: LaunchRequest): Promise<PreparedLau
   const creator = address(request.creator, "The connected wallet");
   const feeReceiver = address(request.feeReceiver, "The fee receiver");
 
+  /**
+   * The launch buys nothing. The creator's opening buy is a second transaction.
+   *
+   * It used to happen inside `deployMarket`, as a swap the factory made on the creator's
+   * behalf, and that is why the field was refused on about half of all markets: the
+   * factory is the caller, so a hook that authenticates its route or reads the trader saw
+   * a contract rather than a person, and the whole launch reverted. `supportsAtomicDevBuy`
+   * existed to detect those markets and take the field away, which meant Agen advertising
+   * mechanics it then could not offer an opening buy for.
+   *
+   * Routing the buy through `AgenRouter` instead makes it an ordinary trade by the
+   * creator — the same path, the same identity, the same accounting as anybody buying a
+   * minute later. It costs a second signature and it is available on every market, which
+   * is the better trade: correct attribution matters more than atomicity, and a creator
+   * who is buying their own token is not being front-run by the block they are in.
+   */
   const devBuyAmount = request.devBuyWei ?? 0n;
   if (devBuyAmount < 0n) throw new LaunchError("A launch buy cannot be negative.", 400);
-
-  // Refused here as well as in the manifest builder, so the message a creator sees is
-  // the one written for them rather than the one written for a stack trace.
-  if (devBuyAmount > 0n && !job.manifest.supportsAtomicDevBuy) {
-    throw new LaunchError(
-      job.manifest.devBuyUnavailableReason ??
-        "This market cannot be bought from during its own launch.",
-      400,
-    );
-  }
 
   const supply = job.manifest.supplyTokens * TOKEN_SCALE;
 
@@ -236,13 +255,11 @@ export async function prepareLaunch(request: LaunchRequest): Promise<PreparedLau
       lpFee: job.manifest.lpFee,
       initialTick,
       feeReceiver,
-      devBuyAmount,
-      // No floor on what the launch buy delivers. The creator is buying from liquidity
-      // this same transaction created, at a price they chose, with nobody able to get
-      // in front of them — the three things a slippage bound protects against are all
-      // absent, and a bound set here would be a number the interface invented.
+      // Zero, always. See the note above `devBuyAmount`: the opening buy is a second
+      // transaction through the router, so the launch itself buys nothing and the
+      // factory's swap path is no longer reached from here.
+      devBuyAmount: 0n,
       devBuyMinTokens: 0n,
-      atomicDevBuySupported: job.manifest.supportsAtomicDevBuy,
       ...(request.metadataURI === undefined ? {} : { metadataURI: request.metadataURI }),
       marketSalt: marketSaltFor(job.id),
       deployerAddress: AGEN_ADDRESSES.addresses.deployer,
@@ -269,14 +286,43 @@ export async function prepareLaunch(request: LaunchRequest): Promise<PreparedLau
     manifest: factoryManifest,
   });
 
+  const token = manifest.components[manifest.tokenIndex]!.expected;
+  const hook = manifest.components[manifest.hookIndex]!.expected;
+
   return {
     transaction: { to: call.to, data: call.data, value: call.value.toString() },
     market: {
-      token: manifest.components[manifest.tokenIndex]!.expected,
-      hook: manifest.components[manifest.hookIndex]!.expected,
+      token,
+      hook,
       initialTick,
       valuationWei: agen.valuationAtTick({ supply, tick: initialTick }).toString(),
       contracts: manifest.components.length,
     },
+    /**
+     * What the creator's opening buy needs, if they asked for one.
+     *
+     * Sent back with the launch rather than fetched afterwards because every field is
+     * known now and none of it is known to the browser: the pool key is built from
+     * addresses this function predicted, and reconstructing it client-side would be a
+     * second implementation of the ordering rule that decides which currency is which.
+     *
+     * Absent when no buy was asked for, so the interface has one thing to check rather
+     * than a zero to interpret.
+     */
+    ...(devBuyAmount === 0n || AGEN_ROUTER === null
+      ? {}
+      : {
+          initialBuy: {
+            router: AGEN_ROUTER,
+            amountWei: devBuyAmount.toString(),
+            poolKey: {
+              currency0: NATIVE_QUOTE,
+              currency1: token,
+              fee: job.manifest.lpFee,
+              tickSpacing: agen.AGEN_TICK_SPACING,
+              hooks: hook,
+            },
+          },
+        }),
   };
 }

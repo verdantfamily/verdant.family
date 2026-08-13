@@ -216,6 +216,8 @@ function pump(): void {
  * precisely the "one failed build affects another" property this file exists to remove.
  */
 async function execute({ job, provider }: Pending): Promise<void> {
+  const deployment = probeDeployment();
+
   try {
     await runBuild(
       { prompt: job.prompt, name: job.name, symbol: job.symbol },
@@ -228,7 +230,7 @@ async function execute({ job, provider }: Pending): Promise<void> {
         // Probe against the chain this will actually launch on, so a market that needs
         // the router discovers at build time whether there is one — rather than after a
         // creator has read a review screen and pressed launch.
-        deployment: probeDeployment(),
+        ...(deployment === undefined ? {} : { deployment }),
       },
     );
   } catch (error) {

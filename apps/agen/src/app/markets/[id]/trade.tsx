@@ -46,7 +46,7 @@ import {
 
 import { abi, agen, trade as sdkTrade } from "@verdant/sdk";
 
-import { CHAIN_ID, EXTERNAL, chain } from "../../lib/chain";
+import { AGEN_ROUTER, CHAIN_ID, EXTERNAL, chain } from "../../lib/chain";
 import { DASH, eth, feeRate, tokens } from "../../lib/format";
 
 type Side = "buy" | "sell";
@@ -103,6 +103,15 @@ export function TradePanel({ market }: { readonly market: TradeMarket }) {
   const { address, chainId, status } = useAccount();
   const switchChain = useSwitchChain();
   const client = usePublicClient();
+
+  /**
+   * The route every trade takes. `null` on a chain with no router deployed.
+   *
+   * A constant rather than a prop: which router this build trades through is a property
+   * of the deployment, not of the market on screen, and a market cannot be traded through
+   * a different one than the one its hook was built against.
+   */
+  const router = AGEN_ROUTER;
   const send = useSendTransaction();
   const receipt = useWaitForTransactionReceipt({ hash: send.data });
 
@@ -141,24 +150,22 @@ export function TradePanel({ market }: { readonly market: TradeMarket }) {
     query: { enabled: tokenAddress !== null && address !== undefined },
   });
 
-  /** The two approvals a sell needs, asked for before the button is offered. */
-  const allowance = useReadContract({
-    abi: abi.permit2Abi,
-    address: sdkTrade.PERMIT2,
-    functionName: "allowance",
-    args:
-      address === undefined || tokenAddress === null
-        ? undefined
-        : [address, tokenAddress, EXTERNAL.universalRouter],
-    query: { enabled: !buying && tokenAddress !== null && address !== undefined },
-  });
-
+  /**
+   * The one approval a sell needs.
+   *
+   * One rather than the two Permit2 wanted, because the router pulls the token straight
+   * from the seller to the pool manager and never holds it. There is nothing for a
+   * standing allowance to be spent on by anybody else, and no second contract in the
+   * path to be separately authorised.
+   */
   const erc20Allowance = useReadContract({
     abi: abi.verdantTokenAbi,
     address: tokenAddress ?? undefined,
     functionName: "allowance",
-    args: address === undefined ? undefined : [address, sdkTrade.PERMIT2],
-    query: { enabled: !buying && tokenAddress !== null && address !== undefined },
+    args: address === undefined || router === null ? undefined : [address, router],
+    query: {
+      enabled: !buying && tokenAddress !== null && address !== undefined && router !== null,
+    },
   });
 
   const amountIn = useMemo(() => {
@@ -173,12 +180,28 @@ export function TradePanel({ market }: { readonly market: TradeMarket }) {
 
   // --- the quote ------------------------------------------------------------
 
-  const [quote, setQuote] = useState<agen.AgenQuote | null>(null);
+  const [quote, setQuote] = useState<agen.AgenTradeQuote | null>(null);
   const [quoting, setQuoting] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
 
+  /**
+   * The quote, asked of the route the trade will take.
+   *
+   * Through `AgenRouter` rather than Uniswap's quoter, and for a reason that is not
+   * tidiness: a market that authenticates its route refuses to be quoted by anything
+   * else, so the quoter would report every trader-aware market as untradable. Asking the
+   * router runs the real path — the hook sees the same sender and the same identity it
+   * will see for real — so a fee that depends on who is asking is in the number.
+   */
   useEffect(() => {
-    if (poolKey === null || client === undefined || amountIn === 0n || !live) {
+    if (
+      poolKey === null ||
+      client === undefined ||
+      router === null ||
+      address === undefined ||
+      amountIn === 0n ||
+      !live
+    ) {
       setQuote(null);
       setQuoteError(null);
       return;
@@ -192,51 +215,53 @@ export function TradePanel({ market }: { readonly market: TradeMarket }) {
     // wasted work and, worse, can land after the quote for the number they meant.
     const timer = setTimeout(() => {
       void agen
-        .quoteAgenTrade(client, {
-          quoter: EXTERNAL.quoter,
+        .quoteAgenSwap(client, {
+          router,
           poolKey,
           zeroForOne: buying,
           amountIn,
+          trader: address,
           slippageBps: SLIPPAGE_BPS,
         })
-        .then((next) => {
+        .then(async (next) => {
           if (!live_) return;
+
           setQuote(next);
-          setQuoteError(null);
-        })
-        .catch(async () => {
-          if (!live_) return;
-          setQuote(null);
+          if (next !== null) {
+            setQuoteError(null);
+            return;
+          }
 
           /**
-           * Why the quote failed, established rather than guessed.
+           * A refusal, explained rather than guessed at.
            *
-           * Two very different things revert here. A trade larger than the bands can
-           * serve is a size problem and a smaller one works. A market whose hook only
-           * accepts swaps arriving through its own router — Ember is the built example,
-           * and it reverts on the caller before it looks at the amount — is not a size
-           * problem, and telling that trader to try less would send them hunting for a
-           * number that does not exist.
+           * Three different things end up here and they want different answers. A trade
+           * larger than the bands can serve is a size problem and a smaller one works. A
+           * sell with no allowance yet cannot be simulated, because the router pulls the
+           * token exactly as it would for real. And a hook may simply decline this
+           * trader — a cooldown, a phase — which no smaller amount fixes.
            *
-           * One more `eth_call`, for a dust amount, separates them: if even that is
-           * refused, nothing about the amount is the problem.
+           * One more call, for dust, separates the first from the rest.
            */
-          const dust = await agen
-            .quoteAgenTrade(client, {
-              quoter: EXTERNAL.quoter,
-              poolKey,
-              zeroForOne: buying,
-              amountIn: 1_000n,
-            })
-            .then(() => true)
-            .catch(() => false);
+          if (!buying && (erc20Allowance.data ?? 0n) < amountIn) {
+            setQuoteError("Approve the router to see what this sells for.");
+            return;
+          }
+
+          const dust = await agen.quoteAgenSwap(client, {
+            router,
+            poolKey,
+            zeroForOne: buying,
+            amountIn: 1_000n,
+            trader: address,
+          });
 
           if (!live_) return;
 
           setQuoteError(
-            dust
+            dust !== null
               ? "No route for that size. Try a smaller amount."
-              : "This market's rules refuse trades sent this way. It may only accept its own router.",
+              : "This market's rules refuse this trade right now.",
           );
         })
         .finally(() => {
@@ -248,59 +273,47 @@ export function TradePanel({ market }: { readonly market: TradeMarket }) {
       live_ = false;
       clearTimeout(timer);
     };
-  }, [poolKey, client, amountIn, buying, live]);
+  }, [poolKey, client, amountIn, buying, live, router, address, erc20Allowance.data]);
 
   // --- acting ---------------------------------------------------------------
 
   const needsErc20Approval =
-    !buying && (erc20Allowance.data ?? 0n) < amountIn && amountIn > 0n;
-
-  const needsPermit2Approval =
-    !buying &&
-    !needsErc20Approval &&
-    amountIn > 0n &&
-    (() => {
-      const current = allowance.data as readonly [bigint, number, number] | undefined;
-      if (current === undefined) return true;
-      const [permitted, expiration] = current;
-      return permitted < amountIn || expiration * 1_000 <= Date.now();
-    })();
+    !buying && router !== null && (erc20Allowance.data ?? 0n) < amountIn && amountIn > 0n;
 
   /**
-   * The three transactions a trade can need, all sent the same way.
+   * The two transactions a trade can need, both sent the same way.
    *
-   * Every one is built by the SDK and sent as raw calldata rather than through a
-   * contract write, so the encoding of an approval and the encoding of a swap come from
-   * the same place — the package that is tested against the vendored Uniswap source —
-   * and this component holds no ABI knowledge of its own.
+   * Both are built by the SDK and sent as raw calldata rather than through a contract
+   * write, so the encoding of an approval and the encoding of a swap come from the same
+   * place and this component holds no ABI knowledge of its own.
+   *
+   * Note that nothing here passes a trader. The router reads the signer, which is what
+   * makes the identity a hook receives worth anything — an interface that could name the
+   * trader would be an interface that could name somebody else.
    */
   const submit = useCallback(() => {
-    if (address === undefined || tokenAddress === null) return;
+    if (address === undefined || tokenAddress === null || router === null) return;
 
     const call = needsErc20Approval
       ? sdkTrade.buildErc20Approval({
           token: tokenAddress,
-          spender: sdkTrade.PERMIT2,
+          spender: router,
           amount: sdkTrade.UNLIMITED_PERMIT2_AMOUNT,
         })
-      : needsPermit2Approval
-        ? sdkTrade.buildPermit2Approval({
-            token: tokenAddress,
-            spender: EXTERNAL.universalRouter,
-            amount: sdkTrade.UNLIMITED_PERMIT2_AMOUNT,
-            // Permit2's widest expiry, so a seller is asked once rather than per trade.
-            // The allowance remains theirs to revoke and the router is its only spender.
-            expiration: 2 ** 48 - 1,
-          })
-        : poolKey === null || quote === null
-          ? null
-          : sdkTrade.buildSwap({
-              router: EXTERNAL.universalRouter,
+      : poolKey === null || quote === null
+        ? null
+        : buying
+          ? agen.buildAgenBuy({
+              router,
               poolKey,
-              zeroForOne: buying,
               amountIn,
               minAmountOut: quote.minAmountOut,
-              recipient: address,
+            })
+          : agen.buildAgenSell({
+              router,
+              poolKey,
+              amountIn,
+              minAmountOut: quote.minAmountOut,
             });
 
     if (call === null) return;
@@ -316,7 +329,7 @@ export function TradePanel({ market }: { readonly market: TradeMarket }) {
     poolKey,
     quote,
     needsErc20Approval,
-    needsPermit2Approval,
+    router,
     tokenAddress,
     buying,
     amountIn,
@@ -335,18 +348,18 @@ export function TradePanel({ market }: { readonly market: TradeMarket }) {
     ? { label: "Not trading yet", disabled: true }
     : poolKey === null
       ? { label: "Pool not resolved", disabled: true }
-      : !connected
-        ? { label: "Connect wallet", disabled: true }
-        : wrongNetwork
-          ? { label: `Switch to ${chain.name}`, disabled: false }
-          : amountIn === 0n
-            ? { label: "Enter an amount", disabled: true }
-            : busy
-              ? { label: "Confirm in your wallet…", disabled: true }
-              : needsErc20Approval
-                ? { label: `Approve $${symbol}`, disabled: false }
-                : needsPermit2Approval
-                  ? { label: "Approve router", disabled: false }
+      : router === null
+        ? { label: "Trading not available on this chain", disabled: true }
+        : !connected
+          ? { label: "Connect wallet", disabled: true }
+          : wrongNetwork
+            ? { label: `Switch to ${chain.name}`, disabled: false }
+            : amountIn === 0n
+              ? { label: "Enter an amount", disabled: true }
+              : busy
+                ? { label: "Confirm in your wallet…", disabled: true }
+                : needsErc20Approval
+                  ? { label: `Approve $${symbol}`, disabled: false }
                   : quoting
                     ? { label: "Quoting…", disabled: true }
                     : quote === null

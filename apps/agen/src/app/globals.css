@@ -6436,3 +6436,46 @@ pre {
   font-size: 0.85rem;
   color: var(--text);
 }
+
+/* --- the launch's second transaction -------------------------------------- */
+
+/*
+ * The creator's opening buy, after the market exists.
+ *
+ * Styled as a status line rather than as a panel, deliberately: the market is already
+ * created and permanent by the time any of these render, and giving the buy its own card
+ * would make an optional extra look like an unfinished step.
+ */
+.launch-step {
+  margin-top: 1rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--inset);
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+.launch-step-done {
+  color: var(--text);
+}
+
+/* A failed buy is not a failed launch, so this is bordered rather than red — the copy
+   says what happened and the colour must not contradict it. */
+.launch-step-failed {
+  margin-top: 1rem;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--text);
+  border-radius: 12px;
+  background: #ffffff;
+  font-size: 0.88rem;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.launch-step-failed p + p {
+  margin-top: 0.5rem;
+  color: var(--text-dim);
+}

@@ -33,6 +33,8 @@
  * market ever sees.
  */
 
+import { MAX_TICK_ABSOLUTE } from "@verdant/config";
+
 import type { GeneratedSource } from "./workspace.js";
 
 /**
@@ -679,15 +681,22 @@ abstract contract AgenTest is Test {
     /// three repair rounds spent themselves on a market that was never the problem. There
     /// is no case where a test wants this call to fail for want of an allowance it could
     /// have granted itself, so the harness grants it.
+    /// @dev The range is the widest the pool's own spacing allows, computed from it
+    /// rather than written down. A fixed pair of bounds is only valid for one spacing:
+    /// this used a spacing-60 bound, which is not a multiple of the 200 an Agen pool
+    /// uses, so a market whose test called this got a revert about tick alignment and a
+    /// repair loop spent itself on a suite that had done nothing wrong.
     function addLiquidity(PoolKey memory key, int256 amount) internal {
         _allowRouters(key.currency0);
         _allowRouters(key.currency1);
 
+        int24 bound = (${String(MAX_TICK_ABSOLUTE)} / key.tickSpacing) * key.tickSpacing;
+
         liquidityRouter.modifyLiquidity{value: key.currency0.isAddressZero() ? 100 ether : 0}(
             key,
             ModifyLiquidityParams({
-                tickLower: -887_220,
-                tickUpper: 887_220,
+                tickLower: -bound,
+                tickUpper: bound,
                 liquidityDelta: amount,
                 salt: bytes32(0)
             }),

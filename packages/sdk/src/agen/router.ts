@@ -31,6 +31,10 @@ import {
 
 import { agenRouterAbi } from "../abi/index.js";
 import type { PoolKey } from "../markets/pool.js";
+// The mid-price arithmetic, shared rather than rewritten: price impact means the same
+// thing however the quote was obtained, and two implementations of it would eventually
+// disagree by a basis point in front of a trader.
+import { INTERNAL } from "./trade.js";
 
 /** Native ether, which is always an Agen pool's `currency0`. */
 const NATIVE = "0x0000000000000000000000000000000000000000";
@@ -51,6 +55,15 @@ export interface AgenTradeQuote {
   readonly amountSpent: bigint;
   /** The floor to send with the trade, given the caller's tolerance. */
   readonly minAmountOut: bigint;
+  /**
+   * How much worse than the pool's mid price this executes, in basis points, fee
+   * included — and on a market whose fee depends on the trader, *their* fee.
+   *
+   * Zero when no `sqrtPriceX96` was supplied to compare against, and never negative: a
+   * quote better than mid means the two were read at different moments, and reporting
+   * that as a negative impact would read as a bonus.
+   */
+  readonly priceImpactBps: number;
 }
 
 interface TradeShape {
@@ -135,11 +148,14 @@ export async function quoteAgenSwap(
     trader,
     extra = "0x",
     slippageBps = 100,
+    sqrtPriceX96 = 0n,
   }: TradeShape & {
     readonly zeroForOne: boolean;
     /** Whose trade this would be. The hook is told, so the answer can depend on it. */
     readonly trader: Address;
     readonly slippageBps?: number;
+    /** The pool's current price, to measure impact against. Omit to skip it. */
+    readonly sqrtPriceX96?: bigint;
   },
 ): Promise<AgenTradeQuote | null> {
   try {
@@ -161,10 +177,17 @@ export async function quoteAgenSwap(
 
     const tolerance = BigInt(Math.max(0, Math.min(10_000, Math.round(slippageBps))));
 
+    const reference = INTERNAL.midOutput(sqrtPriceX96, zeroForOne, amountIn);
+    const impact =
+      reference === 0n || result.amountOut >= reference
+        ? 0
+        : Number(((reference - result.amountOut) * BPS) / reference);
+
     return {
       amountOut: result.amountOut,
       amountSpent: result.amountSpent,
       minAmountOut: (result.amountOut * (BPS - tolerance)) / BPS,
+      priceImpactBps: impact,
     };
   }
 

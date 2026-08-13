@@ -9,6 +9,7 @@
 
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -26,6 +27,40 @@ import { createWorkspace } from "./workspace.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const VENDOR = resolve(here, "../../contracts/vendor");
+const AGEN_SRC = resolve(here, "../../contracts/src/agen");
+
+/**
+ * The two prelude files that also exist as deployed contracts.
+ *
+ * `AgenRouter` writes the encoding and a generated hook reads it, so these two copies
+ * have to agree on the layout byte for byte. A drift would not fail a build: it would
+ * produce markets whose hooks decline every trade the router sends, which is a per-wallet
+ * mechanic that silently refuses everybody and is discovered after launch.
+ *
+ * Compared on the code rather than the whole file, because the deployed contracts carry
+ * a longer commentary — the argument for why the design is safe belongs with the source
+ * of truth, and repeating it in a string constant the model reads would be noise.
+ */
+describe("the prelude's copies of the deployed contracts", () => {
+  const bodyOf = (text: string): string =>
+    text
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("///") && !line.trimStart().startsWith("//"))
+      .map((line) => line.trimEnd())
+      .filter((line) => line !== "")
+      .join("\n");
+
+  it.each([
+    ["AgenHookData", "contracts/AgenHookData.sol"],
+    ["AgenRouted", "contracts/AgenRouted.sol"],
+  ])("ships the same %s a market will be launched against", async (name, path) => {
+    const deployed = await readFile(resolve(AGEN_SRC, `${name}.sol`), "utf8");
+    const shipped = preludeSources().find((source) => source.path === path);
+
+    expect(shipped, `${name} is not in the prelude`).toBeDefined();
+    expect(bodyOf(shipped!.content)).toBe(bodyOf(deployed));
+  });
+});
 
 let workspace: Workspace | null = null;
 

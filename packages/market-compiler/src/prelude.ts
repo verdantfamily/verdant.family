@@ -980,6 +980,133 @@ export function overridePoints(): readonly string[] {
  * factory, whose address is a fixed property of the deployment and known long before any
  * market is built.
  */
+/**
+ * The trade-identity pair, copied from `packages/contracts/src/agen`.
+ *
+ * Byte-identical to the deployed contracts, and `prelude.test.ts` fails if they diverge.
+ * That parity is not tidiness: `AgenRouter` writes the encoding and a generated hook
+ * reads it, so a prelude copy that drifted by one byte would produce markets whose hooks
+ * decline every trade the router sends — a per-wallet mechanic that silently refuses
+ * everybody, discovered after launch.
+ */
+const HOOK_DATA = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.26;
+
+/// @title AgenHookData
+/// @notice The one encoding an Agen trade carries into a hook, and how to read it.
+///
+/// @dev Provided by Agen. Do not write another one: \`AgenRouter\` produces exactly this
+/// layout and nothing else reads it.
+///
+/// \`\`\`
+///   byte  0        version
+///   bytes 1..20    trader
+///   bytes 21..     the market's own data, if it wants any
+/// \`\`\`
+///
+/// Packed rather than \`abi.encode\` so that reading it is slicing and cannot revert. It is
+/// called with whatever arrived — the empty bytes of an ordinary swap, another protocol's
+/// encoding, or nonsense — and each of those is simply a trade carrying no Agen identity.
+library AgenHookData {
+    /// @notice The only version this library writes.
+    uint8 internal constant VERSION = 1;
+
+    /// @notice The shortest run of bytes that can carry an identity.
+    uint256 internal constant HEADER = 21;
+
+    /// @notice Encode a trade's identity for the hook that will read it.
+    function encode(address trader, bytes memory extra) internal pure returns (bytes memory) {
+        return abi.encodePacked(VERSION, trader, extra);
+    }
+
+    /// @notice Read a trade's identity, if this is one. Never reverts.
+    function decode(bytes calldata data)
+        internal
+        pure
+        returns (bool ok, address trader, bytes calldata extra)
+    {
+        if (data.length < HEADER || uint8(data[0]) != VERSION) {
+            return (false, address(0), data[0:0]);
+        }
+
+        address who = address(bytes20(data[1:HEADER]));
+        if (who == address(0)) return (false, address(0), data[0:0]);
+
+        return (true, who, data[HEADER:]);
+    }
+}
+`;
+
+const ROUTED = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.26;
+
+import {AgenHookData} from "./AgenHookData.sol";
+
+/// @title AgenRouted
+/// @notice Knowing who is trading, safely. Inherit this; do not reimplement it.
+///
+/// @dev Provided by Agen. A hook is told the *caller*, which for any routed trade is a
+/// router — so a market that accounts per wallet needs something else, and \`AgenRouter\`
+/// supplies it. But \`hookData\` is a field anybody can fill, so an identity is only worth
+/// reading once the sender has been checked. That check is the first line of each
+/// function below and it is the whole of the security.
+///
+/// Take the router as a constructor argument named \`agenRouter\`; the deployment supplies
+/// it. Never hardcode an address.
+///
+/// ## Which one to use
+///
+/// \`_traderOr\` — the trader if the trade named one, otherwise the caller. For a market
+/// that prefers an identity and stays correct without one: a fee charged the same either
+/// way, a counter of trades rather than of traders. Such a market keeps trading through
+/// any router.
+///
+/// \`_requireTrader\` — the trader, or the trade reverts. For a market where crediting the
+/// wrong address is the failure: streaks, jackpots, per-holder rewards, per-wallet
+/// cooldowns. Such a market trades only through \`AgenRouter\`, which is correct rather
+/// than restrictive — the alternative is a jackpot awarded to whichever router carried
+/// the winning trade.
+abstract contract AgenRouted {
+    /// @notice The only route that can name a trader to this market.
+    address public immutable agenRouter;
+
+    /// @notice A trade that had to be attributable and was not.
+    error TradeNotRouted(address sender);
+
+    constructor(address agenRouter_) {
+        agenRouter = agenRouter_;
+    }
+
+    function _traderOr(address sender, bytes calldata hookData) internal view returns (address) {
+        if (sender != agenRouter) return sender;
+
+        (bool ok, address trader,) = AgenHookData.decode(hookData);
+        return ok ? trader : sender;
+    }
+
+    function _requireTrader(address sender, bytes calldata hookData) internal view returns (address) {
+        if (sender != agenRouter) revert TradeNotRouted(sender);
+
+        (bool ok, address trader,) = AgenHookData.decode(hookData);
+        if (!ok) revert TradeNotRouted(sender);
+
+        return trader;
+    }
+
+    /// @notice The market's own hook data, when the trade carried any.
+    function _tradeExtra(address sender, bytes calldata hookData)
+        internal
+        view
+        returns (bytes calldata extra)
+    {
+        if (sender != agenRouter) return hookData[0:0];
+
+        (bool ok,, bytes calldata rest) = AgenHookData.decode(hookData);
+        return ok ? rest : hookData[0:0];
+    }
+}
+`;
+
 const WIRED = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
@@ -1034,6 +1161,8 @@ export function preludeSources(): readonly GeneratedSource[] {
     { path: "contracts/OracleAdapter.sol", content: ORACLE_ADAPTER },
     { path: "contracts/KeeperAdapter.sol", content: KEEPER_ADAPTER },
     { path: "contracts/AgenWired.sol", content: WIRED },
+    { path: "contracts/AgenHookData.sol", content: HOOK_DATA },
+    { path: "contracts/AgenRouted.sol", content: ROUTED },
   ];
 }
 
@@ -1222,6 +1351,8 @@ export const PRELUDE_CONTRACTS: readonly string[] = [
   "OracleAdapter",
   "KeeperAdapter",
   "AgenWired",
+  "AgenHookData",
+  "AgenRouted",
 ];
 
 /**

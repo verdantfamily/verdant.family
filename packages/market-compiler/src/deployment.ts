@@ -67,6 +67,16 @@ export interface DeploymentEnvironment {
    * it in an immutable is how a market keeps that promise.
    */
   readonly feeReceiver: Address;
+  /**
+   * The canonical trading route, where this chain has one.
+   *
+   * A hook that needs to know which wallet is trading takes this in its constructor and
+   * holds it in an immutable — see `AgenRouted`. It is `null` on a chain with no router
+   * deployed, and a market that asks for it there cannot be built: the alternative is a
+   * hook authenticating against the zero address, which rejects every trade forever and
+   * looks like a broken mechanic.
+   */
+  readonly agenRouter: Address | null;
   readonly name: string;
   readonly symbol: string;
   /** Whole tokens, before decimals. */
@@ -222,6 +232,30 @@ function resolveArgument({
   }
   if (name.includes("installer") || name.includes("factory")) {
     return { kind: "external", address: environment.installer };
+  }
+
+  /**
+   * The canonical trading route, for a hook that authenticates its trades.
+   *
+   * Ahead of every other address rule because the names collide with nothing else and
+   * getting it wrong is silent: a hook handed the creator's address where it expected
+   * the router compares every swap's sender against a wallet, matches never, and either
+   * refuses all trading or credits every trade to whoever called. Both look like the
+   * mechanic being wrong.
+   *
+   * Refused rather than defaulted when the chain has no router. `AgenRouted` holds this
+   * in an immutable, so a zero here is a market that can never authenticate anything,
+   * deployed and permanently broken. See `agenRouter` on the environment.
+   */
+  if (name.includes("agenrouter") || name === "router" || name.includes("tradingrouter")) {
+    if (environment.agenRouter === null) {
+      throw new ManifestError(
+        `${component.contractName} takes the Agen router as ${input.name ?? "an argument"}, and no ` +
+          `router is deployed on this chain. A market that authenticates its trades cannot be ` +
+          `launched here.`,
+      );
+    }
+    return { kind: "external", address: environment.agenRouter };
   }
 
   // The launch token's supply goes to the factory, and this is the one argument in a

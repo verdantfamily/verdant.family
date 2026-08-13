@@ -20,11 +20,15 @@ import {DeployAgen} from "../../script/DeployAgen.s.sol";
 contract InjectedAgenDeployHarness is DeployAgen {
     Inputs private injected;
 
-    constructor(address poolManager, address positionManager) {
+    /// @param router An AgenRouter to adopt, or zero to deploy one. Both paths are worth
+    /// a test: a first deployment brings up a router, and every later one must leave the
+    /// existing router alone, because markets hold its address immutably.
+    constructor(address poolManager, address positionManager, address router) {
         injected = Inputs({
             sender: address(this),
             poolManager: poolManager,
-            positionManager: positionManager
+            positionManager: positionManager,
+            router: router
         });
     }
 

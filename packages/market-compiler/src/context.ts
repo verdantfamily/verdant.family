@@ -422,6 +422,65 @@ type is enough for the call. BeforeSwapDelta does not — name the library, or a
 \`using BeforeSwapDeltaLibrary for BeforeSwapDelta;\` at file scope.
 `.trim();
 
+/**
+ * How a market learns which wallet is trading.
+ *
+ * The single most consequential thing a generated hook can get wrong, because getting it
+ * wrong does not fail: a streak that counts the router's trades compiles, deploys, passes
+ * its own tests and awards its jackpot to a contract. So the rule is stated as a rule
+ * rather than as an option, and the two helpers are described by the question they
+ * answer rather than by their signatures.
+ */
+export const TRADER_IDENTITY = `
+WHO IS TRADING. Uniswap tells a hook the *caller*, and for any trade through a router
+that is the router — the same address for every wallet in the world. A market that
+counts a wallet's buys, rewards a holder, tracks a streak or applies a per-wallet
+cooldown cannot be built on that, and will not fail while getting it wrong: it compiles,
+deploys, passes its tests, and credits everything to one contract.
+
+Agen's answer is AgenRouter, which writes the trader into the trade, plus AgenRouted,
+which reads it only after checking the trade came from that router. Both are already in
+contracts/. Inherit AgenRouted; never decode hookData yourself, and never trust an
+address out of it without the check — hookData is a field anyone can fill, so a hook
+that trusts it unconditionally is a faucet.
+
+    import {AgenRouted} from "./AgenRouted.sol";
+
+    contract MyHook is AgenBaseHook, AgenRouted {
+        constructor(IPoolManager poolManager_, address agenRouter_)
+            AgenBaseHook(poolManager_)
+            AgenRouted(agenRouter_)
+        {}
+    }
+
+Name the constructor argument agenRouter_ and the deployment supplies the real address.
+NEVER hardcode one: an address written into generated Solidity is wrong on every chain
+but the one it was copied from, and immutable once deployed.
+
+The two ways to ask, and the choice is about the mechanic:
+
+  _requireTrader(sender, hookData) -> address
+      The trader, or the trade reverts. Use this whenever attributing a trade to the
+      wrong address would corrupt what the market means: per-wallet counters, streaks,
+      largest-buyer, wallet cooldowns, per-user volume, holder rewards, anything whose
+      state is keyed by an address. Such a market trades only through AgenRouter. That is
+      correct, not a limitation.
+
+  _traderOr(sender, hookData) -> address
+      The trader if the trade named one, otherwise the caller. Use this when the market
+      prefers an identity but stays correct without one — a fee charged the same either
+      way, a global counter of trades, an accumulating pool with no wallet attribution.
+      A market using this keeps trading through any router.
+
+  _tradeExtra(sender, hookData) -> bytes calldata
+      The market's own data, when a trade carried any. Empty otherwise. Only for a
+      mechanic that genuinely needs a parameter per trade; most do not.
+
+A market that needs neither should inherit neither. Do not add AgenRouted to a hook whose
+rules are global — an unused base is a constructor argument the deployment has to supply
+and a reader has to account for.
+`.trim();
+
 export const TEST_CONVENTIONS = `
 Tests are Foundry tests using forge-std. Conventions:
 
@@ -564,6 +623,30 @@ that needs a contract nobody anticipated should have one generated.
   AgenWired          inherit it in any contract that has to be told an address after
                      deployment. Gives you an immutable installer, an onlyInstaller
                      modifier and _wireOnce.
+  AgenRouted         inherit it in the hook when any rule is keyed by a wallet. See
+                     below; this is a decision to make now rather than during coding.
+
+DOES THIS MARKET NEED TO KNOW WHICH WALLET IS TRADING?
+
+Decide it in the plan, because it changes the hook's constructor and cannot be added
+afterwards. A hook is told which contract called the pool manager, not which wallet is
+behind it, and for every routed trade that is one shared address. So:
+
+  Needs it — any rule keyed by a wallet. Per-wallet counters, streaks, consecutive buys
+  by the same buyer, wallet cooldowns, largest buyer, per-user volume, holder-specific
+  rewards, "the same wallet", "each buyer", "in a row". Give the hook AgenRouted and an
+  agenRouter_ constructor argument, and say so in the component's implementationNotes.
+
+  Does not need it — rules that are true of the market rather than of a trader. A global
+  sell fee, a total trade counter, a timer or epoch, a pool that accumulates without
+  attributing to anybody. Do not inherit AgenRouted for these: it is a constructor
+  argument and a base class for nothing.
+
+Getting this wrong in the first direction is the expensive one. A per-wallet mechanic
+built without an identity compiles, deploys, passes its tests and quietly attributes
+every trade in the market to one router.
+
+The creator is never asked about this. It follows from what they described.
 
 In the plan, name a component "reused" in its implementationNotes when it is one of
 these, and describe only what your market adds on top.
@@ -645,6 +728,8 @@ ${HOOK_SIGNATURES}
 ${SWAP_SEMANTICS}
 
 ${VALUE_TYPE_ACCESSORS}
+
+${TRADER_IDENTITY}
 
 ${CUSTODY}
 

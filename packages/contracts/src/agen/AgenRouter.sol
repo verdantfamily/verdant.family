@@ -70,12 +70,18 @@ contract AgenRouter is IUnlockCallback, ReentrancyGuard {
         uint128 minAmountOut;
         address trader;
         bytes extra;
+        /// @dev Set by `quote`. Throws the result away instead of paying it out.
+        bool quoting;
     }
 
     error NotPoolManager(address caller);
     error AmountZero();
     error WrongValue(uint256 sent, uint256 required);
     error BelowMinimum(uint256 received, uint256 required);
+
+    /// @notice What a quote returns. Always thrown, never a failure.
+    /// @dev See `quote`.
+    error QuoteResult(uint256 amountOut, uint256 amountSpent);
 
     /// @notice One trade, as the market's own accounting will see it.
     /// @dev Emitted here as well as by the pool so that a market's history can be read
@@ -133,12 +139,53 @@ contract AgenRouter is IUnlockCallback, ReentrancyGuard {
                     amountIn: amountIn,
                     minAmountOut: minAmountOut,
                     trader: msg.sender,
-                    extra: extra
+                    extra: extra,
+                    quoting: false
                 })
             )
         );
 
         amountOut = abi.decode(result, (uint256));
+    }
+
+    /// @notice What a trade would return, run as the trade itself.
+    ///
+    /// @dev Always reverts, with `QuoteResult`. Call it, never send it.
+    ///
+    /// This exists because a market that authenticates its route cannot be quoted any
+    /// other way. Uniswap's `V4Quoter` calls the pool as itself with empty hook data, so
+    /// a hook using `_requireTrader` refuses it — and the markets that refuse it are
+    /// precisely the ones this router was built for. Quoting them through the router
+    /// makes the hook see the same sender and the same identity it will see for real.
+    ///
+    /// It runs the identical path rather than an approximation of it, which is the whole
+    /// value: the answer includes whatever the hook did, including a fee that depends on
+    /// who is asking. The revert is what undoes it — every settle, take and state change
+    /// inside the lock is rolled back with the frame.
+    ///
+    /// The caller must be simulated as the trader, since that is who the hook is told
+    /// about, and a sell needs that trader's allowance in place exactly as a real sell
+    /// would. A quote that could be taken without an approval would be quoting a
+    /// different transaction from the one on offer.
+    function quote(PoolKey calldata key, bool zeroForOne, uint128 amountIn, bytes calldata extra)
+        external
+        payable
+    {
+        if (amountIn == 0) revert AmountZero();
+
+        poolManager.unlock(
+            abi.encode(
+                Trade({
+                    key: key,
+                    zeroForOne: zeroForOne,
+                    amountIn: amountIn,
+                    minAmountOut: 0,
+                    trader: msg.sender,
+                    extra: extra,
+                    quoting: true
+                })
+            )
+        );
     }
 
     /// @inheritdoc IUnlockCallback
@@ -185,6 +232,11 @@ contract AgenRouter is IUnlockCallback, ReentrancyGuard {
         uint256 received = trade.zeroForOne
             ? uint256(uint128(delta.amount1()))
             : uint256(uint128(delta.amount0()));
+
+        // A quote has its answer now. Thrown rather than returned, which unwinds the
+        // lock and every balance this function has touched — the caller reads the
+        // revert data.
+        if (trade.quoting) revert QuoteResult(received, spent);
 
         if (received < trade.minAmountOut) revert BelowMinimum(received, trade.minAmountOut);
 

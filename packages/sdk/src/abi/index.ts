@@ -65,6 +65,80 @@ export const stateViewAbi = [
   },
 ] as const;
 
+/**
+ * `AgenRouter`, the route every Agen trade takes.
+ *
+ * Hand-written for the same reason `stateViewAbi` is: three entries against a generated
+ * artefact carrying the whole contract, for a package that ships to a browser.
+ *
+ * `quote` is declared as it is written — a payable function returning nothing, which
+ * always reverts with `QuoteResult`. That is not a mistake in the ABI. The answer is in
+ * the revert data, and `quoteAgenTrade` decodes it; a caller that treats a reverting
+ * quote as a failed quote will report every market as unquotable.
+ */
+export const agenRouterAbi = [
+  {
+    type: "function",
+    name: "swap",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "key",
+        type: "tuple",
+        components: [
+          { name: "currency0", type: "address" },
+          { name: "currency1", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "hooks", type: "address" },
+        ],
+      },
+      { name: "zeroForOne", type: "bool" },
+      { name: "amountIn", type: "uint128" },
+      { name: "minAmountOut", type: "uint128" },
+      { name: "extra", type: "bytes" },
+    ],
+    outputs: [{ name: "amountOut", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "quote",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "key",
+        type: "tuple",
+        components: [
+          { name: "currency0", type: "address" },
+          { name: "currency1", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "hooks", type: "address" },
+        ],
+      },
+      { name: "zeroForOne", type: "bool" },
+      { name: "amountIn", type: "uint128" },
+      { name: "extra", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "error",
+    name: "QuoteResult",
+    inputs: [
+      { name: "amountOut", type: "uint256" },
+      { name: "amountSpent", type: "uint256" },
+    ],
+  },
+  {
+    type: "function",
+    name: "poolManager",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+] as const;
+
 export const universalRouterAbi = [
   {
     type: "function",

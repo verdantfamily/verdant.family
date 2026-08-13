@@ -44,7 +44,7 @@ import { agen } from "@verdant/sdk";
 import { AGEN_LAUNCH } from "@verdant/config";
 import { getAddress, isAddress, type Address, type Hex } from "viem";
 
-import { AGEN_ADDRESSES, EXTERNAL } from "./chain";
+import { AGEN_ADDRESSES, AGEN_ROUTER, EXTERNAL } from "./chain";
 import { GENERATED_ROOT, jobStore } from "./builds";
 
 /** Whole tokens to base units. Every generated token has eighteen decimals. */
@@ -219,6 +219,10 @@ export async function prepareLaunch(request: LaunchRequest): Promise<PreparedLau
         // holds it in an immutable, so this is the address that market pays for as long
         // as it trades. It defaults to the creator's wallet on the launch screen.
         feeReceiver,
+        // Null on a chain with no router. A market that needs one fails assembly with a
+        // message naming the component that asked, rather than deploying a hook that
+        // would authenticate against nothing.
+        agenRouter: AGEN_ROUTER,
         name: job.name,
         symbol: job.symbol,
         supplyTokens: job.manifest.supplyTokens,

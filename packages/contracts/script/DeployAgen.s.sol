@@ -8,6 +8,7 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 import {AgenDeployer} from "../src/agen/AgenDeployer.sol";
 import {AgenFactory} from "../src/agen/AgenFactory.sol";
 import {AgenMarketRegistry} from "../src/agen/AgenMarketRegistry.sol";
+import {AgenRouter} from "../src/agen/AgenRouter.sol";
 import {FactoryOrigin} from "../src/FactoryOrigin.sol";
 
 /// @title DeployAgen
@@ -60,18 +61,38 @@ contract DeployAgen is Script {
         AgenDeployer deployer;
         AgenMarketRegistry registry;
         AgenFactory factory;
+        AgenRouter router;
+        /// @dev False when an existing router was adopted rather than deployed.
+        bool routerIsNew;
     }
 
     struct Inputs {
         address sender;
         address poolManager;
         address positionManager;
+        /// @dev An AgenRouter already on this chain. Zero to deploy one.
+        address router;
     }
 
     function run() external returns (Deployment memory out) {
         Inputs memory input = _inputs();
 
         vm.startBroadcast(input.sender);
+
+        // Phase 0: the router, which is not part of the cycle below and must outlive it.
+        //
+        // A generated hook holds this address in an immutable, so replacing the router
+        // orphans every market that authenticates against it — permanently, since a
+        // deployed hook cannot be told a new one. The factory has no such constraint and
+        // may legitimately be redeployed for an ABI change, so the two are decoupled
+        // here: pass `AGEN_ROUTER` and this adopts the existing one, leave it unset and
+        // it deploys a fresh one. There is no path that quietly replaces a live router.
+        if (input.router == address(0)) {
+            out.router = new AgenRouter(IPoolManager(input.poolManager));
+            out.routerIsNew = true;
+        } else {
+            out.router = AgenRouter(payable(input.router));
+        }
 
         // Phase 1: the anchor. Both contracts below are told an address read off it
         // rather than one this script worked out.
@@ -119,6 +140,14 @@ contract DeployAgen is Script {
         require(address(out.factory.poolManager()) == input.poolManager, "factory names a different pool manager");
         require(out.registry.count() == 0, "a freshly deployed registry already has markets in it");
 
+        // The router shares only the pool manager with the rest of this. Checked because
+        // a router pointed at a different manager would accept trades, settle nothing,
+        // and revert every swap on a market that had already been launched against it.
+        require(address(out.router).code.length > 0, "the router has no code on this chain");
+        require(
+            address(out.router.poolManager()) == input.poolManager, "router names a different pool manager"
+        );
+
         _report(out);
     }
 
@@ -131,6 +160,8 @@ contract DeployAgen is Script {
         input.sender = _sender();
         input.poolManager = vm.envAddress("POOL_MANAGER");
         input.positionManager = vm.envAddress("POSITION_MANAGER");
+        // Optional: set it to keep the router this chain already has.
+        input.router = vm.envOr("AGEN_ROUTER", address(0));
 
         _validate(input);
     }
@@ -143,19 +174,39 @@ contract DeployAgen is Script {
         require(input.poolManager.code.length > 0, "POOL_MANAGER has no code on this chain");
         require(input.positionManager.code.length > 0, "POSITION_MANAGER has no code on this chain");
         require(input.sender != address(0), "no sender");
+        // Adopting an address with nothing at it would produce a deployment that reports
+        // a router and has none, which every later market would trust.
+        require(
+            input.router == address(0) || input.router.code.length > 0,
+            "AGEN_ROUTER has no code on this chain"
+        );
     }
 
     function _sender() internal view virtual returns (address) {
         return msg.sender;
     }
 
-    function _report(Deployment memory out) internal pure {
+    function _report(Deployment memory out) internal view {
         console.log("");
-        console.log("Agen is deployed. The interface reads these three:");
+        console.log("Agen is deployed. The interface reads these four:");
         console.log("");
         console.log("NEXT_PUBLIC_AGEN_FACTORY ", address(out.factory));
         console.log("NEXT_PUBLIC_AGEN_DEPLOYER", address(out.deployer));
         console.log("NEXT_PUBLIC_AGEN_REGISTRY", address(out.registry));
+        console.log("NEXT_PUBLIC_AGEN_ROUTER  ", address(out.router));
+        console.log("");
+
+        if (out.routerIsNew) {
+            console.log("The router is new. Record it: every market built after this");
+            console.log("point may hold it immutably, so it must never be replaced.");
+        } else {
+            console.log("The router was adopted, not deployed. Markets that trust it are unaffected.");
+        }
+
+        // The identity of the code, not merely of the address. A router at the expected
+        // address running unexpected code is the one failure this deployment could have
+        // that nothing else here would notice.
+        console.log("router runtime code hash", vm.toString(address(out.router).codehash));
         console.log("");
         console.log("FACTORY_ORIGIN (spent, kept for the record)", address(out.origin));
     }

@@ -134,6 +134,27 @@ export const CATALOGUE: readonly CatalogueEntry[] = [
     doesNotDo: ["guarantee anyone calls it: the market must remain correct if nobody does"],
   },
   {
+    id: "trader-identity",
+    contractName: "AgenRouted",
+    use: "inherit",
+    provides:
+      "the wallet a trade belongs to, verified — a hook is otherwise told only which " +
+      "router called, which is the same address for every trader",
+    fits: [
+      "any rule keyed by a wallet: streaks, per-wallet counters, cooldowns, holder " +
+        "rewards, largest buyer, per-user volume",
+      "any rule whose text contains the words the same wallet, per wallet, each buyer, " +
+        "consecutive, or in a row",
+    ],
+    doesNotDo: [
+      "help a market whose rules are global — a total trade count, a timer, a fee that " +
+        "does not depend on who paid it — and a hook that inherits it without needing it " +
+        "has taken on a constructor argument for nothing",
+      "work through other routers when the strict form is used: a market that requires " +
+        "an identity trades only through Agen, which is the price of the guarantee",
+    ],
+  },
+  {
     id: "wiring",
     contractName: "AgenWired",
     use: "inherit",

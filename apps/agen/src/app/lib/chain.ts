@@ -219,6 +219,28 @@ function resolve(): AddressResolution {
  */
 export const AGEN_ADDRESSES: AddressResolution = resolve();
 
+/**
+ * The canonical trading route, or `null` where this chain has none.
+ *
+ * Resolved apart from the three above because it is optional in a way they are not. A
+ * chain with no factory cannot launch anything; a chain with no router can launch and
+ * trade perfectly well, and only loses markets whose mechanic needs to know which wallet
+ * is trading. Folding it into `AgenAddresses` would turn a missing router into a
+ * launchpad that refuses to launch anything at all.
+ *
+ * Same precedence as the others: the deployment record decides, and the variable is an
+ * override for a fork or a devnet.
+ */
+function resolveRouter(): Address | null {
+  const override = process.env.NEXT_PUBLIC_AGEN_ROUTER?.trim();
+  const value = override === undefined || override === "" ? RECORD?.router : override;
+
+  if (value === undefined || value === null || value === "") return null;
+  return isAddress(value, { strict: false }) ? getAddress(value) : null;
+}
+
+export const AGEN_ROUTER: Address | null = resolveRouter();
+
 // --- Uniswap's, which Agen does not deploy --------------------------------------
 
 /**

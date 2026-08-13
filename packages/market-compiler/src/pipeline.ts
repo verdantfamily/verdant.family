@@ -126,6 +126,14 @@ export interface AgenDeploymentAddresses {
   readonly factory: Address;
   /** `AgenDeployer`, which runs every `create2` in a bundle. */
   readonly deployer: Address;
+  /**
+   * `AgenRouter`, for a market whose hook authenticates its trades.
+   *
+   * Absent on a chain that has none, and a build whose market asks for it there fails at
+   * `deployment_ready` with a message saying so — which is the right stage for it. The
+   * contracts are correct; what is missing is somewhere to launch them.
+   */
+  readonly router?: Address;
 }
 
 /**
@@ -144,6 +152,7 @@ export const PROBE_DEPLOYMENT: AgenDeploymentAddresses = {
   poolManager: "0x00000000000000000000000000000000000b0001",
   factory: "0x00000000000000000000000000000000000b0002",
   deployer: "0x00000000000000000000000000000000000b0003",
+  router: "0x00000000000000000000000000000000000B0005",
 };
 
 /** The creator a probe manifest is built for. Holds nothing and never will. */
@@ -1494,6 +1503,7 @@ export async function runBuild(
             installer: probe.factory,
             creator: PROBE_CREATOR,
             feeReceiver: PROBE_CREATOR,
+            agenRouter: probe.router ?? null,
             name: request.name,
             symbol: request.symbol,
             supplyTokens,

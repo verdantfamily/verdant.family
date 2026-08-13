@@ -137,6 +137,21 @@ export interface AgenDeployment {
   readonly registry: `0x${string}`;
   /** The one contract a creator's wallet ever calls. */
   readonly factory: `0x${string}`;
+  /**
+   * The route every Agen trade takes, and the only one that can name a trader.
+   *
+   * `null` where it has not been deployed, which is not the same kind of null as the
+   * others on this record. A chain without a router can still launch and trade markets;
+   * what it cannot do is launch one whose mechanic needs to know which wallet is
+   * trading, because a hook holds this address in an immutable and there is nothing to
+   * give it. The compiler refuses those builds rather than deploying a market that
+   * would authenticate against the zero address and reject every trade.
+   *
+   * Once set it must never change. Every market deployed against it has the value
+   * compiled in, and a replacement would leave them all authenticating against a
+   * contract nobody routes through.
+   */
+  readonly router: `0x${string}` | null;
   /** The block the factory was created in, for indexers to start from. */
   readonly deployedAtBlock: number;
 }
@@ -225,6 +240,7 @@ export const ADDONS = {
       deployer: "0x4C812526bF606927a887111299f94e35AE5bd77E",
       registry: "0x3AE1a797750ed9988ea7C2348534519E44Ed0791",
       factory: "0xb0fD1387ae751A377dEC0DF46b643B634eE46acc",
+      router: null,
       deployedAtBlock: 34_794_810,
     },
   },

@@ -49,3 +49,19 @@ export {
 } from "./market.js";
 
 export { priceFromSqrt, quoteAgenTrade, type AgenQuote } from "./trade.js";
+
+/**
+ * The canonical trading path. Every Agen trade — a public buy, a public sell and a
+ * creator's opening buy — is one of these, and none of them takes a trader: the router
+ * reads the signer, which is the whole point of routing through it.
+ */
+export {
+  buildAgenBuy,
+  buildAgenSell,
+  needsApproval,
+  quoteAgenBuy,
+  quoteAgenSell,
+  quoteAgenSwap,
+  type AgenSwapCall,
+  type AgenTradeQuote,
+} from "./router.js";

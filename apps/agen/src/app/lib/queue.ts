@@ -38,8 +38,31 @@ import "server-only";
 import type { GenerationJob } from "@verdant/market-compiler";
 import { isTerminal, newJob, restartJob, runBuild, Stage } from "@verdant/market-compiler";
 
+import type { AgenDeploymentAddresses, ModelProvider } from "@verdant/market-compiler";
+
 import { GENERATED_ROOT, jobStore, VENDOR_ROOT } from "./builds";
-import type { ModelProvider } from "@verdant/market-compiler";
+import { AGEN_ADDRESSES, AGEN_ROUTER, EXTERNAL } from "./chain";
+
+/**
+ * The addresses a build assembles its trial manifest against.
+ *
+ * Undefined where Agen is not deployed on this chain, which leaves the pipeline to use
+ * its own visibly-fake stand-ins — the honest state of a machine building markets for a
+ * chain that cannot launch them. Where Agen *is* deployed, the real addresses are used,
+ * and the router in particular: whether this chain has one decides whether a market that
+ * authenticates its trades can be built at all, and that answer belongs at the end of the
+ * build rather than at the launch button.
+ */
+function probeDeployment(): AgenDeploymentAddresses | undefined {
+  if (!AGEN_ADDRESSES.ok) return undefined;
+
+  return {
+    poolManager: EXTERNAL.poolManager,
+    factory: AGEN_ADDRESSES.addresses.factory,
+    deployer: AGEN_ADDRESSES.addresses.deployer,
+    ...(AGEN_ROUTER === null ? {} : { router: AGEN_ROUTER }),
+  };
+}
 
 /**
  * How many builds run at once.
@@ -202,6 +225,10 @@ async function execute({ job, provider }: Pending): Promise<void> {
         vendorRoot: VENDOR_ROOT,
         generatedRoot: GENERATED_ROOT,
         resume: job,
+        // Probe against the chain this will actually launch on, so a market that needs
+        // the router discovers at build time whether there is one — rather than after a
+        // creator has read a review screen and pressed launch.
+        deployment: probeDeployment(),
       },
     );
   } catch (error) {

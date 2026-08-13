@@ -52,7 +52,7 @@ contract DeployAgenScriptTest is Deployers {
             manager, IAllowanceTransfer(address(0)), 300_000, IPositionDescriptor(address(0)), IWETH9(address(0))
         );
 
-        d = new InjectedAgenDeployHarness(address(manager), address(posm)).run();
+        d = new InjectedAgenDeployHarness(address(manager), address(posm), address(0)).run();
 
         vm.deal(creator, 100 ether);
     }

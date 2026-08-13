@@ -341,6 +341,18 @@ fails inside beforeSwap, v4 wraps the failure, and the whole suite reports
 three repair rounds to exactly that. Wire it in setUp and the tests describe the mechanic
 instead.
 
+THE TEST CONTRACT MUST HOLD THE SUPPLY.
+
+The generated token mints its entire supply to one recipient named at construction. At
+launch that is the factory, which puts it straight into locked liquidity. In a test there
+is no factory, so the recipient has to be the test itself:
+
+    token = new MyToken(address(this));    // NOT the factory, NOT address(0)
+
+The test is what adds the liquidity and what funds the wallets it pranks, so a suite that
+names anything else holds nothing and dies in setUp with
+\`InsufficientBalance(0, …)\` before a single assertion runs.
+
   addLiquidity(PoolKey memory key, int256 amount)
   swapExactIn(PoolKey memory key, bool zeroForOne, uint256 amount) -> BalanceDelta
       How a test exercises the market. NEVER call hook.beforeSwap(...) or

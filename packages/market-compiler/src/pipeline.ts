@@ -67,6 +67,7 @@ import {
 import { recogniseAll, remedyBrief } from "./playbook.js";
 import { classify, FailureCategory, tacticFor, Tactic } from "./recovery.js";
 import { Blame } from "./playbook.js";
+import { explainRevert, selectorsOf } from "./revert.js";
 import { apiBrief, unknownMembers } from "./testapi.js";
 import type { EffectsRepair, Repair, StageOutput } from "./engineer.js";
 import {
@@ -1156,10 +1157,28 @@ export async function runBuild(
     diagnostics = withTestAttempt(diagnostics, testAttemptFrom(tested, 0, now()));
     await flushDiagnostics();
 
+    /*
+     * The selectors this market can possibly revert with.
+     *
+     * Built once, from the prelude it is compiled against and its own sources, and used
+     * to put names on the raw calldata Foundry prints for an error it has no ABI for. A
+     * hook's real failure is always nested inside v4's `WrappedError`, so without this a
+     * repair round is handed four hex fields and nothing to reason about — which is how a
+     * live Harbour build spent three rounds and nine minutes failing to notice that
+     * `0xa570b990` was `NotHook`.
+     */
+    const knownSelectors = selectorsOf([...preludeSources(), ...sources, ...tests]);
+
     while (!tested.ok && testAttempt < budget.testRepairs) {
       // A suite that will not compile is a different question from a suite that fails,
       // and the model is told which one it is looking at.
-      const failures = tested.outcomes.filter((outcome) => !outcome.passed);
+      const failures = tested.outcomes
+        .filter((outcome) => !outcome.passed)
+        .map((outcome) =>
+          outcome.reason === null || outcome.reason === undefined
+            ? outcome
+            : { ...outcome, reason: explainRevert(outcome.reason, knownSelectors) },
+        );
 
       // The rung this attempt gets. A suite failing the same way it failed last round
       // does not get the same prompt again: the ladder widens what the model is shown

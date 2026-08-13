@@ -320,6 +320,27 @@ Currency.wrap(address(token)), IHooks(address(hook)).
       and one that compiles agrees with your hook about behaviour neither has checked
       against v4.
 
+WIRE THE COMPONENTS IN setUp, THE WAY THE DEPLOYMENT WILL.
+
+At launch the factory deploys every component and then makes the wiring calls that let
+them recognise each other, because two contracts that each need the other's address
+cannot both learn it at construction. Your setUp is that deployment, so it has to make
+the same calls — nothing does it for you.
+
+A vault is the usual case. FeeVault starts with no hook and rejects every caller until it
+is given one:
+
+    vault = new FeeVault(creator);
+    hook = MyHook(deployHook("MyHook.sol:MyHook", abi.encode(manager, address(vault))));
+    vault.setHook(address(hook));          // <- without this line every swap reverts
+
+Skip it and the market looks broken in a way that says nothing about the market: the swap
+fails inside beforeSwap, v4 wraps the failure, and the whole suite reports
+\`WrappedError(0x…, 0x575e24b4, 0xa570b990…, 0xa9e35b2f)\` — which is
+\`NotHook\` raised by the vault, nested two deep and spelled in hex. A live build lost
+three repair rounds to exactly that. Wire it in setUp and the tests describe the mechanic
+instead.
+
   addLiquidity(PoolKey memory key, int256 amount)
   swapExactIn(PoolKey memory key, bool zeroForOne, uint256 amount) -> BalanceDelta
       How a test exercises the market. NEVER call hook.beforeSwap(...) or

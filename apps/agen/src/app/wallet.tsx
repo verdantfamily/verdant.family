@@ -19,10 +19,17 @@ import { CHAIN_ID, chain, shortAddress } from "./lib/chain";
  * connected. The third is the one worth designing for rather than hiding — a wallet on
  * another chain can still sign, and what it would produce is a transaction against a
  * chain where Agen does not exist.
+ *
+ * ## Why this is a dialog and not a popover
+ *
+ * It was a small panel hanging off the button, which works on a desktop and is wrong on a
+ * phone: anchored to a control in the corner of a 390px bar, it either overflows the
+ * viewport or shrinks the wallet list to something nobody can tap. A centred dialog over
+ * a dimmed page is the same on both, and connecting a wallet deserves the whole screen's
+ * attention anyway — it is the step everything else depends on.
  */
 export function Wallet() {
   const [open, setOpen] = useState(false);
-  const container = useRef<HTMLDivElement>(null);
 
   const { address, status, chainId, connector } = useAccount();
   const connectors = useConnectors();
@@ -30,22 +37,25 @@ export function Wallet() {
   const { disconnect } = useDisconnect();
   const switchChain = useSwitchChain();
 
-  // A popover that outlives a click elsewhere is a popover the reader has to fight.
   useEffect(() => {
     if (!open) return;
 
-    function onPointerDown(event: PointerEvent) {
-      if (!container.current?.contains(event.target as Node)) setOpen(false);
-    }
-    function onKeyDown(event: KeyboardEvent) {
+    const onKey = (event: KeyboardEvent): void => {
       if (event.key === "Escape") setOpen(false);
-    }
+    };
 
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
+    // The page behind a dialog must not scroll under it, and the scrollbar's width has to
+    // be handed back as padding or the layout shifts sideways as it opens.
+    const gap = window.innerWidth - document.documentElement.clientWidth;
+    const { overflow, paddingRight } = document.body.style;
+    document.body.style.overflow = "hidden";
+    if (gap > 0) document.body.style.paddingRight = `${String(gap)}px`;
+
+    document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = overflow;
+      document.body.style.paddingRight = paddingRight;
     };
   }, [open]);
 
@@ -62,50 +72,106 @@ export function Wallet() {
         : "connect wallet";
 
   return (
-    <div className="nav-account" ref={container}>
+    <div className="nav-account">
       <button
         type="button"
         className={wrongNetwork ? "wallet wallet-warn" : "wallet"}
-        aria-expanded={open}
         aria-haspopup="dialog"
+        aria-expanded={open}
         onClick={() => {
-          setOpen((was) => !was);
+          setOpen(true);
         }}
       >
         {face}
       </button>
 
-      {open ? (
-        <div className="wallet-panel" role="dialog" aria-label="Wallet">
-          {connected ? (
-            <Connected
-              address={address}
-              wallet={connector?.name}
-              wrongNetwork={wrongNetwork}
-              switching={switchChain.isPending}
-              onSwitch={() => {
-                switchChain.mutate({ chainId: CHAIN_ID });
-              }}
-              onDisconnect={() => {
-                disconnect();
-                setOpen(false);
-              }}
-            />
-          ) : (
-            <Choose
-              connectors={connectors}
-              pending={connect.isPending}
-              error={connect.error}
-              onConnect={(chosen) => {
-                connect.mutate(
-                  { connector: chosen, chainId: CHAIN_ID },
-                  { onSuccess: () => { setOpen(false); } },
-                );
-              }}
-            />
-          )}
+      {!open ? null : (
+        <div className="axw" role="presentation">
+          <div
+            className="axw-scrim"
+            aria-hidden="true"
+            onClick={() => {
+              setOpen(false);
+            }}
+          />
+
+          <div className="axw-modal" role="dialog" aria-modal="true" aria-label="Connect your wallet">
+            <header className="axw-head">
+              <a
+                className="axw-icon"
+                href="https://ethereum.org/en/wallets/"
+                target="_blank"
+                rel="noreferrer"
+                aria-label="what is a wallet?"
+              >
+                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                  <circle cx="10" cy="10" r="8" stroke="currentColor" strokeWidth="1.4" />
+                  <path
+                    d="M8.1 7.7a2 2 0 1 1 2.6 2.2c-.5.2-.8.6-.8 1.1v.4"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                  />
+                  <circle cx="10" cy="14.2" r="0.85" fill="currentColor" />
+                </svg>
+              </a>
+
+              <img className="axw-mark" src="/mark.png" width={34} height={34} alt="" />
+
+              <button
+                type="button"
+                className="axw-icon"
+                aria-label="close"
+                onClick={() => {
+                  setOpen(false);
+                }}
+              >
+                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                  <path
+                    d="m6 6 8 8M14 6l-8 8"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </button>
+            </header>
+
+            {connected ? (
+              <Connected
+                address={address}
+                wallet={connector?.name}
+                wrongNetwork={wrongNetwork}
+                switching={switchChain.isPending}
+                onSwitch={() => {
+                  switchChain.mutate({ chainId: CHAIN_ID });
+                }}
+                onDisconnect={() => {
+                  disconnect();
+                  setOpen(false);
+                }}
+              />
+            ) : (
+              <Choose
+                connectors={connectors}
+                pending={connect.isPending}
+                pendingId={connect.variables?.connector as Connector | undefined}
+                error={connect.error}
+                onConnect={(chosen) => {
+                  connect.mutate(
+                    { connector: chosen, chainId: CHAIN_ID },
+                    {
+                      onSuccess: () => {
+                        setOpen(false);
+                      },
+                    },
+                  );
+                }}
+              />
+            )}
+          </div>
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -152,11 +218,13 @@ function split(connectors: readonly Connector[], injectedIsReal: boolean) {
 function Choose({
   connectors,
   pending,
+  pendingId,
   error,
   onConnect,
 }: {
   readonly connectors: readonly Connector[];
   readonly pending: boolean;
+  readonly pendingId: Connector | undefined;
   readonly error: Error | null;
   readonly onConnect: (connector: Connector) => void;
 }) {
@@ -165,13 +233,13 @@ function Choose({
   if (installed.length + bridges.length === 0) {
     return (
       <>
-        <p className="wallet-title">no wallet on this device</p>
-        <p className="wallet-help">
+        <p className="axw-title">No wallet on this device</p>
+        <p className="axw-help">
           On a phone, open agen.space inside your wallet&apos;s own browser — MetaMask,
           Rainbow, Trust and Coinbase Wallet each have one. A wallet cannot be reached
           from Safari or Chrome.
         </p>
-        <p className="wallet-help">
+        <p className="axw-help">
           On a computer, install a browser extension. This page finds every wallet that
           announces itself, so it will appear here once one is.
         </p>
@@ -181,33 +249,118 @@ function Choose({
 
   return (
     <>
-      <p className="wallet-title">connect a wallet</p>
-      <p className="wallet-help">
-        Agen never takes custody. Connecting shows your address; it authorises nothing on
-        its own.
-      </p>
+      <p className="axw-title">Connect your wallet</p>
 
-      <div className="wallet-list">
-        {[...installed, ...bridges].map((entry) => (
-          <button
-            type="button"
+      <div className="axw-list">
+        {installed.map((entry) => (
+          <Row
             key={entry.uid}
+            connector={entry}
+            badge="installed"
+            busy={pending && pendingId?.uid === entry.uid}
             disabled={pending}
-            className="wallet-row"
-            onClick={() => {
-              onConnect(entry);
-            }}
-          >
-            <span>{entry.name}</span>
-            {entry.id === "walletConnect" ? <span className="wallet-hint">and 70+ more</span> : null}
-          </button>
+            onPick={onConnect}
+          />
+        ))}
+
+        {bridges.map((entry) => (
+          <Row
+            key={entry.uid}
+            connector={entry}
+            badge="qr"
+            busy={pending && pendingId?.uid === entry.uid}
+            disabled={pending}
+            onPick={onConnect}
+          />
         ))}
       </div>
 
       {error === null || isRejection(error) ? null : (
-        <p className="wallet-error">{error.message}</p>
+        <p className="axw-error">{error.message}</p>
       )}
     </>
+  );
+}
+
+/** One wallet: its mark, its name, whether it is here already, and a way in. */
+function Row({
+  connector,
+  badge,
+  busy,
+  disabled,
+  onPick,
+}: {
+  readonly connector: Connector;
+  readonly badge: "installed" | "qr";
+  readonly busy: boolean;
+  readonly disabled: boolean;
+  readonly onPick: (connector: Connector) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="axw-row"
+      disabled={disabled}
+      onClick={() => {
+        onPick(connector);
+      }}
+    >
+      <Mark connector={connector} />
+
+      <span className="axw-name">{connector.name}</span>
+
+      <span className={badge === "installed" ? "axw-badge axw-badge-on" : "axw-badge axw-badge-qr"}>
+        {busy ? "connecting" : badge === "installed" ? "installed" : "QR code"}
+      </span>
+
+      <svg className="axw-chev" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path
+          d="m6.5 4 4 4-4 4"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
+  );
+}
+
+/**
+ * The wallet's own icon where it announced one, and its initial where it did not.
+ *
+ * EIP-6963 carries an icon as a data URI, so an announced extension draws itself. The
+ * WalletConnect connector is configured rather than announced and has none, which is why
+ * there is a fallback at all — a broken image would be worse than a letter.
+ */
+function Mark({ connector }: { readonly connector: Connector }) {
+  const icon = connector.icon;
+  const failed = useRef(false);
+  const [broken, setBroken] = useState(false);
+
+  if (icon === undefined || broken) {
+    return (
+      <span className="axw-mono" aria-hidden="true">
+        {connector.name.slice(0, 1).toUpperCase()}
+      </span>
+    );
+  }
+
+  return (
+    // Not next/image: the source is a data URI the browser already holds, which the
+    // optimiser can do nothing useful with.
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      className="axw-logo"
+      src={icon}
+      alt=""
+      aria-hidden="true"
+      onError={() => {
+        if (failed.current) return;
+        failed.current = true;
+        setBroken(true);
+      }}
+    />
   );
 }
 
@@ -228,28 +381,28 @@ function Connected({
 }) {
   return (
     <>
-      <p className="wallet-title">{wallet ?? "connected"}</p>
-      <p className="wallet-address">{address}</p>
+      <p className="axw-title">{wallet ?? "Connected"}</p>
+      <p className="axw-address">{address}</p>
 
       {wrongNetwork ? (
         <>
-          <p className="wallet-help">
+          <p className="axw-help">
             Agen&apos;s contracts are on {chain.name} (chain {String(CHAIN_ID)}). Nothing
             here can be signed until your wallet is there too. If it has never seen this
             chain it will be asked to add it.
           </p>
-          <button type="button" className="wallet-row" disabled={switching} onClick={onSwitch}>
-            {switching ? "waiting for your wallet…" : `switch to ${chain.name}`}
+          <button type="button" className="axw-action" disabled={switching} onClick={onSwitch}>
+            {switching ? "waiting for your wallet…" : `Switch to ${chain.name}`}
           </button>
         </>
       ) : (
-        <p className="wallet-help">
+        <p className="axw-help">
           On {chain.name}, chain {String(CHAIN_ID)}.
         </p>
       )}
 
-      <button type="button" className="wallet-row" onClick={onDisconnect}>
-        disconnect
+      <button type="button" className="axw-action axw-action-quiet" onClick={onDisconnect}>
+        Disconnect
       </button>
     </>
   );

@@ -166,6 +166,51 @@ contract BasicFeeHook is BaseHook {
     receive() external payable {}
 }
 
+/// @notice SIMPLE. A fee on sells, paid to a receiver, and no interest in who is trading.
+///
+/// @dev The ordinary case, and the one most generated markets are: a rule that is true of
+/// the market rather than of a trader. It inherits nothing from `AgenRouted` and takes no
+/// router, so it is also the market that proves the router did not become mandatory.
+///
+/// The fee receiver is a constructor argument because that is how a real generated market
+/// takes one — the deployment resolves it, and a hook holding it in an immutable is how
+/// the market keeps the promise for its whole life.
+contract SellFeeHook is BaseHook {
+    uint24 public constant SELL_FEE_PPM = 10_000; // 1%
+
+    address public immutable feeReceiver;
+    uint256 public collected;
+
+    constructor(IPoolManager poolManager_, address feeReceiver_) BaseHook(poolManager_) {
+        feeReceiver = feeReceiver_;
+    }
+
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory permissions) {
+        permissions.beforeSwap = true;
+        permissions.beforeSwapReturnDelta = true;
+    }
+
+    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)
+        internal
+        override
+        returns (BeforeSwapDelta, uint24)
+    {
+        // Sells only. A buy spends the quote asset and pays nothing here.
+        if (isBuy(params)) return (BeforeSwapDeltaLibrary.ZERO_DELTA, LPFeeLibrary.OVERRIDE_FEE_FLAG);
+
+        uint256 fee = (swapAmount(params) * SELL_FEE_PPM) / 1_000_000;
+        if (fee == 0) return (BeforeSwapDeltaLibrary.ZERO_DELTA, LPFeeLibrary.OVERRIDE_FEE_FLAG);
+
+        // Straight to the receiver. A hook is called on every swap, so a hook holding a
+        // balance has a withdrawal path in every callback.
+        poolManager.take(inputCurrency(key, params), feeReceiver, fee);
+        collected += fee;
+
+        // forge-lint: disable-next-line(unsafe-typecast) -- bounded by the swap amount
+        return (toBeforeSwapDelta(int128(int256(fee)), 0), LPFeeLibrary.OVERRIDE_FEE_FLAG);
+    }
+}
+
 /// @notice B. The market that will only be traded through Agen.
 ///
 /// @dev Uses `_requireTrader`, so a swap arriving any other way reverts. A real market

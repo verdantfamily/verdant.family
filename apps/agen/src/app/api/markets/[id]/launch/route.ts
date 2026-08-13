@@ -20,8 +20,6 @@ export const dynamic = "force-dynamic";
 interface Body {
   readonly creator?: unknown;
   readonly feeReceiver?: unknown;
-  /** A decimal string of ether, as typed. Parsed here so the browser never rounds. */
-  readonly valuation?: unknown;
   readonly devBuy?: unknown;
   readonly metadataURI?: unknown;
 }
@@ -65,7 +63,10 @@ export async function POST(
       jobId: id,
       creator: typeof body.creator === "string" ? body.creator : "",
       feeReceiver: typeof body.feeReceiver === "string" ? body.feeReceiver : "",
-      valuationWei: ether(body.valuation, "The starting market cap"),
+      // The opening valuation is not read from the request. It is a protocol constant,
+      // and a launch route that accepted one would be an API for opening a market at a
+      // price the interface does not offer — which is the same thing as the field still
+      // existing, only undocumented.
       devBuyWei: ether(body.devBuy, "The initial buy", 0n),
       ...(typeof body.metadataURI === "string" ? { metadataURI: body.metadataURI } : {}),
     });

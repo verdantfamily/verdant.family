@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { AGEN_BAND_WIDTHS } from "@verdant/config";
+import { AGEN_BAND_WIDTHS, AGEN_LAUNCH } from "@verdant/config";
 import {
   initialTickForValuation,
   MAX_INITIAL_TICK,
@@ -55,6 +55,50 @@ describe("the TypeScript copy of the curve's boundaries", () => {
 
     expect(MIN_INITIAL_TICK).toBe(floor + TICK_SPACING);
     expect(MIN_INITIAL_TICK - TICK_SPACING).toBe(floor);
+  });
+});
+
+/**
+ * The launch nobody configures.
+ *
+ * Agen stopped asking for an opening valuation, so there is exactly one opening tick and
+ * every market in existence shares it. That makes it worth pinning: the figure is no
+ * longer typed by somebody who would notice it looked wrong, and a constant that drifts
+ * off the curve's grid would fail after a creator had signed rather than in a test.
+ */
+describe("Agen's standardised launch", () => {
+  const OPENING_TICK = initialTickForValuation({
+    supply: AGEN_LAUNCH.supplyTokens * ETHER,
+    valuation: AGEN_LAUNCH.valuationWei,
+  });
+
+  it("opens every market at the same tick", () => {
+    // 1.5 ether across a billion tokens. Pinned rather than derived a second way: this is
+    // the number the chain will hold for every Agen market, and a constant that moved
+    // without anybody deciding to move it should fail here.
+    expect(OPENING_TICK).toBe(203_200);
+  });
+
+  it("lands on the grid the factory will check it against", () => {
+    expect(OPENING_TICK % TICK_SPACING).toBe(0);
+    expect(OPENING_TICK).toBeGreaterThanOrEqual(MIN_INITIAL_TICK);
+    expect(OPENING_TICK).toBeLessThanOrEqual(MAX_INITIAL_TICK);
+  });
+
+  it("is worth what the constant says, to within one grid step", () => {
+    const actual = valuationAtTick({ supply: AGEN_LAUNCH.supplyTokens * ETHER, tick: OPENING_TICK });
+
+    // A tick is 1.0001x, so a grid step of 200 is about 2%. The opening valuation cannot
+    // be hit exactly and the launch screen shows the constant, so the two must agree to
+    // better than a step or the number on the screen is not the number on the chain.
+    expect(actual).toBeGreaterThan((AGEN_LAUNCH.valuationWei * 98n) / 100n);
+    expect(actual).toBeLessThan((AGEN_LAUNCH.valuationWei * 102n) / 100n);
+  });
+
+  it("keeps one definition of the supply", () => {
+    // The compiler's default and the launch constant were separate literals that happened
+    // to be equal. Equal by import now, which is the only kind that stays equal.
+    expect(AGEN_LAUNCH.supplyTokens).toBe(1_000_000_000n);
   });
 });
 

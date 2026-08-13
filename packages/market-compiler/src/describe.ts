@@ -340,6 +340,160 @@ export function howThisMarketWorks(
   return sections;
 }
 
+// --- the review cards ------------------------------------------------------
+
+/**
+ * One fact about the market, sized for a card.
+ *
+ * A heading, the number, and a line saying what the number means. The shape exists
+ * because a review screen and a sentence want opposite things: "On every sell an extra
+ * 0.75% applies and it goes to the fee vault" is a good sentence and a bad card, where
+ * the reader is looking for the figure and has to parse a clause to find it.
+ */
+export interface BehaviourCard {
+  readonly label: string;
+  readonly value: string;
+  readonly note: string;
+}
+
+/** What a side of the market charges, once every rule that touches the fee is applied. */
+interface SideFee {
+  /** Null where a rule changes the fee by an amount the specification does not state. */
+  readonly ppm: number | null;
+  readonly routed: string | null;
+}
+
+function feeFor(specification: MarketSpecification, side: "buy" | "sell"): SideFee {
+  let ppm: number | null = specification.baseFeePpm;
+  let routed: string | null = null;
+
+  for (const rule of specification.rules) {
+    // `swap` fires on both sides, so it counts towards each.
+    if (rule.when.kind !== side && rule.when.kind !== "swap") continue;
+
+    for (const effect of rule.then) {
+      const stated = numberFrom(effect.parameters, "feePpm");
+
+      if (effect.kind === "waiveFee") ppm = 0;
+      if (effect.kind === "setFee") ppm = stated;
+      if (effect.kind === "extraFee") ppm = stated === null || ppm === null ? null : ppm + stated;
+      if (effect.kind === "routeFee") routed = textFrom(effect.parameters, "destination");
+    }
+  }
+
+  return { ppm, routed };
+}
+
+/** Where a fee ends up, said the way somebody launching a token would say it. */
+function routeNote(routed: string | null, side: "buy" | "sell"): string {
+  if (routed === null) return `Charged on every ${side} and kept by the pool's liquidity.`;
+  if (/fee|treasury|receiver|creator|owner/i.test(routed)) return "Sent to your fee receiver.";
+  return `Collected into the ${humanise(routed)}.`;
+}
+
+/** The headline number for a rule that is not about fees. */
+function triggerValue(rule: Rule): string {
+  const streak = rule.conditions.find((condition) => condition.kind === "consecutiveCount");
+  const count = numberFrom(streak?.parameters, "value");
+  if (count !== null) {
+    return `${String(count)} consecutive ${rule.when.kind === "sell" ? "sells" : "buys"}`;
+  }
+
+  switch (rule.when.kind) {
+    case "buy":
+      return "On every buy";
+    case "sell":
+      return "On every sell";
+    case "swap":
+      return "On every trade";
+    case "timeElapsed": {
+      const seconds = numberFrom(rule.when.parameters, "seconds");
+      return seconds === null ? "Each period" : `Every ${asDuration(seconds)}`;
+    }
+    case "inactivity": {
+      const seconds = numberFrom(rule.when.parameters, "seconds");
+      return seconds === null ? "When it goes quiet" : `After ${asDuration(seconds)} quiet`;
+    }
+    case "volumeThreshold": {
+      const usd = numberFrom(rule.when.parameters, "amountUsd");
+      return usd === null ? "At a milestone" : `$${usd.toLocaleString("en-US")} of volume`;
+    }
+    case "newAllTimeHigh":
+      return "At a new high";
+    default:
+      return capitalise(rule.when.description.replace(/\.$/, ""));
+  }
+}
+
+/** The heading a non-fee effect deserves. */
+const EFFECT_LABELS: Readonly<Record<string, string>> = {
+  resetCounter: "RESET",
+  rewardWallet: "REWARD",
+  rewardGroup: "HOLDER REWARDS",
+  accumulate: "REWARD POOL",
+  buyback: "BUYBACK",
+  burn: "BURN",
+  transitionPhase: "PHASE CHANGE",
+  waiveFee: "FEE-FREE TRADE",
+  lockFunctionality: "LOCK",
+  unlockFunctionality: "UNLOCK",
+  disableRulePermanently: "ONE TIME ONLY",
+};
+
+const FEE_EFFECTS = new Set(["setFee", "extraFee", "routeFee"]);
+
+/**
+ * The market as three or four cards.
+ *
+ * The fees come first because they are what somebody checks, and both sides are shown
+ * even when one of them is nothing — "BUY FEE / 0%" is a fact worth stating plainly, and
+ * a card that is absent reads as a fee nobody mentioned rather than as no fee.
+ *
+ * After that, one card per rule that does something other than charge, in specification
+ * order, up to a total of four. The cap is not cosmetic: a screen of eleven cards is a
+ * report, which is the thing this is meant to replace, and the full set of rules is a
+ * click away in the technical specification.
+ */
+export function behaviourCards(specification: MarketSpecification): readonly BehaviourCard[] {
+  const cards: BehaviourCard[] = [];
+
+  const buy = feeFor(specification, "buy");
+  const sell = feeFor(specification, "sell");
+
+  const asFee = (fee: SideFee, side: "buy" | "sell"): BehaviourCard => ({
+    label: side === "buy" ? "BUY FEE" : "SELL FEE",
+    value: fee.ppm === null ? "varies" : asPercent(fee.ppm),
+    note:
+      fee.ppm === 0
+        ? `${capitalise(side)}s pay no hook fee.`
+        : fee.ppm === null
+          ? `This market changes the ${side} fee as it runs. The most any trade can pay is ` +
+            `${asPercent(specification.maxFeePpm)}.`
+          : routeNote(fee.routed, side),
+  });
+
+  cards.push(asFee(buy, "buy"), asFee(sell, "sell"));
+
+  for (const rule of specification.rules) {
+    if (cards.length >= 4) break;
+
+    const effect = rule.then.find((candidate) => !FEE_EFFECTS.has(candidate.kind));
+    if (effect === undefined) continue;
+
+    // The rule's own title rather than its effect's `kind` when the effect is one this
+    // codebase has no name for. A kind is an identifier — `setLeader` humanises to "SET
+    // LEADER", which is the raw specification showing through on the one screen that
+    // exists to keep it hidden — where the title was written for a person at
+    // interpretation time and reads like one: "Hourly king".
+    const label = EFFECT_LABELS[effect.kind] ?? rule.title.toUpperCase();
+    if (cards.some((card) => card.label === label)) continue;
+
+    cards.push({ label, value: triggerValue(rule), note: `${describeRule(rule)}.` });
+  }
+
+  return cards;
+}
+
 // --- live state ------------------------------------------------------------
 
 /**

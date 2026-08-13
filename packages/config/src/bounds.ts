@@ -98,6 +98,66 @@ export const AGEN_BAND_WIDTHS = {
   middle: 36_800,
 } as const;
 
+/**
+ * What every Agen launch is, before anybody configures anything.
+ *
+ * An Agen market is standardised: the same supply, the same opening valuation, the same
+ * three one-sided locked bands, no paired asset. None of it is a creator's decision, and
+ * the launch screen no longer asks — a form field for the opening valuation was asking
+ * somebody to price a token that has never traded, which is a question with no method
+ * behind it, and two markets launched at different valuations are not comparable on any
+ * page that lists them both.
+ *
+ * ## Why the numbers live here
+ *
+ * Solidity cannot import from TypeScript, so `AgenCurve.sol` holds the geometry the chain
+ * enforces and this holds the geometry everything else reads. That is two definitions of
+ * one thing, which is a duplication with a test against it rather than a duplication
+ * nobody noticed: see the parity test in `packages/sdk`. What is *not* duplicated is the
+ * supply and the opening valuation, which appear once, here, and are read by the
+ * compiler, the launch route and the interface alike.
+ */
+export const AGEN_LAUNCH = {
+  /**
+   * Whole tokens, before the 1e18 scale. Every Agen market has exactly this many.
+   *
+   * The same figure as `BOUNDS.token.defaultTotalSupplyTokens`, which is Verdant's
+   * default for a configurable supply. Agen's is not configurable, which is why it is
+   * stated separately rather than borrowed: the two are equal today and mean different
+   * things, and a market compiler reading "the default" would silently follow Verdant if
+   * that default ever moved.
+   */
+  supplyTokens: 1_000_000_000n,
+
+  /**
+   * What the whole supply is worth, in wei, the moment the pool opens.
+   *
+   * Every Agen market opens here. Denominated in the quote asset rather than in dollars,
+   * which was considered and rejected: a dollar baseline needs a rate, chain 4663 has no
+   * oracle to read one from, and taking it from an exchange would put a third party's
+   * uptime between a creator and their launch. Ether is the unit the pool is priced in
+   * and the only one that is exact.
+   *
+   * ## It is a baseline, not the opening market cap
+   *
+   * This is the price before anybody trades. A creator's initial buy moves along the
+   * curve like any other buy, so a market launched with one opens above this — the only
+   * influence anybody has over where their market actually starts.
+   */
+  valuationWei: 1_500_000_000_000_000_000n,
+
+  /**
+   * The depth of the opening band, in ether of buying pressure to cross it.
+   *
+   * Not read by anything: the allocation that produces it is `AgenCurve.OPENING_BPS`, and
+   * this is the number that allocation was chosen to hit. Recorded because a reader
+   * asking "how deep does it open" cannot answer it from 1 484 basis points, and because
+   * the simulation that picked it (`apps/agen/scripts/curve.ts`) is otherwise the only
+   * place the intent is written down.
+   */
+  openingDepthEth: 0.25,
+} as const;
+
 /** Native ETH is always currency0, so no address sorting is ever required (D4). */
 export const NATIVE_CURRENCY = "0x0000000000000000000000000000000000000000" as const;
 

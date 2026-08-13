@@ -32,6 +32,8 @@ import { join } from "node:path";
 
 import { keccak256, toHex, type Address, type Hex } from "viem";
 
+import { AGEN_LAUNCH } from "@verdant/config";
+
 import type { BuildArtifacts } from "./artifacts.js";
 import { hashSources, hashSpecification, readArtifacts } from "./artifacts.js";
 import { buildContext } from "./context.js";
@@ -285,12 +287,24 @@ export interface StartRequest {
   readonly prompt: string;
   readonly name: string;
   readonly symbol: string;
-  /** Whole tokens minted at deployment. Defaults to a billion, the launchpad norm. */
+  /**
+   * Whole tokens minted at deployment.
+   *
+   * Present for tests and for a caller of the compiler that is not Agen. Agen itself
+   * never sets it: every Agen market has the same supply, and the interface has no field
+   * for it.
+   */
   readonly supplyTokens?: bigint;
 }
 
-/** What a creator gets when they do not say. */
-export const DEFAULT_SUPPLY_TOKENS = 1_000_000_000n;
+/**
+ * What every Agen market has.
+ *
+ * Re-exported rather than redefined. This used to be its own literal here and another in
+ * `@verdant/config`, equal by coincidence and by nothing else — the kind of duplication
+ * that is correct until somebody changes one of them.
+ */
+export const DEFAULT_SUPPLY_TOKENS = AGEN_LAUNCH.supplyTokens;
 
 /**
  * Run one build to completion.

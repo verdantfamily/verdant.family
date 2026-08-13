@@ -4132,6 +4132,10 @@ body {
 .shell {
   --gutter: clamp(0.6rem, 1.6vw, 1.4rem);
   margin: var(--gutter);
+  /* Short pages left the sheet floating halfway up a grey screen with the gap below it
+     several times the gap above. Filling the viewport makes the bottom match the other
+     three; anything taller than the window simply grows past it as before. */
+  min-height: calc(100vh - 2 * var(--gutter));
   background: #ffffff;
   border-radius: 18px;
   overflow: hidden;
@@ -4962,9 +4966,93 @@ pre {
  */
 
 .progress {
-  max-width: 32rem;
+  max-width: 58rem;
   margin: 0 auto;
   text-align: center;
+}
+
+/*
+ * The stage list, and the panel of facts beside it.
+ *
+ * The panel is narrow and fixed while the list takes what is left, because the list has
+ * a sentence under every row and the panel has four short values. Sized the other way
+ * round — both flexible — the two columns drift towards equal width and the panel ends
+ * up as mostly air.
+ */
+.progress-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 15rem;
+  gap: clamp(1rem, 2vw, 1.6rem);
+  align-items: start;
+  margin-top: clamp(1.6rem, 3vw, 2.2rem);
+}
+
+/* Below this the two columns are narrower than their contents want to be, and the panel
+   reads better as a footer to the list than as a sidebar squeezed against it. */
+@media (max-width: 860px) {
+  .progress-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.progress-status {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.35rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 4%),
+    0 14px 34px -22px rgb(0 0 0 / 20%);
+  text-align: left;
+}
+
+.fact {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.85rem 0;
+}
+
+.fact + .fact {
+  border-top: 1px solid var(--line);
+}
+
+.fact-label {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  font-size: 0.74rem;
+  color: var(--text-faint);
+}
+
+.fact-value {
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+/* Turning only while the server says something is running — the same rule the stage
+   marks follow, for the same reason. */
+.fact-spinner {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  border: 1.5px solid var(--line);
+  border-top-color: var(--text);
+  border-radius: 50%;
+  animation: fact-turn 0.9s linear infinite;
+}
+
+@keyframes fact-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fact-spinner {
+    animation: none;
+  }
 }
 
 .progress-title {
@@ -4979,7 +5067,6 @@ pre {
 }
 
 .progress .stages {
-  margin-top: clamp(1.6rem, 3vw, 2.2rem);
   padding: 0.4rem;
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -6058,4 +6145,294 @@ pre {
   inset: auto 0 0;
   height: 1px;
   background: var(--line);
+}
+
+/* ==========================================================================
+ * The review screen
+ * ==========================================================================
+ *
+ * The page somebody reaches by succeeding, so it is arranged as three decisions —
+ * understand it, change it, launch it — rather than as a report. Everything that used to
+ * be above the fold and is now under `Advanced` still uses the styles above; what follows
+ * is only the part a normal creator sees.
+ */
+
+.review {
+  max-width: 60rem;
+  margin: 0 auto;
+}
+
+.review-head {
+  text-align: center;
+  padding: clamp(0.6rem, 2vw, 1.4rem) 0 0;
+}
+
+.review-title {
+  font-size: clamp(1.9rem, 4vw, 2.6rem);
+  font-weight: 500;
+  letter-spacing: -0.035em;
+}
+
+.review-ticker {
+  margin-top: 0.3rem;
+  font-size: clamp(1.1rem, 2.4vw, 1.4rem);
+  color: var(--text-faint);
+}
+
+.review-lede {
+  max-width: 46ch;
+  margin: 0.9rem auto 0;
+  font-size: 0.92rem;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.review-section {
+  margin-top: clamp(2rem, 4vw, 2.8rem);
+}
+
+.review-h2 {
+  font-size: 0.76rem;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* --- how your token works ------------------------------------------------- */
+
+/*
+ * Two to four cards, and the grid is told to fit rather than given a column count,
+ * because the number of cards is a property of the market rather than of the layout.
+ */
+.behaviour {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.7rem;
+  margin-top: 0.9rem;
+}
+
+.behaviour-card {
+  display: grid;
+  align-content: start;
+  gap: 0.35rem;
+  padding: 1.1rem 1.2rem 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--inset);
+}
+
+.behaviour-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.09em;
+  color: var(--text-faint);
+}
+
+/* The figure somebody came to check, at the size that says so. */
+.behaviour-value {
+  font-size: 1.45rem;
+  letter-spacing: -0.03em;
+  color: var(--text);
+}
+
+.behaviour-note {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+/* --- what agen decided ---------------------------------------------------- */
+
+/* A market built differently from how it was asked for. Bordered rather than coloured:
+   this is a thing to read, not a thing that went wrong. */
+.notice-card {
+  margin-top: 0.7rem;
+  padding: 1rem 1.15rem;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--text);
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.notice-label {
+  font-size: 0.66rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.notice-title {
+  margin-top: 0.3rem;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.notice-body {
+  margin-top: 0.35rem;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.assumption-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.7rem;
+  margin-top: 0.7rem;
+}
+
+.assumption-card {
+  padding: 0.95rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--inset);
+}
+
+.assumption-term {
+  font-size: 0.68rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.assumption-body {
+  margin-top: 0.3rem;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+/* --- edit with agen ------------------------------------------------------- */
+
+.edit-card {
+  margin-top: clamp(2rem, 4vw, 2.8rem);
+  padding: 1.1rem 1.2rem 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--inset);
+}
+
+.edit-title {
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.edit-row {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 0.7rem;
+}
+
+.edit-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.edit-row input::placeholder {
+  color: var(--text-ghost);
+}
+
+.edit-row .secondary {
+  flex: none;
+  white-space: nowrap;
+}
+
+.edit-examples {
+  margin-top: 0.6rem;
+  font-size: 0.76rem;
+  color: var(--text-faint);
+}
+
+/* --- the launch card ------------------------------------------------------ */
+
+.review .launch-panel {
+  margin-top: clamp(1rem, 2vw, 1.4rem);
+  padding: clamp(1.2rem, 2.6vw, 1.7rem);
+  border: 1px solid var(--line);
+  background: #ffffff;
+}
+
+.review .launch-panel h2 {
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
+}
+
+.review .launch-panel .field label,
+.review .launch-panel .field-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* The read-back, immediately above the irreversible button. */
+.launch-check {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.9rem 1.2rem;
+  margin-top: clamp(1.2rem, 2.4vw, 1.6rem);
+  padding-top: 1.2rem;
+  border-top: 1px solid var(--line);
+}
+
+.launch-check dt {
+  font-size: 0.68rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.launch-check dd {
+  margin-top: 0.25rem;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+/* --- verification --------------------------------------------------------- */
+
+.verified {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 1.3rem;
+  margin-top: clamp(1.4rem, 3vw, 2rem);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.verified-mark span {
+  color: var(--up);
+}
+
+.verified-off span {
+  color: var(--down);
+}
+
+.review .advanced {
+  margin-top: clamp(1.6rem, 3vw, 2.2rem);
+}
+
+.provenance-list {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.provenance-list dt {
+  font-size: 0.7rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.provenance-list dd {
+  margin-top: 0.15rem;
+  font-size: 0.85rem;
+  color: var(--text);
 }

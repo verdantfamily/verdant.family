@@ -41,6 +41,7 @@ import {
   toFactoryArguments,
 } from "@verdant/market-compiler";
 import { agen } from "@verdant/sdk";
+import { AGEN_LAUNCH } from "@verdant/config";
 import { getAddress, isAddress, type Address, type Hex } from "viem";
 
 import { AGEN_ADDRESSES, EXTERNAL } from "./chain";
@@ -53,8 +54,6 @@ export interface LaunchRequest {
   readonly jobId: string;
   /** The connected wallet. Receives the market, and is mixed into every salt. */
   readonly creator: string;
-  /** What the market should be worth when it opens, in wei. */
-  readonly valuationWei: bigint;
   /** Where trading fees are paid for the life of the market. */
   readonly feeReceiver: string;
   /** Spent on the market inside the launch. Zero, or absent, buys nothing. */
@@ -178,15 +177,24 @@ export async function prepareLaunch(request: LaunchRequest): Promise<PreparedLau
 
   const supply = job.manifest.supplyTokens * TOKEN_SCALE;
 
+  // The same tick every time: one supply, one opening valuation, no creator input.
+  // Computed rather than written down as a tick, because the valuation is the thing that
+  // was decided and the tick is only what it works out to — a hardcoded tick would
+  // silently stop meaning 1.5 ether the day either constant moved.
   let initialTick: number;
   try {
-    initialTick = agen.initialTickForValuation({ supply, valuation: request.valuationWei });
+    initialTick = agen.initialTickForValuation({
+      supply,
+      valuation: AGEN_LAUNCH.valuationWei,
+    });
   } catch (error) {
+    // Not a creator's mistake: they were not asked. A market whose supply cannot be
+    // priced at Agen's baseline is a defect in the constants or in the build.
     throw new LaunchError(
-      `That starting valuation cannot be expressed as an opening price. ${
+      `Agen's opening valuation cannot be expressed as a price for this supply. ${
         error instanceof Error ? error.message : ""
       }`,
-      400,
+      500,
     );
   }
 

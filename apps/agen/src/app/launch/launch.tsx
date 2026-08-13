@@ -18,10 +18,13 @@
  * evaluate — which is worse than not asking, because it moves the responsibility without
  * moving the understanding.
  *
- * The one number that is shown back is the valuation the market will *actually* open at.
- * It differs slightly from the one typed, because opening prices land on a grid, and
- * showing the typed number while launching a different one is the small dishonesty that
- * gets found by whoever checks.
+ * The opening valuation went the same way, and it was the last of them. It was a field
+ * with a default of ten ether, which meant it was a question nobody had a method for
+ * answering: a token that has never traded has no price to discover, so the number typed
+ * was either the default or a guess. Worse, it made two Agen markets incomparable — a
+ * market cap on the explore page said as much about what its creator typed as about what
+ * anybody paid. Every Agen market now opens at `AGEN_LAUNCH.valuationWei` across
+ * `AGEN_LAUNCH.supplyTokens`, and the figure is shown back rather than asked for.
  *
  * ## The initial buy is not always offered
  *
@@ -34,6 +37,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatEther, isAddress } from "viem";
 import { useAccount, useSendTransaction, useSwitchChain, useWaitForTransactionReceipt } from "wagmi";
+
+import { AGEN_LAUNCH } from "@verdant/config";
 
 import { AGEN_ADDRESSES, CHAIN_ID, EXPLORER_URL, chain, shortAddress } from "../lib/chain";
 import type { PublicJob } from "../lib/builds";
@@ -63,7 +68,6 @@ export function Launch({ job }: { readonly job: PublicJob }) {
   const send = useSendTransaction();
   const receipt = useWaitForTransactionReceipt({ hash: send.data });
 
-  const [marketCap, setMarketCap] = useState("10");
   const [devBuy, setDevBuy] = useState("");
   const [image, setImage] = useState("");
   const [feeReceiver, setFeeReceiver] = useState("");
@@ -80,7 +84,6 @@ export function Launch({ job }: { readonly job: PublicJob }) {
   const payTo = feeReceiver.trim() === "" ? (address ?? "") : feeReceiver.trim();
   const payToIsAddress = payTo !== "" && isAddress(payTo, { strict: false });
 
-  const capIsAmount = /^\d*\.?\d+$/.test(marketCap.trim()) && Number(marketCap) > 0;
   const buyIsAmount = devBuy.trim() === "" || /^\d*\.?\d+$/.test(devBuy.trim());
 
   const blocked = useMemo(() => {
@@ -90,11 +93,10 @@ export function Launch({ job }: { readonly job: PublicJob }) {
     if (launch === null) return "This build was not cleared, so it cannot be launched.";
     if (!connected) return "Connect a wallet to launch.";
     if (wrongNetwork) return null;
-    if (!capIsAmount) return "Set a starting market cap.";
     if (!buyIsAmount) return "The initial buy is not an amount.";
     if (!payToIsAddress) return "The fee receiver is not an address.";
     return null;
-  }, [launch, connected, wrongNetwork, capIsAmount, buyIsAmount, payToIsAddress]);
+  }, [launch, connected, wrongNetwork, buyIsAmount, payToIsAddress]);
 
   const go = useCallback(async () => {
     setPreparing(true);
@@ -107,7 +109,6 @@ export function Launch({ job }: { readonly job: PublicJob }) {
         body: JSON.stringify({
           creator: address,
           feeReceiver: payTo,
-          valuation: marketCap.trim(),
           devBuy: devBuy.trim() === "" ? "0" : devBuy.trim(),
           ...(image.trim() === "" ? {} : { metadataURI: image.trim() }),
         }),
@@ -145,7 +146,7 @@ export function Launch({ job }: { readonly job: PublicJob }) {
     } finally {
       setPreparing(false);
     }
-  }, [job.id, address, payTo, marketCap, devBuy, image, send]);
+  }, [job.id, address, payTo, devBuy, image, send]);
 
   /**
    * Tell the server what the chain did.
@@ -179,7 +180,7 @@ export function Launch({ job }: { readonly job: PublicJob }) {
 
   return (
     <section className="launch-panel">
-      <h2>launch {job.symbol}</h2>
+      <h2>Ready to launch</h2>
 
       <div className="launch-fields">
         <div className="field">
@@ -195,25 +196,6 @@ export function Launch({ job }: { readonly job: PublicJob }) {
           <p className="field-note">
             Recorded with the market when it is created. Optional, and cannot be changed
             afterwards.
-          </p>
-        </div>
-
-        <div className="field">
-          <label htmlFor="cap">starting market cap</label>
-          <div className="field-amount">
-            <input
-              id="cap"
-              value={marketCap}
-              inputMode="decimal"
-              onChange={(event) => {
-                setMarketCap(event.currentTarget.value);
-              }}
-            />
-            <span>{chain.nativeCurrency.symbol}</span>
-          </div>
-          <p className="field-note">
-            What {job.symbol} is worth in total the moment it opens. Every token exists
-            from the start and is bought from the market rather than handed out.
           </p>
         </div>
 
@@ -272,6 +254,40 @@ export function Launch({ job }: { readonly job: PublicJob }) {
         </div>
       </div>
 
+      {/*
+        The same decisions, read back in one block immediately above the button.
+        A form is a set of things to fill in and a summary is a thing to check, and the
+        moment before an irreversible transaction is the moment to be checking rather
+        than filling in — particularly for the fee receiver, which defaults to a wallet
+        the creator never typed and is fixed for the life of the market.
+      */}
+      <dl className="launch-check">
+        <div>
+          <dt>Token</dt>
+          <dd>{job.name}</dd>
+        </div>
+        <div>
+          <dt>Ticker</dt>
+          <dd>${job.symbol}</dd>
+        </div>
+        <div>
+          <dt>Opening valuation</dt>
+          {/* Read back rather than chosen. Every Agen market opens here, which is what
+              makes two of them comparable on a page that lists both. */}
+          <dd>
+            {formatEther(AGEN_LAUNCH.valuationWei)} {chain.nativeCurrency.symbol}
+          </dd>
+        </div>
+        <div>
+          <dt>Fee receiver</dt>
+          <dd className="mono">{payToIsAddress ? shortAddress(payTo) : "—"}</dd>
+        </div>
+        <div>
+          <dt>Network</dt>
+          <dd>{chain.name}</dd>
+        </div>
+      </dl>
+
       {wrongNetwork ? (
         <button
           type="button"
@@ -296,7 +312,7 @@ export function Launch({ job }: { readonly job: PublicJob }) {
               ? "creating the market…"
               : preparing
                 ? "preparing…"
-                : "launch token"}
+                : "Launch token"}
         </button>
       )}
 

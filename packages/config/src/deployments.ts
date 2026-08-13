@@ -240,7 +240,18 @@ export const ADDONS = {
       deployer: "0x4C812526bF606927a887111299f94e35AE5bd77E",
       registry: "0x3AE1a797750ed9988ea7C2348534519E44Ed0791",
       factory: "0xb0fD1387ae751A377dEC0DF46b643B634eE46acc",
-      router: null,
+      // Broadcast to 4663 on 2026-08-13, in block 35 279 289, by transaction
+      // 0x8263220589c79b1330206a5f0e7121b0f3e3d6f099e108615936081dee63ff8f. Its runtime
+      // code hashes to 0x32ae9df5b519bc102f3bfa043063c00821b2aa2b3df4f942c3710b64872af1f7,
+      // which is what `DeployAgenRouter.s.sol` computed before it was sent, and it holds
+      // the same PoolManager the factory does.
+      //
+      // Deployed after the factory rather than with it, and deliberately not alongside a
+      // new one: the factory, deployer and registry above are unchanged and every market
+      // launched through them holds their addresses immutably. This line must never
+      // change for the same reason in reverse — a hook that authenticates its trades
+      // compiles this address into an immutable of its own.
+      router: "0xFaf5734973329797fCD032fa80a8277E906c187A",
       deployedAtBlock: 34_794_810,
     },
   },

@@ -73,6 +73,22 @@ export default async function Home({
   const shelf = ordered.filter((market) => market.id !== feature?.id);
   const searching = query.length > 0;
 
+  /*
+   * The catalogue, split by the product that made each market.
+   *
+   * One shelf treated the two as interchangeable, and they are not: an Instant token is a
+   * billion of a fixed supply opening at a fixed valuation with a fixed 1.50% fee, and a
+   * Programmable one is whatever its creator described. A reader comparing market caps
+   * across a single mixed grid is comparing two different kinds of thing without being
+   * told, and a reader looking for one kind has to know the artwork to tell them apart.
+   *
+   * Instant leads because it is the shorter promise and the one somebody can act on
+   * immediately. Both sections are always rendered, including empty, so the shelf does not
+   * silently become a page about one product on a day nobody launched the other.
+   */
+  const instant = shelf.filter((market) => market.kind === "instant");
+  const programmable = shelf.filter((market) => market.kind === "programmable");
+
   return (
     <div className="ax-page">
       <section className="ax-cover">
@@ -138,25 +154,25 @@ export default async function Home({
               </section>
             )}
 
-            <section className="ax-shelf ax-reveal">
-              <div className="ax-shelf-head">
-                <h3>{searching ? `Matching “${query}”` : "Explore"}</h3>
-                <Link className="ax-sort" href={sortHref(next.key, query)}>
-                  <Sliders />
-                  {sort.label}
-                </Link>
-              </div>
+            <Shelf
+              title="Explore Instant v4"
+              markets={instant}
+              empty={
+                searching
+                  ? `No Instant token matches “${query}”.`
+                  : "No Instant token yet. The first one launched through Instant appears here."
+              }
+            />
 
-              {shelf.length === 0 ? (
-                <p className="ax-empty">Nothing else yet.</p>
-              ) : (
-                <div className="ax-cards">
-                  {shelf.slice(0, 24).map((market) => (
-                    <TokenCard market={market} key={market.id} />
-                  ))}
-                </div>
-              )}
-            </section>
+            <Shelf
+              title="Explore Programmable v4"
+              markets={programmable}
+              empty={
+                searching
+                  ? `No Programmable token matches “${query}”.`
+                  : "No Programmable token yet. The first one through the build flow appears here, with the rules its creator described."
+              }
+            />
           </>
         )}
 
@@ -183,6 +199,41 @@ export default async function Home({
         </footer>
       </main>
     </div>
+  );
+}
+
+/**
+ * One product's shelf.
+ *
+ * The ordering control is not repeated here. It is in the find bar above, it applies to
+ * both shelves at once, and two identical copies of it stacked down the page would look
+ * like two independent controls that happen to agree.
+ */
+function Shelf({
+  title,
+  markets,
+  empty,
+}: {
+  readonly title: string;
+  readonly markets: readonly MarketSummary[];
+  readonly empty: string;
+}) {
+  return (
+    <section className="ax-shelf ax-reveal">
+      <div className="ax-shelf-head">
+        <h3>{title}</h3>
+      </div>
+
+      {markets.length === 0 ? (
+        <p className="ax-empty">{empty}</p>
+      ) : (
+        <div className="ax-cards">
+          {markets.slice(0, 24).map((market) => (
+            <TokenCard market={market} key={market.id} />
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

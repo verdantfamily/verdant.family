@@ -82,7 +82,7 @@ export const INSTANT_LAUNCHABLE: boolean = true;
 
 /** Why the button is off, in the words the interface uses, when it is off. */
 export const INSTANT_HELD =
-  "Instant opens once creator fees are paid fully in ether. On the contracts live today " +
+  "Instant opens once creator fees are paid fully in ETH. On the contracts live today " +
   "a creator would earn part of their fee in their own token, which is not what Instant " +
   "says it does.";
 

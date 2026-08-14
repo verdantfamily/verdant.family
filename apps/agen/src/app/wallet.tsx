@@ -320,7 +320,7 @@ function Row({
 
       <span className="axw-name">{label(connector)}</span>
 
-      <span className={badge === "installed" ? "axw-badge axw-badge-on" : "axw-badge axw-badge-qr"}>
+      <span className="axw-badge">
         {busy ? "connecting" : badge === "installed" ? "installed" : "QR code"}
       </span>
 

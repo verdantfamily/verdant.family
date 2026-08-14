@@ -277,7 +277,7 @@ export function Preview({
         </div>
 
         <p className="ax-preview-fee">
-          <b>{INSTANT_FEE_PERCENTS.creator.toFixed(2)}% of every trade is yours, in ether.</b>{" "}
+          <b>{INSTANT_FEE_PERCENTS.creator.toFixed(2)}% of every trade is yours, in ETH.</b>{" "}
           This market charges {INSTANT_FEE_PERCENTS.total.toFixed(2)}% on each swap, for the
           life of the market, and {INSTANT_FEE_PERCENTS.platform.toFixed(2)}% of the trade
           goes to Agen. There is no other fee: the pool itself charges nothing on top.

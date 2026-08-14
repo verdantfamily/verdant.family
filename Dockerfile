@@ -61,6 +61,7 @@ COPY packages/ui/package.json packages/ui/
 COPY packages/runtime/package.json packages/runtime/
 COPY apps/web/package.json apps/web/
 COPY apps/indexer/package.json apps/indexer/
+COPY apps/instant-indexer/package.json apps/instant-indexer/
 COPY apps/landing/package.json apps/landing/
 
 RUN corepack enable && corepack prepare pnpm@10.30.0 --activate
@@ -118,20 +119,26 @@ ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL \
 # left over from some earlier build, and the missing step only surfaces in a clean image
 # as four `Module not found` lines at the end of a ten-minute build.
 #
-# The indexer's dependencies are built here too, because this image runs the indexer as
-# well. Railway uses a Dockerfile at the root for every service that has one, so the
+# Both indexers' dependencies are built here too, because this image runs all three
+# processes. Railway uses a Dockerfile at the root for every service that has one, so the
 # feed stopped being able to build the day this file arrived and went on serving an
 # image from before it — a service that looks deployed, answers health checks, and is
 # months behind the schema the site expects. `scripts/railway-start.sh` already chooses
 # which process to be from the service name; this is the other half of that.
 #
-# Written as the dependency closure rather than a list, so a package the feed picks up
-# later is built without anyone remembering this line exists. `@verdant/indexer` itself
-# has no build step.
+# Written as the dependency closure rather than a list, so a package a feed picks up
+# later is built without anyone remembering this line exists. Neither indexer has a build
+# step of its own.
+#
+# The two closures resolve to the same three packages today. Both are named anyway: the
+# reason there are two indexers is that a change to one must not depend on the other, and
+# a build line that only works while their dependencies happen to match is exactly the
+# coupling this split removed.
 RUN pnpm --filter @verdant/config build
 RUN pnpm --filter @verdant/sdk build
 RUN pnpm --filter @verdant/market-compiler build
 RUN pnpm --filter "@verdant/indexer^..." build
+RUN pnpm --filter "@verdant/instant-indexer^..." build
 RUN pnpm --filter @verdant/agen build
 
 # Pre-fetch the Solidity compiler the generated markets pin. Without this the first

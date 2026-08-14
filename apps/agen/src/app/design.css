@@ -3935,9 +3935,39 @@ body:has(.ax-page) {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /*
+   * More air under the render than the desktop card needs, not less.
+   *
+   * Three cards side by side are read as a set: the eye compares them across, and the
+   * space between a picture and its title is doing very little work. Stacked, each card is
+   * read on its own and top to bottom, so that gap becomes the only thing separating an
+   * object from the words about it — and at 26px the disc appeared to be sitting on the
+   * word "Instant". The picture is also given slightly less height, because vertical space
+   * is the scarce thing on a phone and the renders are mostly air at their edges.
+   */
+  .ax-model {
+    padding: 22px 20px 20px;
+  }
+
   .ax-model-art {
-    height: 168px;
-    margin-bottom: 26px;
+    height: 160px;
+    margin-bottom: 42px;
+  }
+
+  .ax-model-name {
+    margin-bottom: 10px;
+    font-size: 1.06rem;
+  }
+
+  .ax-model-copy {
+    margin-bottom: 22px;
+    font-size: 0.82rem;
+  }
+
+  /* A full-width tap target, which is what the card has become. */
+  .ax-model-go {
+    height: 48px;
+    font-size: 0.88rem;
   }
 }
 
@@ -3989,18 +4019,40 @@ body:has(.ax-page) {
   background: var(--ax-paper);
 }
 
+/*
+ * Three regions placed by name, so one arrangement can be two.
+ *
+ * Named areas rather than source order, because the two layouts want different orders and
+ * only one of them can be the markup's. Wide: the chart and the history share the left
+ * column with the panel beside them, spanning both rows. Narrow: chart, then the panel,
+ * then the history — which is the order somebody acts in, and which source order alone
+ * could not produce without the panel also coming before the chart on desktop.
+ *
+ * `column-gap` rather than `gap`: the space between the chart and the history below it is
+ * `.ax-tk-below`'s own margin, and a row gap would be added to it rather than replace it.
+ */
 .ax-tk {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 372px;
-  gap: 34px;
+  grid-template-areas:
+    "chart aside"
+    "rest  aside";
+  column-gap: 34px;
   align-items: start;
 }
 
 .ax-tk-main {
+  grid-area: chart;
+  min-width: 0;
+}
+
+.ax-tk-rest {
+  grid-area: rest;
   min-width: 0;
 }
 
 .ax-tk-aside {
+  grid-area: aside;
   position: sticky;
   top: var(--ax-inset);
   display: flex;
@@ -4698,26 +4750,86 @@ body:has(.ax-page) {
 /* --- narrow -------------------------------------------------------------- */
 
 @media (max-width: 940px) {
+  /* One column, and the order somebody acts in: what it is worth, how to buy it, what
+     has been traded. Sticky is meaningless once the panel is in the flow. */
   .ax-tk {
     grid-template-columns: minmax(0, 1fr);
-    gap: 30px;
+    grid-template-areas:
+      "chart"
+      "aside"
+      "rest";
+    row-gap: 30px;
   }
 
   .ax-tk-aside {
     position: static;
   }
+
+  /* The row gap already separates the history from the panel above it, and the desktop
+     margin was measured against a chart rather than a card. */
+  .ax-tk-rest .ax-tk-below {
+    margin-top: 0;
+  }
 }
 
 @media (max-width: 620px) {
-  .ax-tk-top {
-    flex-wrap: wrap;
-    gap: 16px;
+  /* The page's own margins are already narrowed for a phone by the `.ax-page` rule
+     above; what this section changes is what happens inside them. */
+  .ax-tokenpage .ax-back-pill {
+    margin: 18px 0;
   }
 
-  /* Wrapped under the identity rather than stretched across it: five labels spread edge
-     to edge stop reading as one control. */
+  .ax-tk-top {
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-bottom: 22px;
+  }
+
+  /*
+   * Wrapped under the identity rather than stretched across it — five labels spread edge
+   * to edge stop reading as one control — and then spread within that line, with height.
+   *
+   * On a pointer these are small words that only have to be clicked accurately. On a phone
+   * they are the chart's only control and they are being hit with a thumb, so they get a
+   * 40-pixel target, which `gap` cannot provide: the gap is between the labels rather than
+   * part of them.
+   */
   .ax-tk-ranges {
+    gap: 4px;
+    width: 100%;
     margin-left: 0;
+    justify-content: space-between;
+  }
+
+  .ax-tk-ranges button {
+    min-width: 44px;
+    min-height: 40px;
+    font-size: 0.82rem;
+  }
+
+  /*
+   * Shorter, because the headline and the timeframe strip above it are not.
+   *
+   * A 320-pixel plot under a wrapped header and a two-line readout leaves a phone showing
+   * almost nothing else, and the shape of a line is legible in less height than the number
+   * above it needs to be legible in.
+   */
+  .ax-tk-plot {
+    min-height: 260px;
+  }
+
+  .ax-tk-canvas {
+    height: 260px;
+  }
+
+  .ax-tk-cap {
+    margin-bottom: 18px;
+  }
+
+  /* Wraps rather than overflows: the low/high/trades line is three facts, not one string. */
+  .ax-tk-move {
+    flex-wrap: wrap;
+    gap: 6px 10px;
   }
 
   .ax-tk-tr {
@@ -4731,6 +4843,48 @@ body:has(.ax-page) {
   .ax-tk-tr > :nth-child(4),
   .ax-tk-tr > :nth-child(5) {
     display: none;
+  }
+
+  /* --- the panel that spends money ---------------------------------------- */
+
+  .ax-tk-card {
+    padding: 14px;
+  }
+
+  /* Thumb-sized, both of them. 38 and 34 are pointer measurements. */
+  .ax-tk-sides button {
+    height: 46px;
+  }
+
+  .ax-tk-sizes button {
+    height: 42px;
+  }
+
+  /*
+   * The amount, still the largest thing in the card but no longer wider than it.
+   *
+   * 3.1rem is about 50 pixels a digit. A balance typed into a 328-pixel card overflowed
+   * its own field, and an amount a buyer cannot fully see is the worst possible figure on
+   * this page to be truncating.
+   */
+  .ax-tk-amount {
+    padding: 18px 8px 16px;
+  }
+
+  .ax-tk-amount input {
+    font-size: 2.5rem;
+  }
+
+  .ax-tk-go {
+    height: 52px;
+    font-size: 0.96rem;
+  }
+
+  /* A 40-character address in a 328-pixel card; wrap rather than clip the middle. */
+  .ax-tk-maker b {
+    overflow-wrap: anywhere;
+    word-break: break-all;
+    text-overflow: unset;
   }
 }
 

@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { Bloom } from "../bloom";
+import { INSTANT_LAUNCHABLE } from "../lib/instant";
 
 /**
  * The three ways to open a market, as a shelf.
@@ -23,6 +24,10 @@ import { Bloom } from "../bloom";
  * creation reverts — which is exactly why its card carries a badge and a dead button
  * rather than a link. Hiding it would make the shelf a lie about how many models there
  * are; linking it would make the shelf a lie about what happens next.
+ *
+ * Instant carried the same badge for the same kind of reason and no longer does. The
+ * difference is that its badge is now derived rather than declared, which is the only way
+ * a shelf like this stays true to the screens it points at.
  */
 
 interface Model {
@@ -43,11 +48,14 @@ const MODELS: readonly Model[] = [
     name: "Instant",
     copy: "Launch a standard token with instant trading. No custom logic, just a clean launch.",
     art: "/instant.png",
-    action: "See Instant",
+    action: INSTANT_LAUNCHABLE ? "Launch Instant" : "See Instant",
     href: "/launch/instant",
-    // Reachable, and not creatable. The hold is on the fee currency rather than on the
-    // screen, so the screen explains itself rather than being hidden. See lib/instant.ts.
-    soon: true,
+    // Read from the flag rather than set by hand. This card said "coming soon" for as long
+    // as Instant could not pay creators in ether, which was right; it went on saying it
+    // after the hook that can shipped, which was a shelf contradicting the screen one tap
+    // away. A badge about whether something can be launched belongs to the thing that
+    // decides whether it can be launched. See lib/instant.ts.
+    soon: !INSTANT_LAUNCHABLE,
   },
   {
     id: "programmable",

@@ -179,33 +179,19 @@ export default async function Token({ params }: { params: Promise<{ id: string }
                 </div>
               }
             />
-
-            <Trades trades={trades} now={now} />
-
-            {/*
-              Only a compiled market has mechanics to explain.
-              
-              An Instant token's every rule is "1.50% of every trade", which is already on
-              the trade card two columns to the right. Rendering the section anyway would
-              produce a heading, one card repeating that number, and an empty state block
-              for declared variables it does not declare — a page padded to keep two
-              layouts symmetrical, which is how a standardised product ends up looking
-              like a misconfigured programmable one.
-              
-              The union in `lib/markets.ts` is what enforces this: `market.specification`
-              does not exist on the Instant branch, so this cannot be un-gated by accident.
-            */}
-            {market.kind === "programmable" ? (
-              <Mechanics
-                sections={howThisMarketWorks(market.specification)}
-                descriptors={liveStateDescriptors(market.specification)}
-                readings={state}
-                baseFeePpm={market.specification.baseFeePpm}
-                maxFeePpm={market.specification.maxFeePpm}
-              />
-            ) : null}
           </div>
 
+          {/*
+            The trade panel is the second thing in the document, not the last.
+
+            On a wide screen it is a column beside the chart and the order in the markup
+            barely matters. On a phone the columns stack, and this used to stack after the
+            trade history and, on a programmable market, after every mechanic as well —
+            so the one control on the page that spends money sat several screens below the
+            price somebody came to act on. The grid places the three regions by name, which
+            is what lets the phone read chart, then buy, then history, without the desktop
+            arrangement changing at all.
+          */}
           <aside className="ax-tk-aside" id="trade">
             <TradePanel
               market={{
@@ -270,6 +256,33 @@ export default async function Token({ params }: { params: Promise<{ id: string }
               </div>
             </section>
           </aside>
+
+          <div className="ax-tk-rest">
+            <Trades trades={trades} now={now} />
+
+            {/*
+              Only a compiled market has mechanics to explain.
+              
+              An Instant token's every rule is "1.50% of every trade", which is already on
+              the trade card two columns to the right. Rendering the section anyway would
+              produce a heading, one card repeating that number, and an empty state block
+              for declared variables it does not declare — a page padded to keep two
+              layouts symmetrical, which is how a standardised product ends up looking
+              like a misconfigured programmable one.
+              
+              The union in `lib/markets.ts` is what enforces this: `market.specification`
+              does not exist on the Instant branch, so this cannot be un-gated by accident.
+            */}
+            {market.kind === "programmable" ? (
+              <Mechanics
+                sections={howThisMarketWorks(market.specification)}
+                descriptors={liveStateDescriptors(market.specification)}
+                readings={state}
+                baseFeePpm={market.specification.baseFeePpm}
+                maxFeePpm={market.specification.maxFeePpm}
+              />
+            ) : null}
+          </div>
         </div>
 
         <footer className="ax-footpanel ax-reveal">

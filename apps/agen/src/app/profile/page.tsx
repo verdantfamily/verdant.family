@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { Bloom } from "../bloom";
 import { buildStoreSource } from "../lib/markets";
+import { Claims } from "./claims";
 import { Portfolio } from "./portfolio";
 
 export const dynamic = "force-dynamic";
@@ -28,6 +29,7 @@ export default async function Profile() {
       </Bloom>
 
       <main className="ax-wrap">
+        <Claims />
         <Portfolio markets={markets} now={now} />
 
         <footer className="ax-footpanel ax-reveal">

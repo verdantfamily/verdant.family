@@ -77,26 +77,26 @@ export function Mechanics({
   const live = readings.length > 0;
 
   return (
-    <section className="works" id="how-it-works">
-      <h2 className="section-title">How this token works</h2>
+    <section className="ax-tk-below" id="how-it-works">
+      <p className="ax-tk-label">How this token works</p>
 
-      <div className="rule-cards">
-        <div className="rule-card rule-card-figure">
-          <span className="rule-label">base fee</span>
-          <span className="rule-figure">{feeRate(baseFeePpm)}</span>
-          <span className="rule-note">on an ordinary trade</span>
+      <div className="ax-tk-rules">
+        <div className="ax-tk-rule">
+          <span>base fee</span>
+          <b>{feeRate(baseFeePpm)}</b>
+          <em>on an ordinary trade</em>
         </div>
 
-        <div className="rule-card rule-card-figure">
-          <span className="rule-label">maximum fee</span>
-          <span className="rule-figure">{feeRate(maxFeePpm)}</span>
-          <span className="rule-note">the most any single trade can pay</span>
+        <div className="ax-tk-rule">
+          <span>maximum fee</span>
+          <b>{feeRate(maxFeePpm)}</b>
+          <em>the most any single trade can pay</em>
         </div>
 
         {sections.map((section) => (
-          <div className="rule-card" key={section.heading}>
-            <span className="rule-label">{section.heading.toLowerCase()}</span>
-            <ul className="rule-lines">
+          <div className="ax-tk-rule" key={section.heading}>
+            <span>{section.heading.toLowerCase()}</span>
+            <ul>
               {section.lines.map((line) => (
                 <li key={line}>{line}</li>
               ))}
@@ -106,23 +106,21 @@ export function Mechanics({
       </div>
 
       {descriptors.length === 0 ? null : (
-        <div className="state-block">
-          <div className="state-head">
-            <h3>Current state</h3>
-            {live ? null : <span className="state-note">readable once this token launches</span>}
-          </div>
+        <>
+          <p className="ax-tk-label" style={{ marginTop: "30px" }}>
+            Current state{live ? "" : " — readable once this token launches"}
+          </p>
 
-          <div className="state-grid">
+          <div className="ax-tk-cells">
             {descriptors.map((descriptor) => {
               const reading = byName.get(descriptor.name);
 
               return (
-                <div
-                  className={reading === undefined ? "state-cell unread" : "state-cell"}
-                  key={descriptor.name}
-                >
-                  <span className="state-label">{descriptor.label}</span>
-                  <span className="state-value">{renderValue(descriptor, reading)}</span>
+                <div className="ax-tk-cell" key={descriptor.name}>
+                  <span>{descriptor.label}</span>
+                  <b className={reading === undefined ? "dim" : undefined}>
+                    {renderValue(descriptor, reading)}
+                  </b>
 
                   {/*
                     A counter with a target reads faster as a bar than as a number, but
@@ -132,7 +130,7 @@ export function Mechanics({
                   {descriptor.target !== undefined &&
                   reading !== undefined &&
                   typeof reading.value === "number" ? (
-                    <div className="state-bar" aria-hidden="true">
+                    <div className="ax-tk-bar" aria-hidden="true">
                       <span
                         style={{
                           width: `${String(Math.min(100, (reading.value / descriptor.target) * 100))}%`,
@@ -144,7 +142,7 @@ export function Mechanics({
               );
             })}
           </div>
-        </div>
+        </>
       )}
     </section>
   );

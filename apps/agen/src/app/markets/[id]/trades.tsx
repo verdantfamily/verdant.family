@@ -3,7 +3,7 @@
 import { useState } from "react";
 
 import type { EnrichedTrade } from "../../lib/markets";
-import { age, feeRate, usd } from "../../lib/format";
+import { DASH, age, eth, feeRate, tokens, usd } from "../../lib/format";
 
 /**
  * Activity: what traded, and what the token's own rules did about it.
@@ -49,45 +49,41 @@ export function Trades({
   );
 
   return (
-    <section className="activity">
-      <div className="activity-head">
-        <h2 className="section-title">Activity</h2>
-
-        <div className="activity-tabs" role="tablist" aria-label="activity">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "trades"}
-            className={tab === "trades" ? "on" : ""}
-            onClick={() => {
-              setTab("trades");
-            }}
-          >
-            Trades
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "events"}
-            className={tab === "events" ? "on" : ""}
-            onClick={() => {
-              setTab("events");
-            }}
-          >
-            Token events
-          </button>
-        </div>
+    <section className="ax-tk-below">
+      <div className="ax-tk-tabs" role="tablist" aria-label="activity">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "trades"}
+          className={tab === "trades" ? "on" : ""}
+          onClick={() => {
+            setTab("trades");
+          }}
+        >
+          Recent trades
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "events"}
+          className={tab === "events" ? "on" : ""}
+          onClick={() => {
+            setTab("events");
+          }}
+        >
+          Token events
+        </button>
       </div>
 
       {tab === "trades" ? (
         trades.length === 0 ? (
-          <p className="activity-empty">
+          <p className="ax-tk-none">
             No trades yet. Every trade will appear here with the fee it paid and the rules
             it triggered.
           </p>
         ) : (
-          <div className="trade-table">
-            <div className="trade-row trade-headings" aria-hidden="true">
+          <div className="ax-tk-rows">
+            <div className="ax-tk-tr ax-tk-tr-head" aria-hidden="true">
               <span>side</span>
               <span>amount</span>
               <span>tokens</span>
@@ -96,35 +92,47 @@ export function Trades({
               <span>age</span>
             </div>
 
+            {/*
+              Two denominations, because the two products report in different units.
+              
+              A programmable trade carries `amountUsd` and always has; an Instant trade
+              carries the ether it actually moved, and putting that through a dollar
+              formatter would print a `$` in front of a quantity of ETH. The fee column
+              works the same way: v4 reports zero for an Instant swap because the hook
+              overrides the LP fee and charges the ether leg instead, so the real 1.50%
+              is stated once beneath the table rather than faked per row.
+            */}
             {trades.map((trade) => (
-              <div className={`trade-row trade-${trade.side}`} key={trade.id}>
-                <span className="trade-side">{trade.side}</span>
-                <span>{usd(trade.amountUsd)}</span>
-                <span className="dim">—</span>
-                <span className="dim">{feeRate(trade.feePpm)}</span>
-                <span className="mono dim">{short(trade.trader)}</span>
+              <div className="ax-tk-tr" key={trade.id}>
+                <span className={trade.side}>{trade.side}</span>
+                <span>
+                  {trade.amountEth === undefined
+                    ? usd(trade.amountUsd)
+                    : `${eth(trade.amountEth)} ETH`}
+                </span>
+                <span className="dim">{trade.tokens === undefined ? "—" : tokens(trade.tokens)}</span>
+                <span className="dim">{trade.amountEth === undefined ? feeRate(trade.feePpm) : DASH}</span>
+                <span className="dim">{short(trade.trader)}</span>
                 <span className="dim">{age(trade.at, now)}</span>
               </div>
             ))}
           </div>
         )
       ) : events.length === 0 ? (
-        <p className="activity-empty">
+        <p className="ax-tk-none">
           No events yet. When this token&apos;s rules fire — a round completing, a reward
           paid, a fee changing — each one is recorded here.
         </p>
       ) : (
-        <ul className="event-list">
+        <div className="ax-tk-rows">
           {events.map((event) => (
-            <li key={event.key}>
-              <span className="event-label">{event.label}</span>
-              {event.amountUsd === undefined ? null : (
-                <span className="event-amount">{usd(event.amountUsd)}</span>
-              )}
-              <span className="event-age">{age(event.at, now)}</span>
-            </li>
+            <div className="ax-tk-tr" key={event.key}>
+              <span>{event.label}</span>
+              {event.amountUsd === undefined ? null : <span>{usd(event.amountUsd)}</span>}
+              <span className="dim">{age(event.at, now)}</span>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
     </section>
   );

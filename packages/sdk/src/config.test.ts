@@ -6,6 +6,7 @@ import {
   BOUNDS,
   DYNAMIC_FEE_FLAG,
   EXTERNAL_ADDRESSES,
+  INSTANT_FEES,
   MARKET_MODELS,
   MAX_PROTOCOL_BPS,
   MAX_TICK_ABSOLUTE,
@@ -78,6 +79,21 @@ describe("parameter register", () => {
     expect(BOUNDS.splits.protocolBps.default).toBe(1_000);
     expect(MAX_PROTOCOL_BPS).toBe(2_000);
     expect(BOUNDS.splits.protocolBps.max).toBe(MAX_PROTOCOL_BPS);
+  });
+
+  it("cannot express Instant's split, which is why Instant does not use it", () => {
+    // 0.50 of 1.50 is one third of the fee, and one third is not a whole number
+    // of basis points. This is not a rounding quibble: it is the reason
+    // `INSTANT_FEES` states two shares of the *trade* rather than one share of
+    // the fee, and the reason Instant needs a hook of its own rather than a
+    // setting on the deployed register. Asserted so that a future reader who
+    // proposes "just set protocolBps to 3333" finds the answer here.
+    const asBpsOfTheFee =
+      (INSTANT_FEES.platformPpm * BOUNDS.splits.total) / INSTANT_FEES.totalPpm;
+
+    expect(Number.isInteger(asBpsOfTheFee)).toBe(false);
+    expect(Math.round(asBpsOfTheFee)).toBe(3_333);
+    expect(Math.round(asBpsOfTheFee)).toBeGreaterThan(MAX_PROTOCOL_BPS);
   });
 
   it("evergreen reserve share is 1000..8000 bps", () => {
@@ -449,5 +465,75 @@ describe("time constants", () => {
     expect(SECONDS.minute).toBe(60);
     expect(SECONDS.hour).toBe(3_600);
     expect(SECONDS.day).toBe(86_400);
+  });
+});
+
+/**
+ * Instant's fee, held to one definition across two languages.
+ *
+ * `InstantFees.sol` is what the chain charges and `INSTANT_FEES` is what the interface
+ * quotes. A drift between them is not a failing test somewhere — it is a launch screen
+ * advertising a fee the pool does not take, discovered by whoever is charged the other
+ * one. So the Solidity is read rather than transcribed, the same way
+ * `agen/valuation.test.ts` reads `AgenCurve.sol`.
+ */
+describe("the Instant fee, in both languages", () => {
+  const INSTANT_FEES_SOL = readFileSync(
+    resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../contracts/src/libraries/InstantFees.sol",
+    ),
+    "utf8",
+  );
+
+  const solidityConstant = (name: string): number => {
+    const found = new RegExp(
+      `constant\\s+${name}\\s*=\\s*([\\d_]+)`,
+    ).exec(INSTANT_FEES_SOL);
+    if (found === null) {
+      throw new Error(`InstantFees.sol no longer declares ${name}`);
+    }
+    return Number(found[1]!.replace(/_/g, ""));
+  };
+
+  it("charges what the interface says it charges", () => {
+    expect(INSTANT_FEES.totalPpm).toBe(solidityConstant("TOTAL_PPM"));
+    expect(INSTANT_FEES.creatorPpm).toBe(solidityConstant("CREATOR_PPM"));
+    expect(INSTANT_FEES.platformPpm).toBe(solidityConstant("PLATFORM_PPM"));
+    expect(INSTANT_FEES.denominatorPpm).toBe(solidityConstant("PPM_DENOMINATOR"));
+  });
+
+  it("is 1.50% of a trade, split 1.00% to the creator and 0.50% to the platform", () => {
+    // A second transcription rather than an expression over the constants: the
+    // point of this one is to fail if somebody changes the product, which an
+    // arithmetic identity would not do.
+    expect(INSTANT_FEES.totalPpm).toBe(15_000);
+    expect(INSTANT_FEES.creatorPpm).toBe(10_000);
+    expect(INSTANT_FEES.platformPpm).toBe(5_000);
+
+    const percent = (ppm: number): number =>
+      (ppm / INSTANT_FEES.denominatorPpm) * 100;
+
+    expect(percent(INSTANT_FEES.totalPpm)).toBe(1.5);
+    expect(percent(INSTANT_FEES.creatorPpm)).toBe(1);
+    expect(percent(INSTANT_FEES.platformPpm)).toBe(0.5);
+  });
+
+  it("leaves nothing over, so there is no third party to the fee", () => {
+    expect(INSTANT_FEES.creatorPpm + INSTANT_FEES.platformPpm).toBe(
+      INSTANT_FEES.totalPpm,
+    );
+  });
+
+  it("stays inside the fee range the schedule and Uniswap both accept", () => {
+    // The hook charges this rather than the pool, but the number still travels
+    // through `ScheduleLib` and v4's fee field, and both have ceilings.
+    expect(INSTANT_FEES.totalPpm).toBeGreaterThanOrEqual(
+      BOUNDS.schedule.feePpm.min,
+    );
+    expect(INSTANT_FEES.totalPpm).toBeLessThanOrEqual(
+      BOUNDS.schedule.feePpm.max,
+    );
+    expect(INSTANT_FEES.totalPpm).toBeLessThan(OVERRIDE_FEE_FLAG);
   });
 });

@@ -85,14 +85,18 @@ if (what === "interpret") {
   const output = await design(provider, { specification, context, match: matched.value });
   console.log(`\n  design   ${((Date.now() - designStarted) / 1000).toFixed(1)}s`);
 
-  console.log(`\n  approach: ${output.value.approach.slice(0, 200)}`);
-  for (const component of output.value.components) {
+  // `design` returns the plan and the deployment it was arranged into, rather than the
+  // plan's fields at the top level as it once did.
+  const { plan } = output.value;
+
+  console.log(`\n  approach: ${plan.approach.slice(0, 200)}`);
+  for (const component of plan.components) {
     const reuses = component.reuses.length === 0 ? "" : `  reuses: ${component.reuses.join(", ")}`;
     console.log(`  ${component.role.padEnd(14)} ${component.contractName.padEnd(24)}${reuses}`);
   }
 
   console.log(
-    `\n  components: ${String(output.value.components.length)}` +
+    `\n  components: ${String(plan.components.length)}` +
       `   ${String(output.inputTokens ?? "-")}in ${String(output.outputTokens ?? "-")}out`,
   );
   console.log(`  TOTAL    ${((Date.now() - started) / 1000).toFixed(1)}s\n`);

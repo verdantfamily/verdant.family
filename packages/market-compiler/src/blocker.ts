@@ -143,6 +143,20 @@ export function blockerFor(failure: Failure): Blocker {
         retryable: true,
       };
 
+    case FailureCode.HarnessInfrastructure:
+      return {
+        headline: "Agen's test environment failed.",
+        explanation:
+          "The market's behavior tests never ran because Agen could not reproduce its own " +
+          "launch environment. This is an Agen infrastructure failure, not evidence that " +
+          "the market logic is wrong.",
+        nextStep:
+          creatorSafe(failure.detail) ??
+          "Agen needs its canonical test deployment corrected before this build can be retried.",
+        ask: null,
+        retryable: true,
+      };
+
     case FailureCode.CompilationUnrepairable:
       return {
         headline: "Agen could not get this market to build.",
@@ -167,6 +181,21 @@ export function blockerFor(failure: Failure): Blocker {
         nextStep:
           "Build again. Agen now knows this failure and repairs it automatically, so a " +
           "fresh run usually gets past it.",
+        ask: null,
+        retryable: true,
+      };
+
+    case FailureCode.ArchitectureInconsistent:
+      return {
+        headline: "Agen's plan and its contracts disagreed.",
+        explanation:
+          "Agen decides how a market is assembled before it writes it, then checks the " +
+          "contracts against that decision. This time the two did not match, and it stopped " +
+          "rather than launching a market whose pieces were connected differently from the " +
+          "way they were designed.",
+        nextStep:
+          "Build again. The check that caught this runs before anything is deployed, so " +
+          "nothing was put on a chain and a fresh run usually agrees with itself.",
         ask: null,
         retryable: true,
       };

@@ -307,7 +307,7 @@ function Row({
     >
       <Mark connector={connector} />
 
-      <span className="axw-name">{connector.name}</span>
+      <span className="axw-name">{label(connector)}</span>
 
       <span className={badge === "installed" ? "axw-badge axw-badge-on" : "axw-badge axw-badge-qr"}>
         {busy ? "connecting" : badge === "installed" ? "installed" : "QR code"}
@@ -327,21 +327,50 @@ function Row({
 }
 
 /**
- * The wallet's own icon where it announced one, and its initial where it did not.
+ * What to call a connector on screen.
+ *
+ * Every announced wallet names itself, so this only ever fires for the generic injected
+ * fallback — which calls itself "Injected", a word that means nothing to anybody who is
+ * not writing this file. It appears at all only when no wallet announced itself, so the
+ * honest description is the one thing we do know about it: it is in the browser.
+ */
+function label(connector: Connector): string {
+  return connector.id === "injected" ? "Browser wallet" : connector.name;
+}
+
+/** WalletConnect's own mark. It is configured rather than announced, so it carries none. */
+function WalletConnectMark() {
+  return (
+    <svg className="axw-logo" viewBox="0 0 480 332" aria-hidden="true">
+      <path
+        fill="#3B99FC"
+        d="M126.613 93.984c62.483-61.519 164.291-61.519 226.774 0l7.519 7.409a7.7 7.7 0 0 1 0 11.142l-25.722 25.33a4.05 4.05 0 0 1-5.657 0l-10.349-10.189c-43.587-42.931-114.769-42.931-158.356 0l-11.083 10.912a4.05 4.05 0 0 1-5.657 0L118.36 113.258a7.7 7.7 0 0 1 0-11.142zm280.051 52.551 22.892 22.548a7.7 7.7 0 0 1 0 11.142L326.373 281.799a8.1 8.1 0 0 1-11.315 0l-73.228-72.118a2.03 2.03 0 0 0-2.828 0l-73.227 72.118a8.1 8.1 0 0 1-11.315 0L51.277 180.225a7.7 7.7 0 0 1 0-11.142l22.891-22.548a8.1 8.1 0 0 1 11.315 0l73.228 72.119a2.03 2.03 0 0 0 2.828 0l73.226-72.119a8.1 8.1 0 0 1 11.315 0l73.228 72.119a2.03 2.03 0 0 0 2.828 0l73.226-72.119a8.1 8.1 0 0 1 11.302 0z"
+      />
+    </svg>
+  );
+}
+
+/**
+ * The wallet's own icon where it announced one, and a fallback where it did not.
  *
  * EIP-6963 carries an icon as a data URI, so an announced extension draws itself. The
- * WalletConnect connector is configured rather than announced and has none, which is why
- * there is a fallback at all — a broken image would be worse than a letter.
+ * two connectors configured by hand have no icon of their own: WalletConnect gets its
+ * real mark above, and the browser-wallet fallback gets a letter, because a broken image
+ * would be worse than one.
  */
 function Mark({ connector }: { readonly connector: Connector }) {
   const icon = connector.icon;
   const failed = useRef(false);
   const [broken, setBroken] = useState(false);
 
+  if (connector.id === "walletConnect" && (icon === undefined || broken)) {
+    return <WalletConnectMark />;
+  }
+
   if (icon === undefined || broken) {
     return (
       <span className="axw-mono" aria-hidden="true">
-        {connector.name.slice(0, 1).toUpperCase()}
+        {label(connector).slice(0, 1).toUpperCase()}
       </span>
     );
   }

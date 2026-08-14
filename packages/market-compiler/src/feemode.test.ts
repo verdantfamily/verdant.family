@@ -197,10 +197,13 @@ describe("which fee a market's pool must be opened with", () => {
     expect(result.problem).toMatch(/two different things at once/);
   });
 
-  it("fails the build rather than guessing at a fee it cannot resolve", async () => {
-    // Compared against an immutable. Nothing here executes the contract, so the value
-    // is genuinely unknown — and a pool opened at a guessed fee is the failure this
-    // module exists to prevent.
+  it("defers a guard it cannot read to the launch instead of refusing the market", async () => {
+    // Compared against an immutable, so this reader genuinely cannot say what the value
+    // is. It used to refuse the market outright, which threw away a plain "1% on sells"
+    // build over the reader's vocabulary. The canonical fixture now opens the pool with
+    // this exact fee in Foundry before anything reaches a chain, and the manifest is
+    // built from the number the fixture proved — so the honest answer is to try it and
+    // let the launch say, rather than to guess that no answer exists.
     const result = await probe(`    uint24 public immutable requiredFee = 500;
 
     function _afterInitialize(address, PoolKey calldata key, uint160, int24)
@@ -211,7 +214,25 @@ describe("which fee a market's pool must be opened with", () => {
         poolBound = true;
     }`);
 
-    expect(result.problem).toMatch(/cannot read|cannot resolve/);
+    expect(result.problem).toBeNull();
+    expect(result.lpFee).toBe(DYNAMIC_FEE_FLAG);
+    expect(result.reason).toMatch(/could not read the fee guard/);
+  });
+
+  it("still refuses a requirement no pool could satisfy", async () => {
+    const result = await probe(`    function _beforeInitialize(address, PoolKey calldata key, uint160) internal override {
+        if (key.fee != 0) revert InvalidPool();
+    }
+
+    function _afterInitialize(address, PoolKey calldata key, uint160, int24)
+        internal
+        override
+    {
+        if (key.fee != 3000) revert InvalidPool();
+        poolBound = true;
+    }`);
+
+    expect(result.problem).toMatch(/two different things at once/);
   });
 
   it("says so when the hook is not in the build at all", async () => {

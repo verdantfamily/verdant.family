@@ -51,7 +51,7 @@ import type {
   ModelProvider,
 } from "@verdant/market-compiler";
 
-import { GENERATED_ROOT, jobStore, VENDOR_ROOT } from "./builds";
+import { escalationProviderOrNull, GENERATED_ROOT, jobStore, VENDOR_ROOT } from "./builds";
 import { AGEN_ADDRESSES, AGEN_ROUTER, EXTERNAL } from "./chain";
 
 /**
@@ -272,8 +272,14 @@ function pump(): void {
 async function execute({ job, provider, answers }: Pending): Promise<void> {
   const deployment = probeDeployment();
 
+  // Read here rather than carried on the queue entry: which vendor answers a stuck repair
+  // is a property of the server, not of the build that was submitted, and a build resumed
+  // after a restart should get whatever is configured now.
+  const escalation = escalationProviderOrNull();
+
   const options = {
     provider,
+    ...(escalation === null ? {} : { escalationProvider: escalation }),
     store: jobStore(),
     vendorRoot: VENDOR_ROOT,
     generatedRoot: GENERATED_ROOT,

@@ -78,6 +78,20 @@ export * as launch from "./launch/index.js";
 export * as agen from "./agen/index.js";
 
 /**
+ * Launching and claiming an Instant market, through `InstantFactory`.
+ *
+ * The third write path into a launch, and separate from `launch` above for the reason
+ * ADR-014 gives: Instant is a preset with its own factory rather than a configuration of
+ * Verdant's, so its `create` takes seven fields where Verdant's takes eighteen.
+ *
+ * The claim half is here rather than in `fees` because it is a different mechanism, not a
+ * variant of one. Instant's fee never enters the locked position, so there is no
+ * collection to perform first and no token side to report — a creator's earnings are a
+ * single ether figure the vault already knows.
+ */
+export * as instant from "./instant/index.js";
+
+/**
  * Quoting and building a swap, through the Universal Router already deployed on
  * 4663.
  *

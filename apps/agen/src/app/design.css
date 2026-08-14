@@ -41,8 +41,20 @@
   --ax-line-soft: #f1f1f1;
   --ax-fill: #f7f7f7;
 
+  /*
+   * A shade above `--ax-fill`, for surfaces that carry a whole panel rather than tint a
+   * control. `--ax-fill` is the grey of a pill or an input sitting inside something else;
+   * at the size of a trade card or a footer it is heavy enough to read as a second page
+   * colour, and this is the one that stays a panel on white.
+   */
+  --ax-panel: #fafafa;
+
   --ax-up: #16794b;
   --ax-down: #b4232a;
+
+  /* The trading green. Lighter than `--ax-up`, which is a green for text on white and is
+     nearly black at button size. */
+  --ax-buy: #17c06b;
 
   --ax-r-sm: 10px;
   --ax-r-md: 16px;
@@ -3087,6 +3099,1638 @@ body:has(.ax-page) {
   .ax-row-rule {
     grid-column: 1 / -1;
     margin-top: 4px;
+  }
+}
+
+/* ---------------------------------------------------------------- instant */
+
+/*
+ * Narrower than the create measure. Instant is a short form and a button; given the full
+ * 780px its two-column rows stretch into something that reads like a settings page.
+ */
+.ax-instant {
+  max-width: 640px;
+  padding-bottom: 10px;
+}
+
+.ax-back-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  margin: 30px 0 26px;
+  padding: 0 16px;
+  font-size: 0.82rem;
+  font-weight: 450;
+  letter-spacing: -0.012em;
+  color: var(--ax-body);
+  text-decoration: none;
+  background: var(--ax-fill);
+  border-radius: 999px;
+  transition: background 0.18s var(--ax-ease), transform 0.18s var(--ax-spring);
+}
+
+.ax-back-pill:hover {
+  background: #efefef;
+  transform: translateX(-2px);
+}
+
+/* A label above the thing it names, and nothing else. The programmable flow's `ax-field`
+   is a pill on a grey panel; this form sits on white, so the field is the grey. */
+.ax-in {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 20px;
+}
+
+.ax-in > span {
+  font-size: 0.79rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--ax-ink);
+}
+
+.ax-in input,
+.ax-in textarea {
+  width: 100%;
+  font: inherit;
+  font-size: 0.92rem;
+  letter-spacing: -0.012em;
+  color: var(--ax-ink);
+  background: var(--ax-fill);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  outline: none;
+  transition: background 0.16s var(--ax-ease), border-color 0.16s var(--ax-ease),
+    box-shadow 0.16s var(--ax-ease);
+}
+
+.ax-in input {
+  height: 46px;
+  padding: 0 15px;
+}
+
+.ax-in textarea {
+  min-height: 74px;
+  padding: 13px 15px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.ax-in input::placeholder,
+.ax-in textarea::placeholder {
+  color: var(--ax-faint);
+}
+
+.ax-in input:focus,
+.ax-in textarea:focus {
+  border-color: #dcdcdc;
+  box-shadow: 0 0 0 3px rgb(11 11 12 / 5%);
+}
+
+.ax-in input:disabled {
+  color: var(--ax-faint);
+  cursor: not-allowed;
+}
+
+.ax-in-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 24px;
+}
+
+.ax-in-row-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ax-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: var(--ax-muted);
+  cursor: pointer;
+}
+
+.ax-check input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--ax-ink);
+  cursor: pointer;
+}
+
+/* The amount field, with the currency at both ends: its mark where the caret starts, so
+   what is being spent is legible before anything is typed, and its ticker at the far end
+   where the eye lands after typing. */
+.ax-amount {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 16px;
+  background: var(--ax-fill);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  transition: border-color 0.16s var(--ax-ease), box-shadow 0.16s var(--ax-ease);
+}
+
+.ax-amount:focus-within {
+  border-color: #dcdcdc;
+  box-shadow: 0 0 0 3px rgb(11 11 12 / 5%);
+}
+
+.ax-amount-mark {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+
+.ax-in .ax-amount input {
+  height: auto;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.ax-amount em {
+  flex: none;
+  font-style: normal;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--ax-muted);
+}
+
+.ax-adv {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  margin-bottom: 22px;
+  padding: 0 14px;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 450;
+  letter-spacing: -0.012em;
+  color: var(--ax-body);
+  background: var(--ax-fill);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.18s var(--ax-ease);
+}
+
+.ax-adv:hover {
+  background: #efefef;
+}
+
+.ax-adv svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.22s var(--ax-ease);
+}
+
+.ax-adv[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+/* Light rather than black, because it does not commit anything: the card behind it is
+   where the irreversible button lives, and two black buttons in a row would say the
+   first one launches. */
+.ax-preview-go {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 54px;
+  font: inherit;
+  font-size: 0.94rem;
+  font-weight: 500;
+  letter-spacing: -0.013em;
+  color: var(--ax-ink);
+  background: var(--ax-paper);
+  border: 1px solid var(--ax-line);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: background 0.18s var(--ax-ease), transform 0.18s var(--ax-spring),
+    box-shadow 0.18s var(--ax-ease);
+}
+
+.ax-preview-go:hover:not(:disabled) {
+  background: var(--ax-fill);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px -14px rgb(0 0 0 / 30%);
+}
+
+.ax-preview-go:active:not(:disabled) {
+  transform: translateY(0) scale(0.995);
+}
+
+.ax-preview-go:disabled {
+  color: var(--ax-faint);
+  cursor: not-allowed;
+}
+
+.ax-freenote {
+  margin: 16px 0 0;
+  text-align: center;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--ax-faint);
+}
+
+/* --- the logo field ------------------------------------------------------- */
+
+.ax-logo {
+  min-width: 0;
+}
+
+.ax-logo-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 46px;
+  padding: 0 14px 0 6px;
+  font: inherit;
+  color: var(--ax-muted);
+  text-align: left;
+  background: var(--ax-fill);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.18s var(--ax-ease);
+}
+
+.ax-logo-row:hover {
+  background: #efefef;
+}
+
+.ax-logo-tile {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  color: var(--ax-faint);
+  background: #ececec;
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.ax-logo-tile svg {
+  width: 18px;
+  height: 18px;
+}
+
+.ax-logo-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ax-logo-busy {
+  position: absolute;
+  inset: 0;
+  background: rgb(255 255 255 / 55%);
+}
+
+.ax-logo-text {
+  font-size: 0.88rem;
+  letter-spacing: -0.012em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ax-logo-error {
+  margin: 6px 0 0;
+  font-size: 0.72rem;
+  color: var(--ax-down);
+}
+
+/* --- the confirmation card ------------------------------------------------ */
+
+.ax-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(12 12 14 / 34%);
+  backdrop-filter: blur(4px);
+  animation: axw-fade 0.18s var(--ax-ease) both;
+}
+
+/*
+ * Outlined rather than shadowed. A card that has to be looked at before something
+ * irreversible should read as an object on the page, not as a panel floating over it.
+ */
+.ax-preview {
+  width: min(560px, 100%);
+  padding: 22px;
+  background: var(--ax-paper);
+  border: 3px solid var(--ax-ink);
+  border-radius: 30px;
+  animation: ax-rise 0.24s var(--ax-ease) both;
+}
+
+.ax-preview-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 18px;
+  margin-bottom: 20px;
+}
+
+.ax-preview-art {
+  display: grid;
+  place-items: center;
+  width: 116px;
+  height: 116px;
+  background: var(--ax-fill);
+  border-radius: 24px;
+  overflow: hidden;
+}
+
+.ax-preview-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ax-preview-id {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding-top: 8px;
+}
+
+.ax-preview-id strong {
+  font-size: clamp(1.5rem, 1.1rem + 1.6vw, 2.1rem);
+  font-weight: 500;
+  letter-spacing: -0.032em;
+  line-height: 1.1;
+  color: var(--ax-ink);
+  overflow-wrap: anywhere;
+}
+
+.ax-preview-id em {
+  font-style: normal;
+  font-size: 1.15rem;
+  font-weight: 500;
+  letter-spacing: -0.022em;
+  color: var(--ax-muted);
+}
+
+.ax-preview-links {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  padding-top: 10px;
+  color: var(--ax-ink);
+}
+
+.ax-preview-links a {
+  display: inline-grid;
+  place-items: center;
+  color: inherit;
+  transition: opacity 0.18s var(--ax-ease), transform 0.18s var(--ax-spring);
+}
+
+.ax-preview-links a:hover {
+  opacity: 0.6;
+  transform: translateY(-1px);
+}
+
+.ax-preview-links svg {
+  width: 21px;
+  height: 21px;
+}
+
+/* Read from the register a moment ago, so it sits above the button rather than in the
+   small print under it. */
+.ax-preview-fee {
+  margin: 0 0 16px;
+  padding: 15px 18px;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--ax-body);
+  background: var(--ax-fill);
+  border-radius: 14px;
+}
+
+.ax-preview-fee b {
+  font-weight: 500;
+  color: var(--ax-ink);
+}
+
+/* The one irreversible control on the site, and the only green on it. */
+.ax-launch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 64px;
+  font: inherit;
+  font-size: 1.3rem;
+  font-weight: 500;
+  letter-spacing: -0.022em;
+  color: #fff;
+  text-decoration: none;
+  background: #1eac02;
+  border: 0;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: background 0.18s var(--ax-ease), transform 0.18s var(--ax-spring);
+}
+
+.ax-launch:hover:not(:disabled) {
+  background: #1a9702;
+  transform: translateY(-1px);
+}
+
+.ax-launch:active:not(:disabled) {
+  transform: translateY(0) scale(0.99);
+}
+
+.ax-launch:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.ax-preview-back {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 8px;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--ax-muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.ax-preview-back:hover:not(:disabled) {
+  color: var(--ax-ink);
+}
+
+.ax-preview-note {
+  margin: 12px 0 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--ax-down);
+}
+
+.ax-preview-live {
+  margin: 0 0 14px;
+  font-size: 0.92rem;
+  letter-spacing: -0.012em;
+  color: var(--ax-ink);
+}
+
+.ax-preview-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 18px;
+}
+
+.ax-preview-facts dt {
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ax-faint);
+}
+
+.ax-preview-facts dd {
+  margin: 3px 0 0;
+  font-size: 0.85rem;
+  color: var(--ax-ink);
+}
+
+.ax-preview-away {
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+  margin: 14px 0 0;
+  font-size: 0.8rem;
+}
+
+.ax-preview-away a {
+  color: var(--ax-muted);
+}
+
+@media (max-width: 640px) {
+  .ax-in-row,
+  .ax-in-row-3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ax-preview-head {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .ax-preview-art {
+    width: 84px;
+    height: 84px;
+    border-radius: 18px;
+  }
+
+  .ax-preview-links {
+    grid-column: 1 / -1;
+    padding-top: 0;
+  }
+
+  .ax-launch {
+    height: 56px;
+    font-size: 1.1rem;
+  }
+}
+
+/* A hold on the product rather than an error in the form, so it is stated in the page's
+   own voice and not in red. */
+.ax-held {
+  margin: 0 0 26px;
+  padding: 15px 18px;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--ax-body);
+  background: var(--ax-fill);
+  border-radius: 14px;
+}
+
+.ax-held strong {
+  font-weight: 500;
+  color: var(--ax-ink);
+}
+
+/* ---------------------------------------------------------------- claiming fees */
+
+.ax-claims {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ax-claim-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  background: var(--ax-fill);
+  border-radius: var(--ax-r-lg);
+}
+
+.ax-claim-total span {
+  font-size: 0.8rem;
+  color: var(--ax-muted);
+}
+
+.ax-claim-total strong {
+  font-size: clamp(1.3rem, 1.1rem + 0.9vw, 1.8rem);
+  font-weight: 500;
+  letter-spacing: -0.028em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ax-ink);
+}
+
+.ax-claim {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px;
+  border: 1px solid var(--ax-line);
+  border-radius: var(--ax-r-md);
+}
+
+.ax-claim-id {
+  font-size: 0.9rem;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--ax-ink);
+}
+
+.ax-claim-figs {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ax-claim-figs b {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--ax-ink);
+}
+
+/* The token side, which a creator did not ask to be paid in. Set back from the ether
+   figure rather than beside it as an equal, because it is not one. */
+.ax-claim-figs em {
+  font-style: normal;
+  font-size: 0.78rem;
+  color: var(--ax-faint);
+}
+
+.ax-claim-go {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 18px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 450;
+  letter-spacing: -0.012em;
+  color: #fff;
+  background: var(--ax-ink);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: opacity 0.18s var(--ax-ease), transform 0.18s var(--ax-spring);
+}
+
+.ax-claim-go:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.ax-claim-go:disabled {
+  color: var(--ax-muted);
+  background: var(--ax-fill);
+  cursor: not-allowed;
+}
+
+.ax-claim-note {
+  margin: 14px 0 0;
+  max-width: 62ch;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--ax-muted);
+}
+
+@media (max-width: 560px) {
+  .ax-claim {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 10px;
+  }
+
+  .ax-claim-go {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ---------------------------------------------------------------- launch models */
+
+/*
+ * The shelf on the create page.
+ *
+ * Narrower than the token shelves on purpose. Three cards read as a choice between three
+ * things; the same three stretched across the full measure read as the beginning of a
+ * catalogue, and a creator scanning for a fourth will not find one.
+ */
+.ax-choose {
+  max-width: 1020px;
+}
+
+.ax-lede {
+  margin: 44px 0 30px;
+  text-align: center;
+  font-size: 0.85rem;
+  font-weight: 500;
+  letter-spacing: -0.012em;
+  color: var(--ax-ink);
+}
+
+.ax-models {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 26px;
+}
+
+.ax-model {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  background: var(--ax-fill);
+  border-radius: var(--ax-r-lg);
+  transition: background 0.22s var(--ax-ease), transform 0.22s var(--ax-ease),
+    box-shadow 0.22s var(--ax-ease);
+}
+
+.ax-model:hover {
+  background: #f2f2f2;
+  transform: translateY(-2px);
+  box-shadow: 0 14px 34px -14px rgb(0 0 0 / 18%);
+}
+
+/* No tile behind it, unlike a token's machine: these are rendered objects lit on white,
+   and a dark plate under one would crop the light it was rendered with. */
+.ax-model-art {
+  display: grid;
+  place-items: center;
+  height: 210px;
+  margin-bottom: 34px;
+  padding: 8px;
+}
+
+/*
+ * Sized to the box rather than bounded by it.
+ *
+ * `max-width`/`max-height` left the three renders free to resolve at their intrinsic
+ * size when the percentage had nothing definite to resolve against, and the tallest of
+ * them then grew out of the box and sat on top of its own title. Giving the element the
+ * box's dimensions and letting `contain` letterbox inside them means the picture cannot
+ * exceed the space reserved for it, whatever it is a picture of.
+ */
+.ax-model-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transition: transform 0.45s var(--ax-ease);
+}
+
+.ax-model:hover .ax-model-art img {
+  transform: scale(1.04);
+}
+
+.ax-model-name {
+  margin: 0 0 8px;
+  font-size: 1rem;
+  font-weight: 500;
+  letter-spacing: -0.022em;
+  color: var(--ax-ink);
+}
+
+/* Grows so the three buttons sit on one line whatever the copy runs to. */
+.ax-model-copy {
+  flex: 1;
+  margin: 0 0 18px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--ax-faint);
+}
+
+.ax-model-go {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 42px;
+  padding: 0 18px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 450;
+  letter-spacing: -0.012em;
+  color: #fff;
+  text-align: center;
+  text-decoration: none;
+  background: #1c1c1e;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.2s var(--ax-ease), transform 0.2s var(--ax-spring),
+    opacity 0.2s var(--ax-ease);
+}
+
+.ax-model-go:hover:not(:disabled) {
+  background: var(--ax-ink);
+  transform: translateY(-1px);
+}
+
+.ax-model-go:active:not(:disabled) {
+  transform: translateY(0) scale(0.985);
+}
+
+.ax-model-go:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+
+.ax-model-soon {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 4px 10px;
+  font-size: 0.68rem;
+  letter-spacing: -0.006em;
+  color: var(--ax-muted);
+  background: var(--ax-paper);
+  border-radius: 999px;
+}
+
+@media (max-width: 700px) {
+  .ax-models {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ax-model-art {
+    height: 168px;
+    margin-bottom: 26px;
+  }
+}
+
+/* ---------------------------------------------------------------- the token page */
+
+/*
+ * Where a token is traded.
+ *
+ * The only screen in the product whose job is a decision rather than a browse, so it is
+ * the only one without a banner: no photograph, no bloom, no title band. The navigation
+ * sits on the white as a grey pill and the price is the first thing under it, because
+ * anything above the price is something a visitor has to scroll past to reach the reason
+ * they opened the page.
+ *
+ * ## Two columns, and which one gets the width
+ *
+ * The wide left carries price, chart and trades; the narrow right carries the only
+ * control on the page that spends money, plus the two facts somebody checks before
+ * spending it — the contract address and who made this. On a phone the same order
+ * stacks, which puts the panel directly under the chart rather than under the trade
+ * history.
+ *
+ * ## The panels
+ *
+ * Every grey box here is `--ax-panel` on white with no border. A border would be a second
+ * edge on a shape whose fill already has one, and at this many boxes the page starts to
+ * look like a form. The card is the grouping; the label above it is the heading.
+ */
+
+.ax-tokenpage {
+  padding-bottom: 1px;
+}
+
+/*
+ * The bar, landed.
+ *
+ * Everywhere else it floats over a photograph and needs a white fill and a shadow to
+ * separate from it. Here there is nothing behind it, so both would be lifting it off a
+ * surface it is already sitting on.
+ */
+.ax-tokenpage .ax-navpill {
+  position: static;
+  margin: var(--ax-inset) var(--ax-inset) 0;
+  background: var(--ax-panel);
+  box-shadow: none;
+}
+
+.ax-tokenpage .ax-brand {
+  background: var(--ax-paper);
+}
+
+.ax-tk {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 372px;
+  gap: 34px;
+  align-items: start;
+}
+
+.ax-tk-main {
+  min-width: 0;
+}
+
+.ax-tk-aside {
+  position: sticky;
+  top: var(--ax-inset);
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  min-width: 0;
+}
+
+/* --- the identity and the timeframe -------------------------------------- */
+
+.ax-tk-top {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 30px;
+}
+
+.ax-tk-who {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-width: 0;
+}
+
+.ax-tk-id {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ax-tk-id h1 {
+  margin: 0;
+  font-size: 1.12rem;
+  font-weight: 500;
+  letter-spacing: -0.026em;
+  color: var(--ax-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ax-tk-id span {
+  font-size: 0.78rem;
+  letter-spacing: -0.01em;
+  color: var(--ax-faint);
+}
+
+/*
+ * The timeframe strip: text, not pills.
+ *
+ * It is the only control on this half of the page, so it needs no container to be found;
+ * giving it one would make four buttons compete with the market cap underneath, which is
+ * the thing the eye is supposed to land on first.
+ */
+.ax-tk-ranges {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  margin-left: auto;
+}
+
+.ax-tk-ranges button {
+  padding: 0;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 450;
+  letter-spacing: -0.01em;
+  color: var(--ax-faint);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  transition: color 0.16s var(--ax-ease);
+}
+
+.ax-tk-ranges button:hover {
+  color: var(--ax-body);
+}
+
+.ax-tk-ranges button.on {
+  font-weight: 600;
+  color: var(--ax-ink);
+}
+
+/* --- the headline -------------------------------------------------------- */
+
+.ax-tk-cap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 22px;
+}
+
+.ax-tk-cap > span {
+  font-size: 0.78rem;
+  letter-spacing: -0.01em;
+  color: var(--ax-muted);
+}
+
+.ax-tk-cap > strong {
+  font-size: clamp(1.9rem, 1.35rem + 2vw, 2.7rem);
+  font-weight: 500;
+  letter-spacing: -0.038em;
+  line-height: 1.05;
+  color: var(--ax-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Not a figure, so not set at figure size. See `hasFigure` in `chart.tsx`. */
+.ax-tk-cap > strong.absent {
+  font-size: clamp(1.15rem, 1rem + 0.6vw, 1.5rem);
+  letter-spacing: -0.026em;
+  color: var(--ax-faint);
+}
+
+.ax-tk-move {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.78rem;
+  color: var(--ax-muted);
+}
+
+.ax-tk-move .up {
+  color: var(--ax-up);
+}
+
+.ax-tk-move .down {
+  color: var(--ax-down);
+}
+
+/* --- the chart ----------------------------------------------------------- */
+
+.ax-tk-plot {
+  position: relative;
+  min-height: 320px;
+}
+
+/*
+ * The line's colour is set here rather than in the component.
+ *
+ * `chart.tsx` reads its palette off this element's computed style precisely so the
+ * stylesheet stays in charge of it — overriding the custom property is how a chart gets
+ * recoloured, not a prop.
+ */
+.ax-tk-canvas {
+  --up: #17c06b;
+  --down: #e0483f;
+  height: 320px;
+}
+
+.ax-tk-plot .ax-tk-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 0 12%;
+  text-align: center;
+  font-size: 0.83rem;
+  line-height: 1.6;
+  color: var(--ax-muted);
+}
+
+/* --- recent trades ------------------------------------------------------- */
+
+.ax-tk-below {
+  margin-top: 46px;
+}
+
+.ax-tk-label {
+  margin: 0 0 10px;
+  font-size: 0.78rem;
+  font-weight: 450;
+  letter-spacing: -0.01em;
+  color: var(--ax-muted);
+}
+
+.ax-tk-tabs {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+
+.ax-tk-tabs button {
+  padding: 0;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 450;
+  color: var(--ax-faint);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  transition: color 0.16s var(--ax-ease);
+}
+
+.ax-tk-tabs button.on {
+  font-weight: 600;
+  color: var(--ax-ink);
+}
+
+.ax-tk-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.ax-tk-tr {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) minmax(0, 1fr) 64px minmax(0, 1fr) 62px;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  font-size: 0.8rem;
+  color: var(--ax-body);
+  border-radius: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ax-tk-tr:nth-child(odd) {
+  background: var(--ax-panel);
+}
+
+.ax-tk-tr-head {
+  padding-block: 0 8px;
+  font-size: 0.72rem;
+  color: var(--ax-faint);
+  background: none !important;
+}
+
+.ax-tk-tr .buy {
+  color: var(--ax-up);
+}
+
+.ax-tk-tr .sell {
+  color: var(--ax-down);
+}
+
+.ax-tk-tr .dim {
+  color: var(--ax-faint);
+}
+
+.ax-tk-none {
+  margin: 0;
+  padding: 30px 0 40px;
+  font-size: 0.83rem;
+  line-height: 1.6;
+  color: var(--ax-muted);
+}
+
+/* --- an Instant token's picture ------------------------------------------- */
+
+/*
+ * Where a programmable token has its machine, an Instant one has the picture its creator
+ * uploaded. Sized by the same number the machine is given, so the two are interchangeable
+ * everywhere `TokenArt` is used and no card needs to know which it got.
+ */
+.ax-shot-art {
+  display: block;
+  width: var(--ax-art-size, 44px);
+  height: var(--ax-art-size, 44px);
+  object-fit: cover;
+  border-radius: 26%;
+  background: var(--ax-panel);
+}
+
+/* Only reachable when the metadata document could not be fetched. It is meant to look
+   like a missing picture, because that is what it is. */
+.ax-initials {
+  display: grid;
+  place-items: center;
+  width: var(--ax-art-size, 44px);
+  height: var(--ax-art-size, 44px);
+  font-size: calc(var(--ax-art-size, 44px) * 0.32);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  text-transform: uppercase;
+  color: var(--ax-faint);
+  background: var(--ax-panel);
+  border-radius: 26%;
+}
+
+/* --- how this token works ------------------------------------------------ */
+
+.ax-tk-rules {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+}
+
+.ax-tk-rule {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 15px 16px;
+  background: var(--ax-panel);
+  border-radius: var(--ax-r-md);
+}
+
+.ax-tk-rule > span {
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ax-faint);
+}
+
+.ax-tk-rule > b {
+  font-size: 1.35rem;
+  font-weight: 500;
+  letter-spacing: -0.028em;
+  color: var(--ax-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.ax-tk-rule > em {
+  font-style: normal;
+  font-size: 0.76rem;
+  color: var(--ax-muted);
+}
+
+.ax-tk-rule ul {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--ax-body);
+}
+
+.ax-tk-cells {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.ax-tk-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 13px 15px;
+  background: var(--ax-panel);
+  border-radius: var(--ax-r-sm);
+}
+
+.ax-tk-cell > span {
+  font-size: 0.74rem;
+  color: var(--ax-muted);
+}
+
+.ax-tk-cell > b {
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: -0.018em;
+  color: var(--ax-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.ax-tk-cell > b.dim {
+  color: var(--ax-faint);
+}
+
+.ax-tk-bar {
+  height: 3px;
+  margin-top: 5px;
+  background: #ebebeb;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.ax-tk-bar span {
+  display: block;
+  height: 100%;
+  background: var(--ax-buy);
+  border-radius: inherit;
+}
+
+/* --- the trade card ------------------------------------------------------ */
+
+.ax-tk-card {
+  padding: 12px;
+  background: var(--ax-panel);
+  border-radius: var(--ax-r-lg);
+}
+
+/*
+ * Buy and sell as one object rather than two buttons.
+ *
+ * Each half fills its side of the track, so the selected side is a solid block and the
+ * other is the card's own grey — which reads as a switch with a position, where two
+ * separately outlined buttons read as two things you could press.
+ */
+.ax-tk-sides {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ax-tk-sides button {
+  height: 38px;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  letter-spacing: -0.012em;
+  color: var(--ax-muted);
+  background: #f0f0f0;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.16s var(--ax-ease), color 0.16s var(--ax-ease);
+}
+
+.ax-tk-sides button:hover:not(.on) {
+  background: #e9e9e9;
+  color: var(--ax-body);
+}
+
+.ax-tk-sides button.on {
+  color: #fff;
+  background: var(--ax-buy);
+}
+
+.ax-tk-sides button.on.sell {
+  background: var(--ax-ink);
+}
+
+/* The amount, set at the size of the decision it is. */
+.ax-tk-amount {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 24px 12px 20px;
+}
+
+.ax-tk-amount em {
+  font-style: normal;
+  font-size: 0.82rem;
+  font-weight: 450;
+  letter-spacing: -0.01em;
+  color: var(--ax-faint);
+}
+
+.ax-tk-amount input {
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  font-size: 3.1rem;
+  font-weight: 400;
+  letter-spacing: -0.045em;
+  text-align: center;
+  color: var(--ax-ink);
+  background: none;
+  border: 0;
+  outline: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.ax-tk-amount input::placeholder {
+  color: var(--ax-ink);
+}
+
+/* Chrome and Safari draw steppers on a numeric field, which this is not. */
+.ax-tk-amount input::-webkit-outer-spin-button,
+.ax-tk-amount input::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+.ax-tk-sizes {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.ax-tk-sizes button {
+  height: 34px;
+  font: inherit;
+  font-size: 0.79rem;
+  font-weight: 450;
+  letter-spacing: -0.012em;
+  color: var(--ax-body);
+  background: #f0f0f0;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.16s var(--ax-ease);
+}
+
+.ax-tk-sizes button:hover:not(:disabled) {
+  background: #e7e7e7;
+}
+
+.ax-tk-sizes button:disabled {
+  color: var(--ax-faint);
+  cursor: not-allowed;
+}
+
+/*
+ * What the trade returns, and what it costs.
+ *
+ * Not in the design that this page was drawn from, and added anyway: a panel that takes
+ * an amount and a confirmation without ever saying what arrives is a panel that spends
+ * money on the reader's behalf without telling them what for. Kept to the quietest type
+ * on the card so the amount above it is still the thing being read.
+ */
+.ax-tk-out {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 16px;
+  padding: 13px 14px 0;
+  border-top: 1px solid #efefef;
+}
+
+.ax-tk-out div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.77rem;
+  color: var(--ax-muted);
+}
+
+.ax-tk-out div b {
+  font-weight: 500;
+  color: var(--ax-ink);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ax-tk-out div.lead b {
+  font-size: 0.95rem;
+}
+
+.ax-tk-go {
+  width: 100%;
+  height: 48px;
+  margin-top: 14px;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 500;
+  letter-spacing: -0.014em;
+  color: #fff;
+  background: var(--ax-buy);
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.18s var(--ax-ease), transform 0.18s var(--ax-spring);
+}
+
+.ax-tk-go.sell {
+  background: var(--ax-ink);
+}
+
+.ax-tk-go:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.ax-tk-go:active:not(:disabled) {
+  transform: translateY(0) scale(0.99);
+}
+
+.ax-tk-go:disabled {
+  color: var(--ax-muted);
+  background: #ececec;
+  cursor: not-allowed;
+}
+
+.ax-tk-note {
+  margin: 10px 2px 2px;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--ax-faint);
+}
+
+.ax-tk-note.bad {
+  color: var(--ax-down);
+}
+
+.ax-tk-note.good {
+  color: var(--ax-up);
+}
+
+/* --- the contract, and who made it --------------------------------------- */
+
+.ax-tk-ca {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 46px;
+  padding: 0 8px 0 16px;
+  font: inherit;
+  font-size: 0.82rem;
+  letter-spacing: -0.01em;
+  color: var(--ax-body);
+  background: var(--ax-panel);
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.16s var(--ax-ease);
+}
+
+.ax-tk-ca:hover {
+  background: #f5f5f5;
+}
+
+.ax-tk-ca span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.ax-tk-ca svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--ax-faint);
+}
+
+.ax-tk-ca:disabled {
+  color: var(--ax-faint);
+  cursor: default;
+}
+
+.ax-tk-about {
+  padding: 16px;
+  background: var(--ax-panel);
+  border-radius: var(--ax-r-md);
+}
+
+.ax-tk-about > p {
+  margin: 0;
+  font-size: 0.83rem;
+  line-height: 1.6;
+  color: var(--ax-body);
+}
+
+.ax-tk-maker {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ax-tk-maker span {
+  font-size: 0.76rem;
+  color: var(--ax-muted);
+}
+
+.ax-tk-maker b {
+  font-size: 0.8rem;
+  font-weight: 450;
+  color: var(--ax-body);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ax-tk-socials {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.ax-tk-socials a {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: var(--ax-muted);
+  transition: color 0.16s var(--ax-ease);
+}
+
+.ax-tk-socials a:hover {
+  color: var(--ax-ink);
+}
+
+.ax-tk-socials svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* --- narrow -------------------------------------------------------------- */
+
+@media (max-width: 940px) {
+  .ax-tk {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 30px;
+  }
+
+  .ax-tk-aside {
+    position: static;
+  }
+}
+
+@media (max-width: 620px) {
+  .ax-tk-top {
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+
+  /* Wrapped under the identity rather than stretched across it: five labels spread edge
+     to edge stop reading as one control. */
+  .ax-tk-ranges {
+    margin-left: 0;
+  }
+
+  .ax-tk-tr {
+    grid-template-columns: 46px minmax(0, 1fr) 58px;
+    gap: 10px;
+  }
+
+  /* The columns that go first are the ones a phone reader is least likely to be
+     scanning a list of trades for. */
+  .ax-tk-tr > :nth-child(3),
+  .ax-tk-tr > :nth-child(4),
+  .ax-tk-tr > :nth-child(5) {
+    display: none;
   }
 }
 

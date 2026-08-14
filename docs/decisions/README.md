@@ -24,6 +24,7 @@ original design intent, and these files are the diff.
 | [011](011-agents-propose-typed-actions.md) | An agent proposes a typed action; it never supplies calldata | extends 010 |
 | [012](012-the-agent-guardian.md) | Agent contracts have a guardian; market contracts still have nobody | extends 010 |
 | [013](013-the-repository-is-mit.md) | The repository is MIT; two SPDX headers are frozen by a deployment | resolves the `LICENSE` conflict |
+| [014](014-instant-is-a-preset-not-a-model.md) | Instant is a preset over Classic on v4, not a launch model; v3 cannot carry the fee | extends 008, 009 |
 
 ## Format
 

@@ -34,10 +34,16 @@ import { keccak256, toHex, type Address, type Hex } from "viem";
 
 import { AGEN_LAUNCH } from "@verdant/config";
 
-import type { BuildArtifacts } from "./artifacts.js";
+import type { BuildArtifacts, ContractArtifact } from "./artifacts.js";
 import { hashSources, hashSpecification, readArtifacts } from "./artifacts.js";
+import type { ContractApi } from "./contract-api.js";
+import { contractApis } from "./contract-api.js";
+import { mechanicalRepair } from "./mechanical-repair.js";
 import { buildContext } from "./context.js";
+import type { DeploymentSpecification } from "./deployment-spec.js";
+import { deploymentInconsistencies } from "./deployment-validation.js";
 import { assembleManifest, marketSaltFor } from "./deployment.js";
+import { preflight } from "./preflight.js";
 import { supportsAtomicDevBuy } from "./devbuy.js";
 import { requiredFeeMode } from "./feemode.js";
 import type { LaunchManifest } from "./manifest.js";
@@ -55,13 +61,14 @@ import type { MarketImplementationPlan } from "./plan.js";
 import type { MarketSpecification } from "./spec.js";
 import type { Decision } from "./spec.js";
 import { assess, changesTheMarket, decideAll, outstanding, rulesAreStale } from "./spec.js";
-import type { Diagnostic, TestOutcome } from "./foundry.js";
+import type { Diagnostic, TestDepth, TestOutcome, TestResult } from "./foundry.js";
 import { build as compile, buildWithOutput, test as runTests } from "./foundry.js";
 import type { GateFinding, GateResult } from "./gates.js";
 import {
   analyseGenerated,
   combine,
   elevatedRiskIsCovered,
+  invariantCoverage,
   invariantsWereProven,
 } from "./gates.js";
 import { recogniseAll, remedyBrief } from "./playbook.js";
@@ -69,6 +76,14 @@ import { classify, FailureCategory, tacticFor, Tactic } from "./recovery.js";
 import { Blame } from "./playbook.js";
 import { explainRevert, selectorsOf } from "./revert.js";
 import { apiBrief, unknownMembers } from "./testapi.js";
+import {
+  CANONICAL_TEST_BASE,
+  CANONICAL_TEST_SMOKE,
+  canonicalTestEnvironment,
+  nameLaunchFailure,
+  manualTestInfrastructureProblems,
+  type CanonicalTestEnvironment,
+} from "./test-environment.js";
 import type { EffectsRepair, Repair, StageOutput } from "./engineer.js";
 import {
   ArtefactError,
@@ -82,6 +97,7 @@ import {
   repairFindings,
   repairTests,
   revise,
+  rewriteComponent,
 } from "./engineer.js";
 import type { Failure, GenerationJob, JobStore, ModelExchange } from "./job.js";
 import { beginStage, endStage, failJob, FailureCode, newJob, restartJob, Stage } from "./job.js";
@@ -159,13 +175,11 @@ export const PROBE_DEPLOYMENT: AgenDeploymentAddresses = {
 /** The creator a probe manifest is built for. Holds nothing and never will. */
 export const PROBE_CREATOR: Address = "0x00000000000000000000000000000000000b0004";
 
-/**
- * Where a probe opens its pool: a billion tokens at roughly a hundred ether.
- *
- * On `AgenCurve`'s grid and inside its usable range, which is all the assembly needs of
- * it. The creator's own valuation is chosen on the launch screen.
- */
-export const PROBE_TICK = 161_000;
+/** Kept distinct so constructor/wiring bugs cannot pass by aliasing two roles. */
+export const PROBE_FEE_RECEIVER: Address = "0x00000000000000000000000000000000000b0006";
+
+/** The exact standardized opening tick used by production and canonical tests. */
+export const PROBE_TICK = AGEN_LAUNCH.initialTick;
 
 /** Every Agen market so far is quoted in ether. */
 export const NATIVE_QUOTE = ZERO_ADDRESS;
@@ -240,6 +254,19 @@ const TRANSIENT_BACKOFF_MS = 15_000;
 
 export interface PipelineOptions {
   readonly provider: ModelProvider;
+  /**
+   * A second vendor, asked only when the first has failed the same way twice.
+   *
+   * Not a failover — `fallbackProvider` covers a vendor that cannot answer. This is for a
+   * vendor that answers immediately and is wrong in the same way each time, which is the
+   * ordinary shape of a stuck repair: a model's errors correlate with itself far more than
+   * with the problem, so the rung that matters is a different family rather than a longer
+   * prompt to the same one.
+   *
+   * Left out, the ladder simply stops one rung lower and the build fails where it would
+   * have failed before. Nothing depends on this being configured.
+   */
+  readonly escalationProvider?: ModelProvider;
   readonly store: JobStore;
   /** Absolute path to `packages/contracts/vendor`. */
   readonly vendorRoot: string;
@@ -348,6 +375,7 @@ export async function runBuild(
   const budget = options.budget ?? DEFAULT_BUDGET;
   const probe = options.deployment ?? PROBE_DEPLOYMENT;
   const { provider, store, onReviewReady } = options;
+  const escalationProvider = options.escalationProvider ?? null;
 
   const resumed = options.resume ?? null;
 
@@ -497,6 +525,7 @@ export async function runBuild(
       vendorRoot: options.vendorRoot,
       generatedRoot: options.generatedRoot,
       jobId: job.id,
+      freshInputs: true,
     });
 
     // Written before anything is generated, so the model extends it rather than
@@ -698,9 +727,18 @@ export async function runBuild(
     // --- plan ------------------------------------------------------------
 
     let plan: MarketImplementationPlan;
+    /**
+     * How the bundle is deployed, decided here and executed unchanged from here on.
+     *
+     * Nothing downstream infers a deployment any more: the canonical fixture, the
+     * preflight and the production manifest all materialize this one document, which is
+     * what makes a launch reproduce the launch that was tested.
+     */
+    let deployment: DeploymentSpecification;
 
-    if (resumed?.plan != null) {
+    if (resumed?.plan != null && resumed.deployment != null) {
       plan = resumed.plan;
+      deployment = resumed.deployment;
       await carriedOver(
         Stage.ArchitecturePlanning,
         "Kept the architecture Agen had already designed.",
@@ -722,17 +760,19 @@ export async function runBuild(
           }),
         );
 
-        plan = output.value;
+        plan = output.value.plan;
+        deployment = output.value.deployment;
         job = remember(job, Stage.ArchitecturePlanning, output, null, "design", planRetries);
       } catch (error) {
         job = rememberRejection(job, Stage.ArchitecturePlanning, error);
         return await fail(failureFor(error, Stage.ArchitecturePlanning));
       }
 
-      job = await save(endStage({ ...job, plan }, { status: "succeeded", now: now() }));
+      job = await save(endStage({ ...job, plan, deployment }, { status: "succeeded", now: now() }));
     }
 
     await workspace.writeJson(LAYOUT.plan, plan);
+    await workspace.writeJson(LAYOUT.deployment, deployment);
 
     // --- generate --------------------------------------------------------
 
@@ -789,8 +829,26 @@ export async function runBuild(
             }
 
 
+            // Every component has an entry: `validateDeploymentSpec` refuses a deployment
+            // that does not cover the plan, so this cannot be absent by the time a
+            // contract is written.
+            const declared = deployment.components.find(
+              (entry) => entry.componentId === component.id,
+            )!;
+
             const { output, retries } = await withArtefactRetries(budget.artefactRetries, () =>
-              generateComponent(provider, { component, specification, plan, context }),
+              generateComponent(provider, {
+                component,
+                deployed: declared,
+                deployment,
+                specification,
+                plan,
+                context,
+                // The generated siblings are being written in this same round and have no
+                // interface yet. Agen's own contracts do, they are fixed, and they are what
+                // a hook calls on every swap.
+                apis: contractApis({ sources: preludeSources() }),
+              }),
             );
             return { source: output.value, output, component: component.contractName, retries };
           }),
@@ -835,6 +893,111 @@ export async function runBuild(
       return compile({ root: built.root });
     };
 
+    /**
+     * What every contract in this market exposes, as the compiler sees it where it can.
+     *
+     * Handed to anything that writes or repairs a contract which calls another. Artefacts
+     * are the authority and are passed in by the caller that already has them; where a
+     * build has not succeeded there are none, and the files are parsed instead. Agen's own
+     * contracts are always included — they are the ones every market calls, they never
+     * change, and `FeeVault` alone accounts for a recurring class of compile error that
+     * nothing else was ever going to tell the generator about.
+     */
+    const marketApis = (
+      artifacts: readonly ContractArtifact[] = [],
+    ): ReadonlyMap<string, ContractApi> =>
+      contractApis({ artifacts, sources: [...sources, ...preludeSources()] });
+
+    /**
+     * One round of repair, from the cheapest thing that could work upward.
+     *
+     * The rungs are: what can be proved and fixed without a model, then the configured
+     * model with the failing file, then the same model with everything that file depends
+     * on and every sibling interface, then — only once the same failure has come back
+     * unchanged — a different vendor.
+     *
+     * The order is not a cost optimisation, though it is cheaper. It is that the rungs
+     * fail differently. A payable cast has one right answer and a model asked for it will
+     * sometimes also rewrite the arithmetic around it; a cross-component call needs a fact
+     * the model was never given and no amount of re-asking supplies it; and a model that
+     * has now produced the same wrong file twice is not going to produce a different one
+     * on the third ask, which is what the escalation is for.
+     */
+    const attemptRepair = async ({
+      stage,
+      errors,
+      attempt,
+      tactic,
+      artifacts = [],
+    }: {
+      readonly stage: Stage;
+      readonly errors: readonly Diagnostic[];
+      readonly attempt: number;
+      readonly tactic: Tactic;
+      readonly artifacts?: readonly ContractArtifact[];
+    }): Promise<
+      | { readonly kind: "mechanical"; readonly repair: Repair }
+      | { readonly kind: "model"; readonly repair: Repair; readonly by: string }
+    > => {
+      const apis = marketApis(artifacts);
+      const settled = mechanicalRepair({ sources, diagnostics: errors, apis });
+
+      // Anything with exactly one right answer is applied without a call. The build
+      // recompiles and whatever is left comes back here with the mechanical noise gone,
+      // which is usually the difference between a model seeing one real problem and a
+      // model seeing three and picking the wrong one to be clever about.
+      if (settled.files.length > 0) {
+        return {
+          kind: "mechanical",
+          repair: {
+            diagnosis: settled.fixes.join("; "),
+            files: settled.files,
+            giveUp: false,
+          },
+        };
+      }
+
+      // The rung where a second opinion is worth more than a longer prompt. `tacticFor`
+      // has already climbed to the top of its own ladder, which only happens when an
+      // attempt changed nothing about the failure.
+      const escalate = escalationProvider !== null && tactic === Tactic.RegenerateComponent;
+      const asked = escalate ? escalationProvider : provider;
+
+      const output = await repairCompilation(asked, {
+        sources,
+        diagnostics: errors,
+        attempt,
+        remedy: remedyBrief(recogniseAll(errors)),
+        tactic,
+        apis,
+        notes: settled.notes,
+      });
+
+      job = remember(job, stage, output);
+      return { kind: "model", repair: output.value, by: asked.name };
+    };
+
+    /**
+     * Run a suite, and change code generators rather than lose a market to one.
+     *
+     * "Stack too deep" is the legacy generator running out of slots. It is not a mistake
+     * in the code it was handed, so no amount of asking a model to fix it is well spent:
+     * a live RELAY build met it in its own behavior suite, burned all three test-repair
+     * rounds rewriting tests that were never wrong, and was thrown away. The contracts
+     * have fallen back to the IR backend for this reason since the CNPY build; every
+     * suite that tests them now does too.
+     */
+    const runSuite = async (options: {
+      readonly depth?: TestDepth;
+      readonly matchPath?: string;
+    }): Promise<TestResult> => {
+      const first = await runTests({ root: built.root, ...options });
+      if (first.buildFailure === null || !needsIrBackend(first.buildFailure)) return first;
+      if (!(await built.useIrBackend())) return first;
+
+      return runTests({ root: built.root, ...options });
+    };
+
     let compiled = await compile({ root: workspace.root });
     if (!compiled.ok && needsIrBackend(compiled.diagnostics) && (await workspace.useIrBackend())) {
       compiled = await compile({ root: workspace.root });
@@ -871,16 +1034,16 @@ export async function runBuild(
       compileSignature = failure.signature;
 
       let repair: Repair;
+      let repairedBy = "mechanical";
       try {
-        const output = await repairCompilation(provider, {
-          sources,
-          diagnostics: compiled.diagnostics,
+        const round = await attemptRepair({
+          stage: Stage.CompilationRepair,
+          errors: compiled.diagnostics,
           attempt,
-          remedy: remedyBrief(recogniseAll(compiled.diagnostics)),
           tactic,
         });
-        repair = output.value;
-        job = remember(job, Stage.CompilationRepair, output);
+        repair = round.repair;
+        if (round.kind === "model") repairedBy = round.by;
       } catch (error) {
         return await fail(failureFor(error, Stage.CompilationRepair));
       }
@@ -889,7 +1052,7 @@ export async function runBuild(
         attempt,
         at: now(),
         kind: "compilation",
-        diagnosis: repair.diagnosis,
+        diagnosis: `[${repairedBy}] ${repair.diagnosis}`,
         files: repair.files.map((file) => file.path),
         gaveUp: repair.giveUp,
         category: failure.category,
@@ -985,6 +1148,81 @@ export async function runBuild(
       });
     };
 
+    /**
+     * Put the contracts back together after an edit this pipeline asked for.
+     *
+     * The security repair and the canonical-deployment repair both hand the model a
+     * reason to rewrite a contract that already compiled, and a rewrite that introduces
+     * one bad line is ordinary rather than exceptional. Both sites used to fail the
+     * market on that first error while the whole compilation-repair budget sat unspent:
+     * a live ORBIT build compiled, was asked to change one vault, came back with "wrong
+     * argument count: 2 given but expected 1", and was thrown away. The rounds already
+     * budgeted for exactly this kind of mistake are spent here instead.
+     */
+    const restoreCompilation = async (
+      stage: Stage,
+    ): Promise<Awaited<ReturnType<typeof compileWithFallback>>> => {
+      let rebuilt = await compileWithFallback();
+      let repairAttempt = 0;
+      let previousSignature: string | null = null;
+
+      while (!rebuilt.ok && repairAttempt < budget.compilationRepairs) {
+        repairAttempt += 1;
+        const failure = classify({ stage, diagnostics: rebuilt.diagnostics });
+
+        // The same ladder the first compile gets. This site used to send one shape of
+        // prompt however many times the budget allowed, which meant an edit that broke
+        // the build in a way the model could not see from the failing file alone was
+        // never going to be fixed here — the second and third attempts were the first
+        // one again.
+        const tactic = tacticFor({
+          attempt: repairAttempt - 1,
+          previousSignature,
+          signature: failure.signature,
+        });
+        previousSignature = failure.signature;
+
+        let repair: Repair;
+        let repairedBy = "mechanical";
+        try {
+          const round = await attemptRepair({
+            stage,
+            errors: rebuilt.diagnostics,
+            attempt: repairAttempt,
+            tactic,
+          });
+          repair = round.repair;
+          if (round.kind === "model") repairedBy = round.by;
+        } catch {
+          // The provider, not the market. Report the compiler error that got us here.
+          return rebuilt;
+        }
+
+        diagnostics = withRepair(diagnostics, {
+          attempt: repairAttempt,
+          at: now(),
+          kind: "compilation",
+          diagnosis: `[${repairedBy}] ${repair.diagnosis}`,
+          files: repair.files.map((file) => file.path),
+          gaveUp: repair.giveUp,
+          category: failure.category,
+          blame: failure.blame,
+          signature: failure.signature,
+          tactic,
+        });
+        await flushDiagnostics();
+
+        if (repair.giveUp) return rebuilt;
+
+        sources = mergeSources(sources, repair.files);
+        job = { ...job, sources };
+        await workspace!.write(repair.files);
+        rebuilt = await compileWithFallback();
+      }
+
+      return rebuilt;
+    };
+
     let cleared = await reviewSecurity();
     let securityAttempt = 0;
 
@@ -1027,11 +1265,8 @@ export async function runBuild(
       sources = mergeSources(sources, repair.files);
       await workspace.write(repair.files);
 
-      const rebuilt = await compileWithFallback();
+      const rebuilt = await restoreCompilation(Stage.StaticAnalysis);
       if (!rebuilt.ok) {
-        // The fix broke the build. Handing it to the compile loop would need this whole
-        // block to be re-entrant for no benefit: the market still has its finding, the
-        // final gate still refuses it, and it says so with a compiler error attached.
         return await fail({
           code: FailureCode.CompilationUnrepairable,
           stage: Stage.StaticAnalysis,
@@ -1058,15 +1293,493 @@ export async function runBuild(
       );
     }
 
-    // --- tests -----------------------------------------------------------
+    // --- does the market agree with the deployment it was designed for? ---
+    //
+    // Tests no longer assemble a market, and neither does the launcher: both execute the
+    // deployment the architecture stage declared. What remains is whether the contracts
+    // that were written match that declaration, and whether the whole bundle can be placed
+    // at all — asked here, before a model writes a behaviour suite for a market that may
+    // not be launchable.
+    const deployedPrelude = new Set(
+      plan.components
+        .map((component) => component.contractName)
+        .filter((name) => PRELUDE_CONTRACTS.includes(name)),
+    );
+    const artifactSources = (): readonly GeneratedSource[] => [
+      ...sources,
+      ...preludeSources().filter((source) =>
+        deployedPrelude.has(source.path.split("/").pop()?.replace(/\.sol$/, "") ?? ""),
+      ),
+    ];
+    const marketArtifacts = async () =>
+      readArtifacts({
+        outDir: join(workspace!.paths.artifacts, "out"),
+        sources: artifactSources(),
+      });
+
+    job = await save(beginStage(job, Stage.DeploymentValidation, now()));
+
+    {
+      const hookContract = hookContractNameOf(plan);
+      if (hookContract === null) {
+        return await fail({
+          code: FailureCode.Undeployable,
+          stage: Stage.DeploymentValidation,
+          detail: "This market has no hook, and a market without one cannot open a pool.",
+        });
+      }
+
+      /**
+       * Regenerating a component that did not write what it was told to write.
+       *
+       * This is the repair that replaces generic deployment repair for this class of
+       * failure, and the difference matters. Deployment repair asked a model to reshape a
+       * contract until the launcher could read it — an open-ended request against a target
+       * nobody had written down, which is how a round was spent retyping a parameter in the
+       * hope that the launcher would notice. Here the target is exact: the component is
+       * written again against the declaration it was always supposed to satisfy.
+       */
+      let architectureAttempt = 0;
+
+      for (;;) {
+        const builtForValidation = await forcedBuild();
+        if (!builtForValidation.result.ok) {
+          return await fail({
+            code: FailureCode.CompilationUnrepairable,
+            stage: Stage.DeploymentValidation,
+            detail: "A component written again to match its declared deployment stopped compiling.",
+            diagnostics: builtForValidation.result.diagnostics,
+          });
+        }
+
+        const fee = await requiredFeeMode({
+          root: workspace.root,
+          buildOutput: builtForValidation.output,
+          hookContractName: hookContract,
+        });
+
+        const disagreements = await deploymentInconsistencies({
+          root: workspace.root,
+          buildOutput: builtForValidation.output,
+          hookContractName: hookContract,
+          deployment,
+          artifacts: await marketArtifacts(),
+          fee,
+        });
+
+        if (disagreements.length === 0) break;
+
+        // Which components can actually be written again. The token is Agen's own and its
+        // declaration is normalised to match it; a contract taken from the catalogue
+        // unchanged cannot be rewritten at all, so a disagreement naming one is a
+        // declaration that was wrong about a contract nobody is going to edit.
+        const rewritable = plan.components.filter(
+          (component) =>
+            disagreements.some((entry) => entry.contractName === component.contractName) &&
+            component.role !== "token" &&
+            component.origin !== "reuse" &&
+            !PRELUDE_CONTRACTS.includes(component.contractName),
+        );
+
+        const stop =
+          architectureAttempt >= budget.deploymentRepairs || rewritable.length === 0;
+
+        if (stop) {
+          return await fail({
+            code: FailureCode.ArchitectureInconsistent,
+            stage: Stage.DeploymentValidation,
+            detail:
+              `This market's contracts do not match the deployment Agen designed for it:\n  ` +
+              `${disagreements.map((entry) => entry.detail).join("\n  ")}`,
+          });
+        }
+
+        architectureAttempt += 1;
+
+        diagnostics = withRepair(diagnostics, {
+          attempt: architectureAttempt,
+          at: now(),
+          kind: "compilation",
+          diagnosis: disagreements.map((entry) => entry.detail).join(" "),
+          files: rewritable.map((component) => `${LAYOUT.contracts}/${component.contractName}.sol`),
+          gaveUp: false,
+          category: FailureCategory.ArchitectureConsistency,
+          blame: Blame.Contract,
+        });
+        await flushDiagnostics();
+
+        // The interfaces as the compiler resolved them a moment ago. This is the whole
+        // reason the rewrite below does not reinvent a sibling's method names: the
+        // component is edited with its neighbours' compiled ABIs in front of it rather
+        // than with a summary of what they are for.
+        const apis = marketApis(await marketArtifacts());
+
+        try {
+          const rewritten = await Promise.all(
+            rewritable.map(async (component) => {
+              const declared = deployment.components.find(
+                (entry) => entry.componentId === component.id,
+              )!;
+              const current = sources.find(
+                (source) => source.path === `${LAYOUT.contracts}/${component.contractName}.sol`,
+              )!;
+
+              const { output } = await withArtefactRetries(budget.artefactRetries, () =>
+                rewriteComponent(provider, {
+                  component,
+                  deployed: declared,
+                  deployment,
+                  current,
+                  disagreements: disagreements
+                    .filter((entry) => entry.contractName === component.contractName)
+                    .map((entry) => entry.detail),
+                  apis,
+                  specification,
+                }),
+              );
+
+              return { source: output.value, output, component: component.contractName };
+            }),
+          );
+
+          sources = mergeSources(
+            sources,
+            rewritten.map((entry) => entry.source),
+          );
+          await workspace.write(rewritten.map((entry) => entry.source));
+          job = { ...job, sources };
+
+          for (const entry of rewritten) {
+            job = remember(job, Stage.DeploymentValidation, entry.output, null, entry.component);
+          }
+        } catch (error) {
+          return await fail(failureFor(error, Stage.DeploymentValidation));
+        }
+
+        // An edit this pipeline asked for can break the build, and until now that ended
+        // the market: the loop went back to the top, found a failed compile and reported
+        // it as unrepairable with the entire repair budget unspent. A live FLOWTEST build
+        // died exactly there, on two errors an earlier round had already fixed correctly.
+        const restored = await restoreCompilation(Stage.DeploymentValidation);
+        if (!restored.ok) {
+          return await fail({
+            code: FailureCode.CompilationUnrepairable,
+            stage: Stage.DeploymentValidation,
+            detail:
+              "A component changed to match its declared deployment stopped compiling, and " +
+              "the repair rounds could not put it back together.",
+            diagnostics: restored.diagnostics,
+          });
+        }
+      }
+
+      // Everything the launch needs, materialized once against probe addresses. A market
+      // that cannot be described cannot be launched, and finding that out here costs a
+      // second rather than a behaviour suite and three repair rounds.
+      const artefacts = await marketArtifacts();
+      const built = await forcedBuild();
+      const fee = await requiredFeeMode({
+        root: workspace.root,
+        buildOutput: built.output,
+        hookContractName: hookContract,
+      });
+      const proved = preflight({
+        plan,
+        deployment,
+        artifacts: artefacts,
+        environment: {
+          poolManager: probe.poolManager,
+          installer: probe.factory,
+          creator: PROBE_CREATOR,
+          feeReceiver: PROBE_FEE_RECEIVER,
+          agenRouter: probe.router ?? null,
+          treasury: PROBE_FEE_RECEIVER,
+          beneficiary: PROBE_FEE_RECEIVER,
+          name: request.name,
+          symbol: request.symbol,
+          supplyTokens: request.supplyTokens ?? DEFAULT_SUPPLY_TOKENS,
+        },
+        specificationHash: hashSpecification(specification),
+        implementationHash: hashSources(sources),
+        quoteAsset: NATIVE_QUOTE,
+        lpFee: fee.lpFee,
+        initialTick: PROBE_TICK,
+        marketSalt: marketSaltFor(job.id),
+        deployerAddress: probe.deployer,
+      });
+
+      if (!proved.ok) {
+        return await fail({
+          code: FailureCode.Undeployable,
+          stage: Stage.DeploymentValidation,
+          detail:
+            `This market compiled, and it cannot be placed on a chain:\n  ` +
+            `${proved.problems.join("\n  ")}`,
+        });
+      }
+
+      job = await save(
+        endStage(job, {
+          status: "succeeded",
+          detail: `${String(plan.components.length)} components, every argument accounted for.`,
+          now: now(),
+        }),
+      );
+    }
+
+    // --- canonical test deployment --------------------------------------
+
+    const buildCanonicalTestEnvironment = async (): Promise<CanonicalTestEnvironment> => {
+      const builtForTests = await forcedBuild();
+      if (!builtForTests.result.ok) {
+        throw new Error("the canonical test environment could not read a successful contract build");
+      }
+
+      const hookContract = hookContractNameOf(plan);
+      if (hookContract === null) {
+        throw new ManifestError("the canonical test environment has no hook to deploy");
+      }
+
+      const fee = await requiredFeeMode({
+        root: workspace!.root,
+        buildOutput: builtForTests.output,
+        hookContractName: hookContract,
+      });
+      if (fee.problem !== null) throw new ManifestError(fee.problem);
+
+      return canonicalTestEnvironment({
+        plan,
+        deployment,
+        artifacts: await marketArtifacts(),
+        name: request.name,
+        symbol: request.symbol,
+        supplyTokens: request.supplyTokens ?? DEFAULT_SUPPLY_TOKENS,
+        lpFee: fee.lpFee,
+        initialTick: PROBE_TICK,
+        marketSalt: marketSaltFor(job.id),
+      });
+    };
+
+    job = await save(beginStage(job, Stage.TestEnvironment, now()));
+
+    let testEnvironment: CanonicalTestEnvironment | null = null;
+    let deploymentAttempt = 0;
+    let previousDeploymentProblem: string | null = null;
+    /** Whether the last deployability repair rewrote anything. See the repeat guard. */
+    let previousRepairChangedFiles = false;
+
+    /**
+     * The launch is attempted inside the repair loop, not after it.
+     *
+     * Building the deployment description proves the pieces can be placed; only running
+     * it proves they fit together. A constructor or wiring setter that refuses the
+     * factory reverts here, and that is a fact about the generated contracts — a live
+     * ORBIT build died on `WiringFailed(1, ...)` from its own vault's access control.
+     * Reported as harness infrastructure it was both wrong and unrecoverable: the
+     * creator was told Agen had failed, and the repair budget sitting right here went
+     * unspent. A revert raised by this market's own code is a repair, like any other.
+     */
+    let launchFailures: readonly TestOutcome[] = [];
+
+    while (testEnvironment === null) {
+      let problem: string | null = null;
+      let candidate: CanonicalTestEnvironment | null = null;
+
+      try {
+        candidate = await buildCanonicalTestEnvironment();
+      } catch (error) {
+        problem = error instanceof Error ? error.message : "an unexpected deployment-description failure";
+      }
+
+      if (candidate !== null) {
+        await workspace.write([candidate.source, candidate.smoke]);
+
+        const environmentRun = await runSuite({
+          depth: "critical",
+          matchPath: CANONICAL_TEST_SMOKE,
+        });
+
+        // Agen's own fixture, rendered by Agen from the compiled ABIs. Nothing the model
+        // can be asked to fix, so this one stays a hard stop.
+        if (environmentRun.buildFailure !== null) {
+          return await fail({
+            code: FailureCode.HarnessInfrastructure,
+            stage: Stage.TestEnvironment,
+            detail: "The canonical production-faithful test environment did not compile.",
+            diagnostics: environmentRun.buildFailure,
+          });
+        }
+
+        if (environmentRun.ok) {
+          testEnvironment = candidate;
+          launchFailures = [];
+          break;
+        }
+
+        const environmentSelectors = selectorsOf([
+          ...preludeSources(),
+          ...sources,
+          candidate.source,
+        ]);
+        launchFailures = environmentRun.outcomes
+          .filter((outcome) => !outcome.passed)
+          .map((outcome) =>
+            outcome.reason === null || outcome.reason === undefined
+              ? outcome
+              : {
+                  ...outcome,
+                  reason: nameLaunchFailure(
+                    explainRevert(outcome.reason, environmentSelectors),
+                    candidate.componentSalts,
+                  ),
+                },
+          );
+        problem =
+          `the market's own launch reverts: ` +
+          (launchFailures
+            .map((outcome) => `${outcome.name}: ${outcome.reason ?? "failed without a reason"}`)
+            .join("; ") || "the deterministic launch smoke test did not run");
+      }
+
+      if (problem === null) continue;
+
+      /**
+       * The same revert twice ends the loop, but only once a repair has actually changed
+       * something.
+       *
+       * The guard is here because an attempt that fixes nothing will not fix anything
+       * next time either. It was ending builds a round early: shown the revert but not
+       * the launcher's placement, a model would edit something plausible and irrelevant —
+       * a live TEST001 build retyped a parameter hoping the launcher would read it — the
+       * revert came back byte-identical, and the second of two rounds went unspent. An
+       * attempt that rewrote no file is the case this was meant to catch.
+       */
+      const repeated = problem === previousDeploymentProblem && !previousRepairChangedFiles;
+
+      if (deploymentAttempt >= budget.deploymentRepairs || repeated) {
+        return await fail({
+          code: FailureCode.Undeployable,
+          stage: Stage.TestEnvironment,
+          detail:
+            `This market compiled, but Agen cannot construct the production-faithful test ` +
+            `deployment. ${problem}`,
+          ...(launchFailures.length === 0 ? {} : { failingTests: launchFailures }),
+        });
+      }
+
+      previousDeploymentProblem = problem;
+      deploymentAttempt += 1;
+      job = { ...job, harnessAttempts: deploymentAttempt };
+
+      let repair: Repair;
+      try {
+        const output = await repairDeployability(provider, {
+          sources,
+          problem,
+          remedy: remedyBrief(recogniseAll([], [], [problem])),
+          attempt: deploymentAttempt,
+          placement: candidate?.placement ?? [],
+        });
+        repair = output.value;
+        previousRepairChangedFiles = repair.files.length > 0;
+        job = remember(job, Stage.TestEnvironment, output);
+      } catch (error) {
+        return await fail(failureFor(error, Stage.TestEnvironment));
+      }
+
+      diagnostics = withRepair(diagnostics, {
+        attempt: deploymentAttempt,
+        at: now(),
+        kind: "compilation",
+        diagnosis: repair.diagnosis,
+        files: repair.files.map((file) => file.path),
+        gaveUp: repair.giveUp,
+        category: FailureCategory.Manifest,
+        blame: Blame.Contract,
+      });
+      await flushDiagnostics();
+
+      if (repair.giveUp) {
+        return await fail({
+          code: FailureCode.Undeployable,
+          stage: Stage.TestEnvironment,
+          detail:
+            `This market compiled, but Agen cannot construct the production-faithful test ` +
+            `deployment. ${problem}`,
+          ...(launchFailures.length === 0 ? {} : { failingTests: launchFailures }),
+        });
+      }
+
+      const contractRepairs = repair.files.filter((file) =>
+        file.path.startsWith(`${LAYOUT.contracts}/`),
+      );
+      sources = mergeSources(sources, contractRepairs);
+      await workspace.write(contractRepairs);
+      job = { ...job, sources };
+
+      const rebuiltForTests = await restoreCompilation(Stage.TestEnvironment);
+      if (!rebuiltForTests.ok) {
+        return await fail({
+          code: FailureCode.CompilationUnrepairable,
+          stage: Stage.TestEnvironment,
+          detail: "A change made to construct the canonical test deployment stopped compiling.",
+          diagnostics: rebuiltForTests.diagnostics,
+        });
+      }
+
+      const repairedSecurity = await reviewSecurity();
+      const introduced = blockersIn(repairedSecurity);
+      if (introduced.length > 0) {
+        return await fail({
+          code: FailureCode.GateBlocked,
+          stage: Stage.TestEnvironment,
+          detail:
+            `A change made to construct the canonical test deployment introduced a safety ` +
+            `blocker: ${introduced[0]!.title}.`,
+          gateFindings: introduced,
+        });
+      }
+    }
+
+    if (testEnvironment === null) {
+      return await fail({
+        code: FailureCode.HarnessInfrastructure,
+        stage: Stage.TestEnvironment,
+        detail: "The canonical test environment produced no deployment.",
+      });
+    }
+
+    job = await save(
+      endStage(
+        { ...job, sources },
+        {
+          status: "succeeded",
+          ...(deploymentAttempt === 0
+            ? {}
+            : { detail: `Resolved the deployment description in ${String(deploymentAttempt)} repair.` }),
+          now: now(),
+        },
+      ),
+    );
+
+    // --- behavior tests --------------------------------------------------
 
     job = await save(beginStage(job, Stage.TestGeneration, now()));
 
+    const generationEnvironment = testEnvironment;
     let tests;
     try {
-      const output = await generateTests(provider, { specification, sources, context });
+      const { output, retries } = await withArtefactRetries(budget.artefactRetries, (problems) =>
+        generateTests(provider, {
+          specification,
+          sources,
+          context,
+          testEnvironment: generationEnvironment,
+          ...(problems === undefined ? {} : { validationProblems: problems }),
+        }),
+      );
       tests = output.value;
-      job = remember(job, Stage.TestGeneration, output);
+      job = remember(job, Stage.TestGeneration, output, null, undefined, retries);
     } catch (error) {
       return await fail(failureFor(error, Stage.TestGeneration));
     }
@@ -1080,7 +1793,7 @@ export async function runBuild(
     // member list, so each round guesses a different plausible name. Answered here, the
     // repair is handed the actual members and has nothing left to guess at. One pass,
     // before the loop, so a wrong reading costs a single call and never recurs.
-    const missing = unknownMembers([...preludeSources(), ...sources], tests);
+    const missing = unknownMembers([...preludeSources(), ...sources, testEnvironment.source], tests);
 
     if (missing.length > 0) {
       job = await save(beginStage(job, Stage.TestRepair, now()));
@@ -1113,10 +1826,14 @@ export async function runBuild(
         // tests, the market has already compiled and passed its gates, and a repair that
         // answers "this member is missing" by adding it is the one outcome to refuse.
         if (!output.value.giveUp) {
-          tests = mergeSources(
+          const candidate = mergeSources(
             tests,
-            output.value.files.filter((file) => file.path.startsWith(`${LAYOUT.tests}/`)),
+            output.value.files.filter(
+              (file) =>
+                file.path.startsWith(`${LAYOUT.tests}/`) && file.path !== CANONICAL_TEST_BASE,
+            ),
           );
+          if (manualTestInfrastructureProblems(candidate).length === 0) tests = candidate;
           job = remember(job, Stage.TestRepair, output);
         }
       } catch {
@@ -1131,12 +1848,12 @@ export async function runBuild(
     }
 
     job = await save(beginStage(job, Stage.TestExecution, now()));
-    await workspace.write(tests);
+    await workspace.write([testEnvironment.source, testEnvironment.smoke, ...tests]);
 
     // Critical only. Fuzzing and invariants are worth more per bug found and cost
     // minutes rather than seconds, so they run after the creator has their market
     // rather than before — see the deep validation stage below.
-    let tested = await runTests({ root: workspace.root, depth: "critical" });
+    let tested = await runSuite({ depth: "critical" });
     let testAttempt = 0;
     let testSignature: string | null = null;
     /**
@@ -1167,7 +1884,12 @@ export async function runBuild(
      * live Harbour build spent three rounds and nine minutes failing to notice that
      * `0xa570b990` was `NotHook`.
      */
-    const knownSelectors = selectorsOf([...preludeSources(), ...sources, ...tests]);
+    let knownSelectors = selectorsOf([
+      ...preludeSources(),
+      ...sources,
+      testEnvironment.source,
+      ...tests,
+    ]);
 
     while (!tested.ok && testAttempt < budget.testRepairs) {
       // A suite that will not compile is a different question from a suite that fails,
@@ -1188,6 +1910,29 @@ export async function runBuild(
         diagnostics: tested.buildFailure ?? [],
         failingTests: failures,
       });
+
+      // A deterministic fixture cannot be repaired by rewriting the generated market or
+      // its behavior assertions. Stop in its own ownership lane, with zero test-repair
+      // rounds consumed, so constructor/wiring/pool failures are never laundered into an
+      // implementation change.
+      if (failure.category === FailureCategory.HarnessInfrastructure) {
+        return await fail({
+          code: FailureCode.HarnessInfrastructure,
+          stage: Stage.TestExecution,
+          detail:
+            failures.length > 0
+              ? `The canonical Agen test deployment failed before behavior execution: ${failures
+                  .map((outcome) => `${outcome.name}: ${outcome.reason ?? "setup failed"}`)
+                  .join("; ")}`
+              : "The canonical Agen test deployment did not compile.",
+          failingTests: failures,
+          ...(tested.buildFailure === null ? {} : { diagnostics: tested.buildFailure }),
+        });
+      }
+
+      const editableContracts =
+        tested.buildFailure === null &&
+        (failure.blame === Blame.Contract || failure.playbook === null);
       const tactic = tacticFor({
         attempt: testAttempt,
         previousSignature: testSignature,
@@ -1226,7 +1971,9 @@ export async function runBuild(
         const output =
           tested.buildFailure !== null
             ? await repairCompilation(provider, {
-                sources: [...sources, ...tests],
+                // The contracts compiled before tests existed. A compile failure here is
+                // in a generated behavior suite; contract files are read-only evidence.
+                sources: tests,
                 diagnostics: tested.buildFailure,
                 attempt: testAttempt,
                 remedy: remedyBrief(recogniseAll(tested.buildFailure)),
@@ -1240,6 +1987,8 @@ export async function runBuild(
                 attempt: testAttempt,
                 remedy: remedyBrief(recogniseAll([], failures)),
                 tactic,
+                editableContracts,
+                placement: testEnvironment.placement,
               });
         repair = output.value;
         job = remember(job, Stage.TestRepair, output);
@@ -1272,15 +2021,48 @@ export async function runBuild(
         });
       }
 
-      sources = mergeSources(
-        sources,
-        repair.files.filter((file) => file.path.startsWith(`${LAYOUT.contracts}/`)),
+      const contractRepairs = editableContracts
+        ? repair.files.filter((file) => file.path.startsWith(`${LAYOUT.contracts}/`))
+        : [];
+      const testRepairs = repair.files.filter(
+        (file) => file.path.startsWith(`${LAYOUT.tests}/`) && file.path !== CANONICAL_TEST_BASE,
       );
-      tests = mergeSources(
-        tests,
-        repair.files.filter((file) => file.path.startsWith(`${LAYOUT.tests}/`)),
-      );
-      await workspace.write(repair.files);
+      const nextTests = mergeSources(tests, testRepairs);
+      const manualInfrastructure = manualTestInfrastructureProblems(nextTests);
+      if (manualInfrastructure.length > 0) {
+        return await fail({
+          code: FailureCode.TestsUnrepairable,
+          stage: Stage.TestRepair,
+          detail: `A test repair tried to recreate launch infrastructure: ${manualInfrastructure.join("; ")}`,
+          failingTests: failures,
+        });
+      }
+
+      sources = mergeSources(sources, contractRepairs);
+      tests = nextTests;
+      await workspace.write([...contractRepairs, ...testRepairs]);
+
+      if (contractRepairs.length > 0) {
+        try {
+          testEnvironment = await buildCanonicalTestEnvironment();
+          await workspace.write([testEnvironment.source, testEnvironment.smoke]);
+          knownSelectors = selectorsOf([
+            ...preludeSources(),
+            ...sources,
+            testEnvironment.source,
+            ...tests,
+          ]);
+        } catch (error) {
+          return await fail({
+            code: FailureCode.HarnessInfrastructure,
+            stage: Stage.TestRepair,
+            detail:
+              error instanceof Error
+                ? `A behavior repair made the canonical deployment unreadable. ${error.message}`
+                : "A behavior repair made the canonical deployment unreadable.",
+          });
+        }
+      }
 
       job = await save(
         endStage(
@@ -1290,13 +2072,31 @@ export async function runBuild(
       );
 
       job = await save(beginStage(job, Stage.TestExecution, now()));
-      tested = await runTests({ root: workspace.root, depth: "critical" });
+      tested = await runSuite({ depth: "critical" });
 
       diagnostics = withTestAttempt(diagnostics, testAttemptFrom(tested, testAttempt, now()));
       await flushDiagnostics();
     }
 
     if (!tested.ok) {
+      const remaining = tested.outcomes.filter((outcome) => !outcome.passed);
+      const finalFailure = classify({
+        stage: Stage.TestExecution,
+        diagnostics: tested.buildFailure ?? [],
+        failingTests: remaining,
+      });
+      if (finalFailure.category === FailureCategory.HarnessInfrastructure) {
+        return await fail({
+          code: FailureCode.HarnessInfrastructure,
+          stage: Stage.TestExecution,
+          detail: `The canonical Agen deployment failed before behavior execution: ${remaining
+            .map((outcome) => `${outcome.name}: ${outcome.reason ?? "setup failed"}`)
+            .join("; ")}`,
+          failingTests: remaining,
+          ...(tested.buildFailure === null ? {} : { diagnostics: tested.buildFailure }),
+        });
+      }
+
       return await fail({
         code: FailureCode.TestsUnrepairable,
         stage: Stage.TestExecution,
@@ -1305,7 +2105,7 @@ export async function runBuild(
             ? "The generated test suite could not be made to compile."
             : `${String(tested.failed)} test${tested.failed === 1 ? "" : "s"} still failed after ` +
               `${String(budget.testRepairs)} repair attempts.`,
-        failingTests: tested.outcomes.filter((outcome) => !outcome.passed),
+        failingTests: remaining,
         ...(tested.buildFailure === null ? {} : { diagnostics: tested.buildFailure }),
       });
     }
@@ -1337,7 +2137,7 @@ export async function runBuild(
 
     job = await save(beginStage(job, Stage.DeepValidation, now()));
 
-    const deep = await runTests({ root: workspace.root, depth: "deep" });
+    const deep = await runSuite({ depth: "deep" });
 
     // The gates below judge evidence, and the evidence is the deep run. A fuzz test that
     // ran once during the pre-review pass proves the suite compiles, not that anything
@@ -1349,6 +2149,31 @@ export async function runBuild(
     await flushDiagnostics();
 
     if (!deep.ok) {
+      const deepFailures = deep.outcomes
+        .filter((outcome) => !outcome.passed)
+        .map((outcome) =>
+          outcome.reason === null
+            ? outcome
+            : { ...outcome, reason: explainRevert(outcome.reason, knownSelectors) },
+        );
+      const deepFailure = classify({
+        stage: Stage.DeepValidation,
+        diagnostics: deep.buildFailure ?? [],
+        failingTests: deepFailures,
+      });
+
+      if (deepFailure.category === FailureCategory.HarnessInfrastructure) {
+        return await fail({
+          code: FailureCode.HarnessInfrastructure,
+          stage: Stage.DeepValidation,
+          detail: `The canonical Agen deployment failed before deep behavior validation: ${deepFailures
+            .map((outcome) => `${outcome.name}: ${outcome.reason ?? "setup failed"}`)
+            .join("; ")}`,
+          failingTests: deepFailures,
+          ...(deep.buildFailure === null ? {} : { diagnostics: deep.buildFailure }),
+        });
+      }
+
       return await fail({
         code: FailureCode.TestsUnrepairable,
         stage: Stage.DeepValidation,
@@ -1356,7 +2181,8 @@ export async function runBuild(
           `${String(deep.failed)} fuzz or invariant test${deep.failed === 1 ? "" : "s"} failed. ` +
           `The market behaves correctly in the ordinary case and breaks under one Agen ` +
           `searched for, so it cannot be deployed.`,
-        failingTests: deep.outcomes.filter((outcome) => !outcome.passed),
+        failingTests: deepFailures,
+        ...(deep.buildFailure === null ? {} : { diagnostics: deep.buildFailure }),
       });
     }
 
@@ -1418,6 +2244,12 @@ export async function runBuild(
         invariantsWereProven({
           invariantIds: specification.invariants.map((invariant) => invariant.id),
           passingTests: proven.filter((o) => o.passed).map((o) => o.name),
+          // Read from the suite as it stands after repair, not as it was generated: a
+          // repair that renames a test moves the evidence, and the gate has to follow it.
+          coverage: invariantCoverage({
+            invariantIds: specification.invariants.map((invariant) => invariant.id),
+            sources: tests,
+          }),
         }),
       ]);
 
@@ -1470,12 +2302,6 @@ export async function runBuild(
     // but nothing compiled under that name" for a market that had compiled it perfectly
     // well. Only the ones this plan actually names are included, so an unused primitive
     // does not turn up in a market's artefact record.
-    const deployedPrelude = new Set(
-      plan.components
-        .map((component) => component.contractName)
-        .filter((name) => PRELUDE_CONTRACTS.includes(name)),
-    );
-
     // Read rather than computed once, because a market that cannot be launched gets a
     // chance to be corrected below and the artefacts of the corrected one are different
     // artefacts. Nothing is written to disk until a bundle has actually been assembled
@@ -1483,15 +2309,7 @@ export async function runBuild(
     const collectArtifacts = async (): Promise<BuildArtifacts> => ({
       jobId: job.id,
       createdAt: now(),
-      contracts: await readArtifacts({
-        outDir: join(workspace!.paths.artifacts, "out"),
-        sources: [
-          ...sources,
-          ...preludeSources().filter((source) =>
-            deployedPrelude.has(source.path.split("/").pop()?.replace(/\.sol$/, "") ?? ""),
-          ),
-        ],
-      }),
+      contracts: await marketArtifacts(),
       implementationHash: hashSources([...sources, ...tests]),
       specificationHash: hashSpecification(specification),
       toolchain: TOOLCHAIN,
@@ -1551,13 +2369,16 @@ export async function runBuild(
       try {
         assembleManifest({
           plan,
+          deployment,
           artifacts: artifacts.contracts,
           environment: {
             poolManager: probe.poolManager,
             installer: probe.factory,
             creator: PROBE_CREATOR,
-            feeReceiver: PROBE_CREATOR,
+            feeReceiver: PROBE_FEE_RECEIVER,
             agenRouter: probe.router ?? null,
+            treasury: PROBE_FEE_RECEIVER,
+            beneficiary: PROBE_FEE_RECEIVER,
             name: request.name,
             symbol: request.symbol,
             supplyTokens,
@@ -1567,7 +2388,7 @@ export async function runBuild(
           quoteAsset: NATIVE_QUOTE,
           lpFee: fee.lpFee,
           initialTick: PROBE_TICK,
-          feeReceiver: PROBE_CREATOR,
+          feeReceiver: PROBE_FEE_RECEIVER,
           marketSalt: marketSaltFor(job.id),
           deployerAddress: probe.deployer,
         });
@@ -1602,7 +2423,6 @@ export async function runBuild(
     // rewritten to be readable and a hook rewritten to be wrong.
     let launchBuild = rebuilt;
     let launchable = await proveLaunchable(launchBuild);
-    let deploymentAttempt = 0;
     let lastSignature: string | null = null;
 
     while (!launchable.ok && deploymentAttempt < budget.deploymentRepairs) {
@@ -1617,6 +2437,7 @@ export async function runBuild(
       if (signature === lastSignature) break;
       lastSignature = signature;
       deploymentAttempt += 1;
+      job = { ...job, harnessAttempts: deploymentAttempt };
 
       let repair: Repair;
       try {
@@ -1644,8 +2465,11 @@ export async function runBuild(
 
       if (repair.giveUp) break;
 
-      sources = mergeSources(sources, repair.files);
-      await workspace.write(repair.files);
+      const contractRepairs = repair.files.filter((file) =>
+        file.path.startsWith(`${LAYOUT.contracts}/`),
+      );
+      sources = mergeSources(sources, contractRepairs);
+      await workspace.write(contractRepairs);
       job = { ...job, sources };
 
       launchBuild = await forcedBuild();
@@ -1658,7 +2482,21 @@ export async function runBuild(
         });
       }
 
-      const reproven = await runTests({ root: workspace.root, depth: "critical" });
+      try {
+        testEnvironment = await buildCanonicalTestEnvironment();
+        await workspace.write([testEnvironment.source, testEnvironment.smoke]);
+      } catch (error) {
+        return await fail({
+          code: FailureCode.HarnessInfrastructure,
+          stage: Stage.DeploymentReady,
+          detail:
+            error instanceof Error
+              ? `The repaired market no longer has a canonical test deployment. ${error.message}`
+              : "The repaired market no longer has a canonical test deployment.",
+        });
+      }
+
+      const reproven = await runSuite({ depth: "critical" });
       diagnostics = withTestAttempt(
         diagnostics,
         testAttemptFrom(reproven, testAttempt + deploymentAttempt + 1, now()),
@@ -1666,13 +2504,25 @@ export async function runBuild(
       await flushDiagnostics();
 
       if (!reproven.ok) {
+        const reprovenFailures = reproven.outcomes.filter((outcome) => !outcome.passed);
+        const ownership = classify({
+          stage: Stage.TestExecution,
+          diagnostics: reproven.buildFailure ?? [],
+          failingTests: reprovenFailures,
+        });
         return await fail({
-          code: FailureCode.TestsUnrepairable,
+          code:
+            ownership.category === FailureCategory.HarnessInfrastructure
+              ? FailureCode.HarnessInfrastructure
+              : FailureCode.TestsUnrepairable,
           stage: Stage.DeploymentReady,
           detail:
-            "A change made so this market could launch altered what it does, and its own " +
-            "tests no longer pass.",
-          failingTests: reproven.outcomes.filter((outcome) => !outcome.passed),
+            ownership.category === FailureCategory.HarnessInfrastructure
+              ? "A launchability repair broke the canonical test deployment before behavior ran."
+              : "A change made so this market could launch altered what it does, and its own " +
+                "tests no longer pass.",
+          failingTests: reprovenFailures,
+          ...(reproven.buildFailure === null ? {} : { diagnostics: reproven.buildFailure }),
         });
       }
 
@@ -1716,6 +2566,7 @@ export async function runBuild(
       lpFee: fee.lpFee,
       feeMode: fee.mode,
       feeModeReason: fee.reason,
+      deployment,
       supplyTokens,
       hookComponentId: plan.components.find((component) => component.role === "hook")!.id,
       tokenComponentId: plan.components.find((component) => component.role === "token")!.id,

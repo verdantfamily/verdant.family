@@ -978,6 +978,44 @@ const plan = {
   ],
 };
 
+/**
+ * How the bundle is deployed. The hook takes the accounting contract's address in its
+ * constructor, so the accounting contract is placed first; the rewards it holds are
+ * withdrawn by each winner, so nothing controls it.
+ */
+const deployment = {
+  components: [
+    {
+      componentId: "rivalToken",
+      constructorArguments: [{ name: "recipient", type: "address", source: "INFRA:INSTALLER" }],
+      immutable: ["recipient"],
+      wiring: [],
+      controller: null,
+    },
+    {
+      componentId: "rivalRounds",
+      constructorArguments: [],
+      immutable: [],
+      wiring: [],
+      controller: null,
+    },
+    {
+      componentId: "rivalHook",
+      constructorArguments: [
+        { name: "accounting_", type: "address", source: "COMPONENT:rivalRounds" },
+        { name: "poolManager_", type: "address", source: "INFRA:POOL_MANAGER" },
+      ],
+      immutable: ["accounting_", "poolManager_"],
+      wiring: [],
+      controller: null,
+    },
+  ],
+  pool: { feeMode: "dynamic", lpFee: "8388608" },
+  custodyComponentId: "rivalRounds",
+  feeClaimComponentId: "rivalRounds",
+  oneTimeInitialization: [],
+};
+
 const job = await runBuild(
   {
     prompt:
@@ -1002,7 +1040,7 @@ const job = await runBuild(
       { suggestions: [] },
       // Planning is two calls: what is already solved, then what to build.
       { reuse: [{ catalogueId: "base-hook", why: "it needs a hook" }], novel: [] },
-      plan,
+      { plan, deployment },
       // One answer per generated component, in plan order. The token is absent on
       // purpose: a fixed-supply ERC20 is written by Agen rather than by a model.
       { content: ACCOUNTING, notes: [] },

@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { candles as candleLib } from "@verdant/sdk";
 import type { IChartApi, ISeriesApi, UTCTimestamp } from "lightweight-charts";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
   allRangeFor,
@@ -55,6 +55,15 @@ export interface ChartProps {
   /** The build id, which is how this app's own routes address a market. */
   readonly marketId: string;
   readonly live: boolean;
+  /**
+   * The token's name and mark, rendered on the same row as the timeframe strip.
+   *
+   * Passed in rather than the range state being lifted out. The design puts the identity
+   * and the timeframe on one line, and of the two ways to arrange that — this component
+   * receiving a node it does not interpret, or the page owning `rangeId` and becoming a
+   * client component to hold it — only this one leaves the page on the server.
+   */
+  readonly identity?: ReactNode;
   /** Rendered on the server, so the first paint has a line in it. Null when there is none. */
   readonly initial: SerializedSeries | null;
   /** Whether this deployment knows where the indexer is at all. */
@@ -145,6 +154,7 @@ function readPalette(element: HTMLElement): Palette {
 export function Chart({
   marketId,
   live,
+  identity,
   initial,
   feedConfigured,
   valueScale,
@@ -399,6 +409,17 @@ export function Chart({
       ? fallbackHeadline
       : `${compactEth(valueScale === null ? asFloat(shown) : asFloat(shown) * valueScale)} ETH`;
 
+  /*
+   * Whether the headline is a number at all.
+   *
+   * Tested on the rendered string rather than on `shown`, because the fallback is
+   * sometimes a real figure — a launched market with no indexer history still knows its
+   * market cap — and sometimes a phrase for a market that has none. A headline with no
+   * digit in it is not a figure, and is set smaller: an em dash at headline size is a
+   * heavy black bar that reads as a divider rather than as a missing number.
+   */
+  const hasFigure = /[0-9]/.test(headline);
+
   /** A stored price in whatever unit the chart is currently drawing. */
   const label = (price: bigint): string =>
     compactEth(valueScale === null ? asFloat(price) : asFloat(price) * valueScale);
@@ -415,32 +436,11 @@ export function Chart({
             : "Nothing has traded yet, so there is no price to draw.";
 
   return (
-    <section className="chart">
-      <header className="chart-head">
-        <div>
-          <p className="chart-label">{valueScale === null ? "price" : "market cap"}</p>
+    <section>
+      <header className="ax-tk-top">
+        {identity}
 
-          {/* An em dash set at headline size reads as a heavy black bar rather than as
-              a missing number, so an absent figure is drawn in the muted weight the
-              rest of the page uses for one. */}
-          <p className={shown === undefined ? "chart-headline absent" : "chart-headline"}>
-            {headline}
-          </p>
-
-          <p className="chart-sub">
-            {summary?.change == null ? null : (
-              <span className={rising ? "up" : "down"}>
-                {summary.change >= 0 ? "+" : "−"}
-                {Math.abs(summary.change).toFixed(2)}%
-              </span>
-            )}
-            <span className="chart-span">
-              {hovered === null ? range.label : formatInstant(hovered.at)}
-            </span>
-          </p>
-        </div>
-
-        <div className="chart-ranges" role="tablist" aria-label="timeframe">
+        <div className="ax-tk-ranges" role="tablist" aria-label="timeframe">
           {ranges.map((entry) => (
             <button
               type="button"
@@ -458,23 +458,33 @@ export function Chart({
         </div>
       </header>
 
-      <div className="chart-body">
-        <div ref={container} className="chart-canvas" />
+      <div className="ax-tk-cap">
+        <span>{valueScale === null ? "Price" : "Market cap"}</span>
 
-        {points.length === 0 ? <p className="chart-empty">{empty}</p> : null}
+        <strong className={hasFigure ? undefined : "absent"}>{headline}</strong>
+
+        <div className="ax-tk-move">
+          {summary?.change == null ? null : (
+            <span className={rising ? "up" : "down"}>
+              {summary.change >= 0 ? "+" : "−"}
+              {Math.abs(summary.change).toFixed(2)}%
+            </span>
+          )}
+          <span>{hovered === null ? range.label : formatInstant(hovered.at)}</span>
+          {summary === null || summary.trades === 0 ? null : (
+            <span>
+              low {label(summary.low)} · high {label(summary.high)} · {String(summary.trades)}{" "}
+              {summary.trades === 1 ? "trade" : "trades"}
+            </span>
+          )}
+        </div>
       </div>
 
-      <footer className="chart-foot">
-        <span>{summary === null ? "" : formatInstant(summary.from)}</span>
-        <span className="chart-extremes">
-          {summary === null
-            ? ""
-            : `low ${label(summary.low)} · high ${label(summary.high)} · ${String(summary.trades)} ${
-                summary.trades === 1 ? "trade" : "trades"
-              }`}
-        </span>
-        <span>{summary === null ? "" : formatInstant(summary.to)}</span>
-      </footer>
+      <div className="ax-tk-plot">
+        <div ref={container} className="ax-tk-canvas" />
+
+        {points.length === 0 ? <p className="ax-tk-empty">{empty}</p> : null}
+      </div>
     </section>
   );
 }

@@ -6389,6 +6389,19 @@ pre {
   color: var(--text);
 }
 
+/* The read-back and the irreversible button are two different things to do, and a
+   button touching the last line of a summary reads as part of it. */
+.launch-check + button {
+  margin-top: clamp(1.6rem, 3vw, 2.2rem);
+}
+
+/* Anything explaining why the launch did not happen gets the same separation, so it
+   is not mistaken for a caption on the button. */
+.launch-panel .build-blocked,
+.launch-panel .notice {
+  margin-top: 1.1rem;
+}
+
 /* --- verification --------------------------------------------------------- */
 
 .verified {

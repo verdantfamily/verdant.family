@@ -46,7 +46,7 @@ import {
 
 import { abi, agen, trade as sdkTrade } from "@verdant/sdk";
 
-import { AGEN_ROUTER, CHAIN_ID, EXTERNAL, chain } from "../../lib/chain";
+import { AGEN_ROUTER, CHAIN_ID, chain } from "../../lib/chain";
 import { DASH, eth, feeRate, tokens } from "../../lib/format";
 
 type Side = "buy" | "sell";
@@ -62,28 +62,7 @@ const SELL_SHARES: readonly { readonly label: string; readonly share: bigint }[]
 /** One percent, the default everywhere a swap needs a floor. */
 const SLIPPAGE_BPS = 100;
 
-function Row({
-  label,
-  value,
-  hint,
-}: {
-  readonly label: string;
-  readonly value: string;
-  readonly hint?: string;
-}) {
-  return (
-    <div className="tp-row">
-      <span className="tp-row-label">
-        {label}
-        {hint === undefined ? null : <span className="tp-row-hint">{hint}</span>}
-      </span>
-      <span className="tp-row-value">{value}</span>
-    </div>
-  );
-}
-
 export interface TradeMarket {
-  readonly name: string;
   readonly symbol: string;
   readonly live: boolean;
   /** The market's declared base fee. Shown before a quote exists, then superseded. */
@@ -95,7 +74,7 @@ export interface TradeMarket {
 }
 
 export function TradePanel({ market }: { readonly market: TradeMarket }) {
-  const { name, symbol, live, feePpm } = market;
+  const { symbol, live, feePpm } = market;
 
   const [side, setSide] = useState<Side>("buy");
   const [amount, setAmount] = useState("");
@@ -369,172 +348,168 @@ export function TradePanel({ market }: { readonly market: TradeMarket }) {
   const held = (balance.data as bigint | undefined) ?? 0n;
 
   return (
-    <aside className="trade-panel" id="trade">
-      <header className="tp-head">
-        <span className="tp-mark" aria-hidden="true">
-          {symbol.slice(0, 2)}
-        </span>
-        <div className="tp-who">
-          <span className="tp-name">{name}</span>
-          <span className="tp-symbol">{symbol}</span>
+    <div>
+      <div className="ax-tk-card">
+        {/* One object with a position rather than two buttons, so the side in force is
+            legible without reading either label. */}
+        <div className="ax-tk-sides" role="tablist" aria-label="side">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={buying}
+            className={buying ? "on" : ""}
+            onClick={() => {
+              setSide("buy");
+              setAmount("");
+            }}
+          >
+            Buy
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!buying}
+            className={buying ? "sell" : "on sell"}
+            onClick={() => {
+              setSide("sell");
+              setAmount("");
+            }}
+          >
+            Sell
+          </button>
         </div>
-        <span className="tp-fee" title="The fee this token's own rules charge">
-          {feeRate(feePpm)}
-        </span>
-      </header>
 
-      <div className="tp-sides" role="tablist" aria-label="side">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={buying}
-          className={buying ? "tp-side on buy" : "tp-side"}
-          onClick={() => {
-            setSide("buy");
-            setAmount("");
-          }}
-        >
-          Buy
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={!buying}
-          className={!buying ? "tp-side on sell" : "tp-side"}
-          onClick={() => {
-            setSide("sell");
-            setAmount("");
-          }}
-        >
-          Sell
-        </button>
-      </div>
-
-      {/* The two legs sit against each other with the direction between them, which is
-          the arrangement every swap interface uses because it makes the trade readable
-          as one sentence rather than as two fields. */}
-      <div className="tp-legs">
-        <div className="tp-leg">
-          <div className="tp-leg-head">
-            <span>you pay</span>
-            <span className="tp-asset">{buying ? quoteSymbol : `$${symbol}`}</span>
-          </div>
-
+        {/*
+          The amount, at the size of the decision.
+          
+          The ticker is under the figure rather than in front of it. In front is where a
+          currency symbol goes, and it works for `$` — one character, always the same
+          width. Here the mark is `ETH` on a buy and the token's own ticker on a sell, so
+          a prefix would be up to eleven characters of a pair that is supposed to be
+          centred, and the figure would sit off-centre by a different distance on each
+          side of the trade.
+        */}
+        <div className="ax-tk-amount">
           <input
-            className="tp-amount"
             inputMode="decimal"
-            placeholder="0.0"
+            placeholder="0"
             value={amount}
             aria-label={`amount to ${side}`}
             onChange={(event) => {
               setAmount(event.currentTarget.value);
             }}
           />
+          <em>{buying ? quoteSymbol : `$${symbol}`}</em>
+        </div>
+
+        <div className="ax-tk-sizes">
+          {buying
+            ? BUY_SIZES.map((size) => (
+                <button
+                  type="button"
+                  key={size}
+                  onClick={() => {
+                    setAmount(size);
+                  }}
+                >
+                  {size} {quoteSymbol}
+                </button>
+              ))
+            : SELL_SHARES.map((size) => (
+                <button
+                  type="button"
+                  key={size.label}
+                  disabled={held === 0n}
+                  onClick={() => {
+                    setAmount(formatEther((held * size.share) / 100n));
+                  }}
+                >
+                  {size.label}
+                </button>
+              ))}
+        </div>
+
+        {/*
+          What arrives, and what it costs on the way.
+          
+          Quieter than everything above it, and not optional: a panel that takes an amount
+          and a signature without ever saying what comes back is asking somebody to spend
+          money on trust. The output leads because it is the answer to the question the
+          amount above asked.
+        */}
+        <div className="ax-tk-out">
+          <div className="lead">
+            <span>You receive</span>
+            <b>
+              {quote === null
+                ? DASH
+                : buying
+                  ? `${tokens(Number(formatEther(quote.amountOut)))} $${symbol}`
+                  : `${eth(Number(formatEther(quote.amountOut)))} ${quoteSymbol}`}
+            </b>
+          </div>
+
+          <div>
+            <span>Price impact</span>
+            <b>{quote === null ? DASH : `${(quote.priceImpactBps / 100).toFixed(2)}%`}</b>
+          </div>
+
+          <div>
+            <span>Minimum received</span>
+            <b>
+              {quote === null
+                ? DASH
+                : buying
+                  ? tokens(Number(formatEther(quote.minAmountOut)))
+                  : eth(Number(formatEther(quote.minAmountOut)))}
+            </b>
+          </div>
+
+          <div>
+            <span>Market fee</span>
+            <b>{feeRate(feePpm)}</b>
+          </div>
 
           {buying || held === 0n ? null : (
-            <span className="tp-held">{tokens(Number(formatEther(held)))} available</span>
+            <div>
+              <span>You hold</span>
+              <b>
+                {tokens(Number(formatEther(held)))} ${symbol}
+              </b>
+            </div>
           )}
         </div>
 
-        <span className="tp-turn" aria-hidden="true">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <path d="M8 3.5v9M4.5 9l3.5 3.5L11.5 9" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </span>
-
-        <div className="tp-leg tp-leg-out">
-          <div className="tp-leg-head">
-            <span>you receive</span>
-            <span className="tp-asset">{buying ? `$${symbol}` : quoteSymbol}</span>
-          </div>
-          <span className="tp-out">
-            {quote === null
-              ? DASH
-              : buying
-                ? tokens(Number(formatEther(quote.amountOut)))
-                : eth(Number(formatEther(quote.amountOut)))}
-          </span>
-        </div>
+        <button
+          type="button"
+          className={buying ? "ax-tk-go" : "ax-tk-go sell"}
+          disabled={action.disabled}
+          onClick={() => {
+            if (wrongNetwork) {
+              switchChain.mutate({ chainId: CHAIN_ID });
+              return;
+            }
+            submit();
+          }}
+        >
+          {action.label}
+        </button>
       </div>
 
-      <div className="tp-sizes">
-        {buying
-          ? BUY_SIZES.map((size) => (
-              <button
-                type="button"
-                key={size}
-                onClick={() => {
-                  setAmount(size);
-                }}
-              >
-                {size} {quoteSymbol}
-              </button>
-            ))
-          : SELL_SHARES.map((size) => (
-              <button
-                type="button"
-                key={size.label}
-                disabled={held === 0n}
-                onClick={() => {
-                  setAmount(formatEther((held * size.share) / 100n));
-                }}
-              >
-                {size.label}
-              </button>
-            ))}
-      </div>
-
-      <div className="tp-rows">
-        <Row
-          label="Price impact"
-          value={quote === null ? DASH : `${(quote.priceImpactBps / 100).toFixed(2)}%`}
-          hint="fee included"
-        />
-        <Row
-          label="Minimum received"
-          value={
-            quote === null
-              ? DASH
-              : buying
-                ? tokens(Number(formatEther(quote.minAmountOut)))
-                : eth(Number(formatEther(quote.minAmountOut)))
-          }
-          hint="1% slippage"
-        />
-        <Row
-          label="Market fee"
-          value={feeRate(feePpm)}
-          {...(feePpm === null ? {} : { hint: "set by this token's rules" })}
-        />
-      </div>
-
-      <button
-        type="button"
-        className={buying ? "tp-action buy" : "tp-action sell"}
-        disabled={action.disabled}
-        onClick={() => {
-          if (wrongNetwork) {
-            switchChain.mutate({ chainId: CHAIN_ID });
-            return;
-          }
-          submit();
-        }}
-      >
-        {action.label}
-      </button>
-
-      {receipt.isSuccess ? <p className="tp-done">Done. Your balance has updated.</p> : null}
-
-      {send.error !== null && !isRejection(send.error) ? (
-        <p className="tp-note tp-error">{shorten(send.error.message)}</p>
+      {receipt.isSuccess ? (
+        <p className="ax-tk-note good">Done. Your balance has updated.</p>
       ) : null}
 
-      <p className="tp-note">
+      {send.error !== null && !isRejection(send.error) ? (
+        <p className="ax-tk-note bad">{shorten(send.error.message)}</p>
+      ) : null}
+
+      <p className="ax-tk-note">
         {live
           ? "Priced by Uniswap at the moment you sign. Agen never takes custody."
           : "This token has been built and cleared but not launched, so there is no pool to trade against yet."}
       </p>
-    </aside>
+    </div>
   );
 }
 

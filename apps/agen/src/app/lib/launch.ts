@@ -196,26 +196,10 @@ export async function prepareLaunch(request: LaunchRequest): Promise<PreparedLau
 
   const supply = job.manifest.supplyTokens * TOKEN_SCALE;
 
-  // The same tick every time: one supply, one opening valuation, no creator input.
-  // Computed rather than written down as a tick, because the valuation is the thing that
-  // was decided and the tick is only what it works out to — a hardcoded tick would
-  // silently stop meaning 1.5 ether the day either constant moved.
-  let initialTick: number;
-  try {
-    initialTick = agen.initialTickForValuation({
-      supply,
-      valuation: AGEN_LAUNCH.valuationWei,
-    });
-  } catch (error) {
-    // Not a creator's mistake: they were not asked. A market whose supply cannot be
-    // priced at Agen's baseline is a defect in the constants or in the build.
-    throw new LaunchError(
-      `Agen's opening valuation cannot be expressed as a price for this supply. ${
-        error instanceof Error ? error.message : ""
-      }`,
-      500,
-    );
-  }
+  // One source of truth for production, compiler preflight and the deterministic test
+  // fixture. SDK parity tests prove this tick still represents the configured supply at
+  // the configured opening valuation.
+  const initialTick = AGEN_LAUNCH.initialTick;
 
   // The grid is `AgenCurve`'s and the factory reverts off it, so this is a second check
   // on arithmetic that has already rounded. Cheap, and the failure it catches is one a
@@ -229,6 +213,10 @@ export async function prepareLaunch(request: LaunchRequest): Promise<PreparedLau
   try {
     manifest = assembleManifest({
       plan: job.plan,
+      // The deployment this build cleared, materialized rather than worked out again. The
+      // canonical fixture ran this exact document in Foundry; a launch assembled from
+      // anything else is a bundle nothing has executed.
+      deployment: job.manifest.deployment,
       artifacts: artefacts.contracts,
       environment: {
         poolManager: EXTERNAL.poolManager,
@@ -242,6 +230,13 @@ export async function prepareLaunch(request: LaunchRequest): Promise<PreparedLau
         // message naming the component that asked, rather than deploying a hook that
         // would authenticate against nothing.
         agenRouter: AGEN_ROUTER,
+        // The launch screen collects one destination, so a market that names a treasury or
+        // a beneficiary is given the same address the fees go to. Resolved here rather
+        // than substituted in the deployment, so the day a creator can name a treasury
+        // this is the only line that changes — and the canonical fixture resolves them the
+        // same way, so nothing is proven that production would not do.
+        treasury: feeReceiver,
+        beneficiary: feeReceiver,
         name: job.name,
         symbol: job.symbol,
         supplyTokens: job.manifest.supplyTokens,

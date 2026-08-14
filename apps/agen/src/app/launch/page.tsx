@@ -1,27 +1,36 @@
 import type { Metadata } from "next";
 
 import { Flow } from "./flow";
+import { Models } from "./models";
 
 export const metadata: Metadata = {
   title: "create — agen.space",
-  description: "Describe your market. Agen builds it.",
+  description: "Choose how your token opens. Instant, or described in plain English.",
 };
 
 /**
  * The launch page.
  *
- * A thin server shell around a client flow, because everything interesting here is a
- * conversation with a build that is already running. The flow still prerenders — see the
- * note on `fromUrl` for why it reads the query string the long way round.
+ * Two things live at this address, and which one renders is decided by the query string
+ * rather than by a redirect.
  *
- * The banner, the navigation and the form all belong to `Flow` rather than to this file:
- * the banner spans the page while the form sits inside the measure, and which of the
- * three steps is current is state only the flow holds.
+ * Ordinarily it is the shelf of launch models, because arriving at Create without having
+ * chosen one is the common case. But a build in flight owns this URL: `Flow` writes
+ * `/launch?build=<id>` as it starts so a reload lands back on the running build, and the
+ * front page's composer sends a typed description here as `?prompt=`. Both of those are
+ * already past the choice, so both render the flow.
+ *
+ * Doing it this way rather than moving the flow wholesale means every link and every
+ * replaced URL that already exists goes on working, and the file that writes them does
+ * not have to be touched.
  */
-export default function Launch() {
-  return (
-    <div className="ax-page">
-      <Flow />
-    </div>
-  );
+export default async function Launch({
+  searchParams,
+}: {
+  readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await searchParams;
+  const resuming = params.build !== undefined || params.prompt !== undefined;
+
+  return <div className="ax-page">{resuming ? <Flow /> : <Models />}</div>;
 }

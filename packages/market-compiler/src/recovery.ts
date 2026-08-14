@@ -34,8 +34,8 @@
 
 import type { Diagnostic, TestOutcome } from "./foundry";
 import type { GateFinding } from "./gates";
-import { Stage } from "./job";
-import { Blame, recognise, recogniseAll, type PlaybookEntry } from "./playbook";
+import { Stage } from "./job.js";
+import { Blame, recognise, recogniseAll, type PlaybookEntry } from "./playbook.js";
 
 /**
  * The kinds of problem a build can meet.
@@ -55,12 +55,23 @@ export const FailureCategory = {
   TypeApiMismatch: "TYPE_API_MISMATCH",
   /** A test fails because the test is wrong. */
   TestFailure: "TEST_FAILURE",
+  /** The canonical market never reached a behavior test. */
+  HarnessInfrastructure: "HARNESS_INFRASTRUCTURE",
   /** A test fails because the market does not do what was asked. */
   SemanticFailure: "SEMANTIC_FAILURE",
   /** The review refuses it: unsafe, or unproven where proof was claimed. */
   SecurityGate: "SECURITY_GATE",
   /** The pieces are fine and cannot be assembled into a deployment. */
   Manifest: "MANIFEST",
+  /**
+   * The contracts and the deployment they were designed for do not describe one market.
+   *
+   * Neither artefact is wrong on its own, which is what makes this its own category. The
+   * repair is not to reshape a contract until the launcher copes — that is the loop the
+   * declared deployment exists to remove — but to regenerate the one component that
+   * disagreed, against the declaration it was supposed to satisfy.
+   */
+  ArchitectureConsistency: "ARCHITECTURE_CONSISTENCY",
   /** It would deploy and could not then be launched or traded as intended. */
   DeploymentCompatibility: "DEPLOYMENT_COMPATIBILITY",
   /** A chain could not be reached or answered wrongly. */
@@ -116,6 +127,7 @@ const COMPILATION_STAGES: ReadonlySet<Stage> = new Set([
 ]);
 
 const TEST_STAGES: ReadonlySet<Stage> = new Set([
+  Stage.TestEnvironment,
   Stage.TestExecution,
   Stage.TestRepair,
   Stage.DeepValidation,
@@ -125,6 +137,7 @@ const GATE_STAGES: ReadonlySet<Stage> = new Set([Stage.StaticAnalysis, Stage.Fin
 
 /** The categories a playbook blame implies when the stage alone is ambiguous. */
 function categoryForBlame(blame: Blame, stage: Stage): FailureCategory | null {
+  if (blame === Blame.HarnessInfrastructure) return FailureCategory.HarnessInfrastructure;
   if (blame === Blame.HarnessMisuse) return FailureCategory.TypeApiMismatch;
   if (blame === Blame.Toolchain) return FailureCategory.Infrastructure;
   if (blame === Blame.Specification) return FailureCategory.Interpretation;
@@ -153,10 +166,14 @@ export function classify(input: ClassifyInput): Classification {
   const entry = recognise(diagnostics, failingTests, errorText === "" ? [] : [errorText]);
 
   const category = categoryOf(stage, entry, diagnostics, failingTests, gateFindings, errorText);
+  const blame =
+    category === FailureCategory.HarnessInfrastructure
+      ? Blame.HarnessInfrastructure
+      : (entry?.blame ?? blameOf(stage, category));
 
   return {
     category,
-    blame: entry?.blame ?? blameOf(stage, category),
+    blame,
     playbook: entry?.id ?? null,
     signature: signatureOf(diagnostics, failingTests, gateFindings, errorText),
     terminal: entry?.terminal === true || category === FailureCategory.Interpretation,
@@ -187,12 +204,40 @@ function categoryOf(
   if (GATE_STAGES.has(stage) && gateFindings.length > 0) return FailureCategory.SecurityGate;
   if (stage === Stage.DeploymentReady) return FailureCategory.Manifest;
 
+  // The stage exists to compare two artefacts, so a failure in it is a disagreement between
+  // them by construction. Kept ahead of the compile checks below because the contracts did
+  // build — that is the precondition for asking the question at all.
+  if (stage === Stage.DeploymentValidation) return FailureCategory.ArchitectureConsistency;
+
+  // Forge reports a fixture failure as one synthetic outcome named setUp(); none of the
+  // child test functions run. Whatever the nested revert says, it is evidence that the
+  // canonical deployment did not produce a usable market, not evidence that a token
+  // behavior assertion failed.
+  if (
+    TEST_STAGES.has(stage) &&
+    failingTests.length > 0 &&
+    failingTests.every((test) => test.name === "setUp()")
+  ) {
+    return FailureCategory.HarnessInfrastructure;
+  }
+
   // Whether it built is structural and is checked before anything a playbook entry
   // implies, because "did not compile" and "compiled and behaved wrongly" are repaired
   // from different evidence — and the same entry can describe either. Undeclared
   // identifier blames the test in both cases; only one of them is a question about
   // behaviour.
   const wouldNotBuild = diagnostics.some((d) => d.severity === "error");
+  const canonicalFixtureWouldNotBuild =
+    TEST_STAGES.has(stage) &&
+    diagnostics.some(
+      (diagnostic) =>
+        diagnostic.severity === "error" &&
+        (diagnostic.file?.endsWith("test/MarketTestBase.sol") === true ||
+          diagnostic.file?.endsWith("test/MarketTestEnvironment.t.sol") === true ||
+          diagnostic.file?.endsWith("test/AgenTest.sol") === true),
+    );
+
+  if (canonicalFixtureWouldNotBuild) return FailureCategory.HarnessInfrastructure;
 
   if (COMPILATION_STAGES.has(stage) || (TEST_STAGES.has(stage) && wouldNotBuild)) {
     return diagnostics.some((d) => /TypeError|DeclarationError/.test(d.type))
@@ -218,7 +263,14 @@ function blameOf(stage: Stage, category: FailureCategory): Blame {
       return Blame.Contract;
     case FailureCategory.TestFailure:
       return Blame.Test;
+    case FailureCategory.HarnessInfrastructure:
+      return Blame.HarnessInfrastructure;
     case FailureCategory.SecurityGate:
+      return Blame.Contract;
+    // The declaration was checked when it was written, so the artefact that moved is the
+    // contract. A repair aimed at the deployment would be asking the launcher to accommodate
+    // code that was told what to write.
+    case FailureCategory.ArchitectureConsistency:
       return Blame.Contract;
     case FailureCategory.ModelProvider:
     case FailureCategory.Infrastructure:

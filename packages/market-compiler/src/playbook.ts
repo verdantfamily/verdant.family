@@ -50,6 +50,8 @@ export const Blame = {
   Test: "test",
   /** The test misuses AgenTest — a harness call, not the mechanic. */
   HarnessMisuse: "harness_misuse",
+  /** Canonical deployment, constructor, wiring or pool setup failed before behavior ran. */
+  HarnessInfrastructure: "harness_infrastructure",
   /** Neither: the compiler, the toolchain or the environment. */
   Toolchain: "toolchain",
   /** The market cannot be built as described. A person has to decide something. */
@@ -121,9 +123,8 @@ export const PLAYBOOK: readonly PlaybookEntry[] = [
     matches: [/HookMiner/],
     remedy:
       "Delete the HookMiner import and every use of it. It is not in this project's " +
-      "vendored tree, so a file importing it cannot compile. Deploy hooks with " +
-      "deployHook(\"MyHook.sol:MyHook\", abi.encode(...)) from AgenTest, which already " +
-      "places the hook at an address whose bits match the permissions it declares.",
+      "vendored tree, and generated behavior tests never deploy hooks. MarketTestBase " +
+      "already launches the mined hook through AgenFactory; use its typed hook field.",
   },
 
   /**
@@ -230,12 +231,10 @@ export const PLAYBOOK: readonly PlaybookEntry[] = [
     blame: Blame.HarnessMisuse,
     matches: [/No matching declaration found after argument-dependent lookup/i],
     remedy:
-      "The argument types are wrong, not the function. Uniswap wraps these in types of " +
-      "its own and the harness takes them wrapped: Currency.wrap(address(0)) for the " +
-      "native quote, Currency.wrap(address(token)) for the launched token, " +
-      "IHooks(address(hook)) for the hook. agenPoolKey also has a five-argument form " +
-      "taking an explicit uint24 fee. Check the call against the signature before " +
-      "changing anything else.",
+      "The argument types are wrong, not the market. Generated behavior tests inherit " +
+      "MarketTestBase and use its typed component fields plus buy, buyAs, sell, sellAs " +
+      "and tokenBalance. Do not construct PoolKey values or call the low-level AgenTest " +
+      "launch helpers; check the supplied behavior-helper signature.",
   },
 
   {
@@ -245,10 +244,10 @@ export const PLAYBOOK: readonly PlaybookEntry[] = [
     matches: [/Undeclared identifier/i, /Identifier not found or not unique/i],
     remedy:
       "The name does not exist. Do not invent a helper and do not reimplement one: use " +
-      "only what AgenTest actually declares — deployPoolManager, deployHook, " +
-      "agenPoolKey, addLiquidity, swapExactIn, approveSwapRouter, manager, swapRouter, " +
-      "liquidityRouter, DYNAMIC_FEE. If the name was meant to be a contract of this " +
-      "market, import it from ../contracts/.",
+      "only the fields and behavior helpers listed for this build's MarketTestBase. " +
+      "Deployment, PoolKey construction, liquidity, wiring, funding and approvals are " +
+      "not test APIs. If the name was meant to be a contract of this market, use the " +
+      "typed component field already supplied by the base.",
   },
 
   {
@@ -287,14 +286,14 @@ export const PLAYBOOK: readonly PlaybookEntry[] = [
   {
     id: "manager_locked",
     title: "Called a hook callback outside unlock()",
-    blame: Blame.Test,
+    blame: Blame.HarnessInfrastructure,
     matches: [/ManagerLocked/],
     remedy:
       "The test called a hook callback directly. Everything that moves value has to " +
       "happen inside manager.unlock(), so a hook that touches the pool manager from a " +
       "directly-invoked callback always reverts this way — the market is not broken. " +
-      "Drive it as a real swap: initialize the pool, addLiquidity, then " +
-      "swapExactIn(key, zeroForOne, amount), and assert on balances.",
+      "Drive it through MarketTestBase.buy/buyAs or sell/sellAs and assert on balances. " +
+      "The canonical environment already owns pool initialization, liquidity and settlement.",
   },
 
   {
@@ -311,25 +310,23 @@ export const PLAYBOOK: readonly PlaybookEntry[] = [
   {
     id: "hook_address_invalid",
     title: "Hook deployed at an address that does not match its permissions",
-    blame: Blame.Test,
+    blame: Blame.HarnessInfrastructure,
     matches: [/HookAddressNotValid/, /NotHook\(\)/, /InvalidHookResponse/],
     remedy:
-      "A hook's address is its permission set, so `new MyHook(...)` produces a hook the " +
-      "manager refuses to call. Deploy it with deployHook(artifact, args) from AgenTest, " +
-      "which mines an address whose low bits match getHookPermissions.",
+      "The canonical factory deployment mines the hook address from the settled plan. " +
+      "Do not change the generated behavior tests or deploy a second hook; report this " +
+      "as test infrastructure so the plan/permission parity can be corrected.",
   },
 
   {
     id: "fee_mode_rejected",
     title: "Pool opened at a fee the hook refuses",
-    blame: Blame.Test,
+    blame: Blame.HarnessInfrastructure,
     matches: [/InvalidBaseFee/, /InvalidFee\(/, /UnexpectedFee/],
     remedy:
-      "The hook checks key.fee against a constant of its own and the pool was opened " +
-      "with a different one — 8388608 is the dynamic-fee flag. Open the pool the way " +
-      "this market will actually be launched, with the five-argument " +
-      "agenPoolKey(quote, token, hook, tickSpacing, fee), passing the constant the hook " +
-      "checks. Do not relax the hook's check to accept the test's fee.",
+      "The canonical deployment must derive PoolKey.fee from the compiled hook before " +
+      "the pool opens. Do not relax the hook and do not construct another PoolKey in a " +
+      "test; report this as deployment/test infrastructure.",
   },
 
   // --- Foundry itself ---------------------------------------------------------------
@@ -342,15 +339,14 @@ export const PLAYBOOK: readonly PlaybookEntry[] = [
     remedy:
       "One vm.prank sets the caller for exactly one external call and must be spent " +
       "before another is set. Either put the call it was meant for immediately after it, " +
-      "or use vm.startPrank/vm.stopPrank around the group. Note that " +
-      "approveSwapRouter(trader, currency) already pranks internally, so it must not be " +
-      "preceded by a prank of its own.",
+      "or use vm.startPrank/vm.stopPrank around the group. MarketTestBase.buyAs and " +
+      "sellAs already select the actor internally, so do not wrap those helpers in a prank.",
   },
 
   {
     id: "missing_allowance",
     title: "Moved tokens through a router that was never approved",
-    blame: Blame.Test,
+    blame: Blame.HarnessInfrastructure,
     matches: [
       /InsufficientAllowance/,
       /insufficient allowance/i,
@@ -358,10 +354,9 @@ export const PLAYBOOK: readonly PlaybookEntry[] = [
       /ERC20InsufficientAllowance/,
     ],
     remedy:
-      "The spender has no allowance. The test contract's own allowances are granted by " +
-      "addLiquidity, so this is a swap by somebody else: call " +
-      "approveSwapRouter(trader, currency) before the pranked swap. Do not weaken the " +
-      "token's transferFrom.",
+      "MarketTestBase owns every standard actor's AgenRouter allowance. Do not add approve " +
+      "calls to generated behavior tests and do not weaken transferFrom; report a missing " +
+      "allowance from the supplied buy/sell helpers as test infrastructure.",
   },
 
   {
@@ -370,9 +365,9 @@ export const PLAYBOOK: readonly PlaybookEntry[] = [
     blame: Blame.Test,
     matches: [/InsufficientBalance/, /transfer amount exceeds balance/i, /ERC20InsufficientBalance/],
     remedy:
-      "The account has no tokens to spend. Fund it first — transfer from the test " +
-      "contract, which holds the supply — and deal it ether with vm.deal when it needs " +
-      "to spend the native quote. Do not mint outside the token's own rules.",
+      "The launch supply is locked exactly as it is in production, so a seller starts " +
+      "with no token. Acquire it through MarketTestBase.buy or buyAs before selling. " +
+      "The helpers fund native input themselves; do not transfer launch supply or call vm.deal.",
   },
 
   // --- Assembling the deployment -----------------------------------------------------

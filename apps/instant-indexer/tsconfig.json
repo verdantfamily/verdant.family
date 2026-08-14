@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+
+    // Both false for the reason `apps/indexer` gives at length: this is an application,
+    // nothing imports its types, and asking for declarations makes TypeScript demand that
+    // every inferred type be nameable from outside. Ponder's tables infer theirs out of
+    // drizzle's internals, which pnpm stores under a content-addressed path, so the check
+    // fails with TS2742 on every table.
+    "declaration": false,
+    "declarationMap": false
+  },
+  // `scripts/` is included deliberately. Node runs `assert-instant.ts` directly and strips
+  // types rather than checking them, so the one file whose job is to catch disagreements
+  // between the feed and the chain would otherwise be the one file outside the gate.
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "*.ts"]
+}

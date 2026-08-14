@@ -176,15 +176,9 @@ describe("building a deployable bundle", () => {
     const token = (m: typeof mine) => m.components.find((c) => c.componentId === "marketToken")!;
     expect(token(theirs).expected).not.toBe(token(mine).expected);
 
-    // The hook moves too, which is worth understanding rather than assuming. Its salt
-    // is mined rather than derived from the creator, so on its own it would land in the
-    // same place for everybody — but its creation code embeds the vault's address, and
-    // the vault's salt *is* creator-derived. The dependency carries the difference
-    // through.
-    //
-    // The case that does not is a hook with no generated dependencies: two creators
-    // launching byte-identical bundles would mine the same address, and the second
-    // deployment would revert as already deployed. See the note in the final report.
+    // Hook mining is explicitly namespaced by creator, market and component. It must
+    // move even when two markets use byte-identical hook creation code; otherwise the
+    // second deployment through the shared AgenDeployer would collide with the first.
     expect(mine.components[mine.hookIndex]!.expected).not.toBe(
       theirs.components[theirs.hookIndex]!.expected,
     );

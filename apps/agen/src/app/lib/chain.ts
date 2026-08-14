@@ -35,13 +35,17 @@
 
 import {
   agenFor,
+  deploymentFor,
+  instantFor,
   EXTERNAL_ADDRESSES,
   ROBINHOOD_MAINNET_ID,
   ROBINHOOD_TESTNET_ID,
   robinhoodMainnet,
   robinhoodTestnet,
   type AgenDeployment,
+  type InstantDeployment,
   type VerdantChainId,
+  type VerdantDeployment,
 } from "@verdant/config";
 import { defineChain, getAddress, isAddress, type Address, type Chain } from "viem";
 
@@ -240,6 +244,142 @@ function resolveRouter(): Address | null {
 }
 
 export const AGEN_ROUTER: Address | null = resolveRouter();
+
+// --- Verdant's, which Instant launches through -----------------------------------
+
+/**
+ * The contracts an Instant launch needs.
+ *
+ * A different deployment from Agen's, and deliberately so. Instant does not generate a
+ * contract, so it has nothing for `AgenFactory` to deploy; what it wants is the launch
+ * that already exists — a fixed-supply token, an ether-quoted pool, the whole supply
+ * locked in one position, and the creator's first buy inside the same call. That is
+ * `VerdantFactory`, live and unchanged, and Instant is a form in front of it rather than
+ * a second copy of it.
+ *
+ * Four addresses rather than the record's six. `factoryOrigin` is a deploy-time anchor
+ * with nothing to say to a browser, and the rest are each needed here: the factory to
+ * send `create` to, the deployer because CREATE2 mines the token's address against it,
+ * the model registry because the fee split is read from it rather than assumed, and the
+ * market registry to read a launched market back.
+ */
+export interface VerdantAddresses {
+  readonly factory: Address;
+  readonly deployer: Address;
+  readonly modelRegistry: Address;
+  readonly marketRegistry: Address;
+  readonly hook: Address;
+}
+
+const VERDANT_RECORD: VerdantDeployment | null = isVerdantChainId(CHAIN_ID)
+  ? deploymentFor(CHAIN_ID)
+  : null;
+
+/**
+ * Null on a chain Verdant has not been deployed to, which the Instant form reads as
+ * "there is nothing to launch through here" and says so instead of rendering a button.
+ * No environment override: unlike Agen's, these were not deployed by this repository's
+ * scripts within living memory, and a mistyped factory is a launch into nothing.
+ */
+export const VERDANT_ADDRESSES: VerdantAddresses | null =
+  VERDANT_RECORD === null
+    ? null
+    : {
+        factory: getAddress(VERDANT_RECORD.factory),
+        deployer: getAddress(VERDANT_RECORD.verdantDeployer),
+        modelRegistry: getAddress(VERDANT_RECORD.modelRegistry),
+        marketRegistry: getAddress(VERDANT_RECORD.marketRegistry),
+        hook: getAddress(VERDANT_RECORD.hook),
+      };
+
+// --- Instant's own deployment ----------------------------------------------------
+
+/**
+ * The three contracts an Instant launch needs.
+ *
+ * A third deployment, and the reason is ADR-014: Instant promises the creator earns in
+ * ether, `VerdantHook` charges an ordinary LP fee taken from whichever token is going
+ * into the pool, and a hook's permissions are its address — so keeping the promise needs
+ * a new hook, and a factory and its hook name each other in immutables.
+ *
+ * What Instant did **not** need was new liquidity mechanics. The position is
+ * `VerdantFactory`'s, unchanged: one one-sided range holding the whole supply, locked
+ * permanently. Only the fee path is new.
+ */
+export interface InstantAddresses {
+  readonly factory: Address;
+  /** CREATE2 mines the token's address against it, and it holds the token's bytecode. */
+  readonly deployer: Address;
+  /** Instant's own, because `MarketRegistry.writer` is immutable and Verdant's names Verdant's factory. */
+  readonly registry: Address;
+  /**
+   * Shared across every Instant market: the fee is a constant of the deployment, so
+   * there is nothing per-market for a hook to hold. What is per-market is the vault,
+   * which the registry records in its `splitter` field.
+   */
+  readonly hook: Address;
+}
+
+/**
+ * Null until `scripts/deploy-instant.sh --broadcast` has run and its addresses have been
+ * recorded, which has not happened.
+ *
+ * From the deployment record with the environment as an override, which is the precedence
+ * Agen's uses and for the reason set out at the top of this file: a `NEXT_PUBLIC_` read is
+ * substituted at build time, so a variable set on the host after the image was built is
+ * one the browser never sees. Reading the record means the addresses travel with the code
+ * that was verified against them, and a deploy of the site cannot disagree with a deploy
+ * of the indexer about which Instant it is.
+ *
+ * All four together or none. The hook, the deployer and the registry each hold the factory
+ * in an immutable and the factory checks all three, so a set mixing one deployment's
+ * address with another's describes something that cannot exist on chain — and an override
+ * that supplied three of four would otherwise silently take three from a fork and one from
+ * the record.
+ *
+ * `INSTANT_LAUNCHABLE` in `lib/instant.ts` gates the button separately, so a build that has
+ * these addresses still cannot launch until that flag is turned over. Recording a
+ * deployment and opening the product are two decisions.
+ */
+const INSTANT_RECORD: InstantDeployment | null = isVerdantChainId(CHAIN_ID)
+  ? instantFor(CHAIN_ID)
+  : null;
+
+export const INSTANT_ADDRESSES: InstantAddresses | null = (() => {
+  const override = {
+    factory: process.env.NEXT_PUBLIC_INSTANT_FACTORY?.trim(),
+    deployer: process.env.NEXT_PUBLIC_INSTANT_DEPLOYER?.trim(),
+    registry: process.env.NEXT_PUBLIC_INSTANT_REGISTRY?.trim(),
+    hook: process.env.NEXT_PUBLIC_INSTANT_HOOK?.trim(),
+  };
+
+  const overridden = Object.values(override).every((value) => value !== undefined && value !== "");
+
+  const values = overridden
+    ? override
+    : INSTANT_RECORD === null
+      ? null
+      : {
+          factory: INSTANT_RECORD.factory,
+          deployer: INSTANT_RECORD.deployer,
+          registry: INSTANT_RECORD.registry,
+          hook: INSTANT_RECORD.hook,
+        };
+
+  if (values === null) return null;
+  if (Object.values(values).some((value) => !isAddress(value!, { strict: false }))) return null;
+
+  return {
+    factory: getAddress(values.factory!),
+    deployer: getAddress(values.deployer!),
+    registry: getAddress(values.registry!),
+    hook: getAddress(values.hook!),
+  };
+})();
+
+/** Where Instant's 0.50% accrues on this chain, for the interface to name. */
+export const INSTANT_TREASURY: Address | null =
+  INSTANT_RECORD === null ? null : getAddress(INSTANT_RECORD.treasury);
 
 // --- Uniswap's, which Agen does not deploy --------------------------------------
 

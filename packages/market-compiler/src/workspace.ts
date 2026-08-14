@@ -53,6 +53,7 @@ export interface GeneratedSource {
 export const LAYOUT = {
   specification: "specification.json",
   plan: "implementation-plan.json",
+  deployment: "deployment-specification.json",
   contracts: "contracts",
   tests: "test",
   scripts: "scripts",
@@ -128,6 +129,7 @@ function remappingsFor(vendorRoot: string): string {
 
   return [
     `forge-std/=${join(vendorRoot, "forge-std", "src")}/`,
+    `agen-protocol/=${join(dirname(vendorRoot), "src", "agen")}/`,
     `@uniswap/v4-core/=${core}/`,
     `@uniswap/v4-periphery/=${v4}/`,
     `v4-core/=${core}/`,
@@ -181,6 +183,12 @@ ast = true
 build_info = true
 extra_output = ["storageLayout"]
 
+# Foundry's default EVM heap is 128MB. The canonical setUp deploys a real
+# PoolManager, PositionManager and AgenFactory, then searches for a hook
+# address. That combination reverted MemoryOOG on ordinary markets and
+# stopped every behavior test from running. This is the EVM cap, not RSS.
+memory_limit = 1073741824
+
 [profile.default.fuzz]
 runs = 256
 
@@ -204,6 +212,9 @@ function safeJoin(root: string, relative: string): string {
   if (isAbsolute(relative)) {
     throw new Error(`generated source path must be relative, got ${relative}`);
   }
+  if (relative.split(/[\\/]/).some((segment) => segment === "" || segment === "." || segment === "..")) {
+    throw new Error(`generated source path must be normalized, got ${relative}`);
+  }
 
   const target = resolve(root, relative);
   if (target !== root && !target.startsWith(root + "/")) {
@@ -215,9 +226,14 @@ function safeJoin(root: string, relative: string): string {
 
 function writerFor(root: string): Workspace["write"] {
   return async (sources) => {
+    const targets = sources.map((source) => safeJoin(root, source.path));
+    if (new Set(targets).size !== targets.length) {
+      throw new Error("generated source paths must be unique");
+    }
+
     await Promise.all(
-      sources.map(async (source) => {
-        const target = safeJoin(root, source.path);
+      sources.map(async (source, index) => {
+        const target = targets[index]!;
         await mkdir(dirname(target), { recursive: true });
         await writeFile(target, source.content, "utf8");
       }),
@@ -277,6 +293,8 @@ export interface JobWorkspaceOptions {
   /** The directory holding all job directories, conventionally `<repo>/generated`. */
   readonly generatedRoot: string;
   readonly jobId: string;
+  /** Remove generated inputs and compiler output before rebuilding this job. */
+  readonly freshInputs?: boolean;
 }
 
 /**
@@ -302,6 +320,14 @@ export async function createJobWorkspace(
   const root = resolve(options.generatedRoot, options.jobId);
 
   await mkdir(root, { recursive: true });
+
+  if (options.freshInputs === true) {
+    await Promise.all(
+      [LAYOUT.contracts, LAYOUT.tests, LAYOUT.scripts, LAYOUT.artifacts].map((directory) =>
+        rm(join(root, directory), { recursive: true, force: true }),
+      ),
+    );
+  }
 
   // Foundry's `out` goes inside `artifacts/`, so everything the compiler produces is
   // under one directory that can be deleted without touching the generated sources.

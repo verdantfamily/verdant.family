@@ -189,10 +189,11 @@ contract StreakHook is AgenBaseHook {
 });
 
 /**
- * The harness is the one piece of the prelude whose correctness cannot be read off the
- * source: `deployHook` is right only if the pool manager subsequently agrees, and
- * "subsequently" means running a real swap against a real PoolManager. So this suite
- * runs the tests rather than compiling them.
+ * Low-level v4 substrate regression.
+ *
+ * Generated suites do not see or call these helpers; MarketTestBase and its factory
+ * launch are tested in test-environment.test.ts. This keeps the lower-level primitives
+ * honest without presenting manual setup as the generated-test pattern.
  *
  * The build that motivated it is worth keeping in mind. EMBRT generated a correct
  * market, and its test suite deployed the hook at an address whose bits enabled nothing,
@@ -233,7 +234,7 @@ contract SellFeeHook is AgenBaseHook {
 }
 `;
 
-  /** Written the way the testing context instructs a model to write it. */
+  /** Internal regression only; this is deliberately not generated-test guidance. */
   const SUITE = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
@@ -363,23 +364,31 @@ contract HarnessToken {
 pragma solidity 0.8.26;
 
 import {AgenTest} from "./AgenTest.sol";
+import {Currency} from "v4-core/src/types/Currency.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {SellFeeHook} from "../src/SellFeeHook.sol";
 
 contract OpenMarketTest is AgenTest {
     SellFeeHook internal hook;
     address internal token;
+    PoolKey internal expectedKey;
     PoolKey internal key;
 
     function setUp() public {
         deployPoolManager();
         token = deployToken("HarnessToken.sol:HarnessToken");
         hook = SellFeeHook(deployHook("SellFeeHook.sol:SellFeeHook", abi.encode(manager)));
+        expectedKey = marketKey(token, address(hook), DYNAMIC_FEE);
         key = openMarket(token, address(hook), DYNAMIC_FEE);
     }
 
     function test_launch_liquidity_needs_no_quote_asset() public view {
         assertEq(address(manager).balance, 0);
+        assertEq(Currency.unwrap(key.currency0), Currency.unwrap(expectedKey.currency0));
+        assertEq(Currency.unwrap(key.currency1), Currency.unwrap(expectedKey.currency1));
+        assertEq(key.fee, expectedKey.fee);
+        assertEq(key.tickSpacing, expectedKey.tickSpacing);
+        assertEq(address(key.hooks), address(expectedKey.hooks));
     }
 
     function test_the_market_opened_by_the_harness_trades() public {
@@ -388,7 +397,7 @@ contract OpenMarketTest is AgenTest {
 }
 `;
 
-  it("opens a tradable market from the two calls a suite is told to make", async () => {
+  it("keeps the legacy low-level open helper internally sound", async () => {
     const space = await open();
     await space.write([
       { path: "src/SellFeeHook.sol", content: HOOK },

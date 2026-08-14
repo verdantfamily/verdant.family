@@ -42,7 +42,7 @@ import type {
   JobStore,
   ModelProvider,
 } from "@verdant/market-compiler";
-import { fileJobStore, openAiProvider } from "@verdant/market-compiler";
+import { anthropicProvider, fileJobStore, openAiProvider } from "@verdant/market-compiler";
 
 import { answer, positionOf, recoverInterrupted, submit, type QueuePosition } from "./queue";
 
@@ -61,7 +61,28 @@ import { answer, positionOf, recoverInterrupted, submit, type QueuePosition } fr
  */
 const REPO_ROOT = process.env["AGEN_REPO_ROOT"] ?? resolve(process.cwd(), "../..");
 export const VENDOR_ROOT = resolve(REPO_ROOT, "packages/contracts/vendor");
-export const GENERATED_ROOT = resolve(REPO_ROOT, "generated");
+
+/**
+ * Where anything this server writes goes: build jobs, uploaded pictures, metadata
+ * documents.
+ *
+ * Separable from the repository root, and it has to be. Two of the three things written
+ * here are addressed by a URL that a token records **immutably** at launch —
+ * `metadataMutable` is false on every Instant token, so nothing can ever repoint it. On a
+ * host with an ephemeral filesystem those files live until the next deploy and then every
+ * launched token's picture and description are permanently gone, with no way to restore
+ * them to an address anybody is looking at.
+ *
+ * So on a deployed host this must resolve to a mounted volume, and the volume must outlive
+ * the container. Production satisfies that through the fallback rather than through this
+ * variable: `AGEN_REPO_ROOT=/app` with a Railway volume mounted at `/app/generated`. Which
+ * means `AGEN_DATA_DIR` must be left unset there — pointing it at an unmounted path like
+ * `/data` would move every future write off the volume and orphan everything already on
+ * it. Set it only where the durable directory cannot be placed under the repository root.
+ */
+export const GENERATED_ROOT = resolve(
+  process.env["AGEN_DATA_DIR"]?.trim() || resolve(REPO_ROOT, "generated"),
+);
 
 /**
  * Jobs live in a directory, one JSON file each.
@@ -106,6 +127,26 @@ function providerOrNull(): ModelProvider | null {
     ...(process.env["OPENAI_BASE_URL"] === undefined
       ? {}
       : { baseUrl: process.env["OPENAI_BASE_URL"] }),
+  });
+}
+
+/**
+ * The vendor the pipeline turns to when the first one is stuck rather than unreachable.
+ *
+ * Optional on purpose: with no `ANTHROPIC_API_KEY` the repair ladder stops one rung lower
+ * and every build behaves as it did before. Nothing about a normal build reaches this —
+ * it is asked only after a repair has come back with the same failure it was sent to fix.
+ */
+export function escalationProviderOrNull(): ModelProvider | null {
+  const key = process.env["ANTHROPIC_API_KEY"];
+  if (key === undefined || key.length === 0) return null;
+
+  return anthropicProvider({
+    apiKey: key,
+    model: process.env["AGEN_ESCALATION_MODEL"] ?? "claude-sonnet-4-5",
+    ...(process.env["ANTHROPIC_BASE_URL"] === undefined
+      ? {}
+      : { baseUrl: process.env["ANTHROPIC_BASE_URL"] }),
   });
 }
 
@@ -209,6 +250,7 @@ export interface PublicJob {
   readonly simulation: GenerationJob["simulation"];
   readonly compilationAttempts: number;
   readonly testAttempts: number;
+  readonly harnessAttempts: number;
   readonly failure: GenerationJob["failure"];
   /**
    * What the launch screen needs, and only that.
@@ -254,6 +296,7 @@ export function publicView(job: GenerationJob): PublicJob {
     simulation: job.simulation,
     compilationAttempts: job.compilationAttempts,
     testAttempts: job.testAttempts,
+    harnessAttempts: job.harnessAttempts,
     failure: job.failure,
     launch:
       job.manifest === null

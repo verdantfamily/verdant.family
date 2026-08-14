@@ -21,6 +21,26 @@ if [ "$service" = "agen" ]; then
   exec pnpm --filter @verdant/agen start
 fi
 
+# Instant's indexer, which is a third service with a third database.
+#
+# The same two lines as the Programmable indexer below and deliberately not a shared
+# function: the only thing they have in common is Ponder, and the reason this service
+# exists at all is that a deploy of one must not touch the other. `ponder db prune` reaches
+# only the database its own `DATABASE_URL` names, so this cannot drop a Programmable
+# schema even by mistake.
+#
+# Its own start block, from the Instant deployment record, which is the payoff. The
+# Programmable indexer re-reads ten million blocks of PoolManager history on every deploy
+# because Verdant's markets are that old; Instant's factory is recent, so this one has
+# almost nothing to catch up on.
+if [ "$service" = "instant-indexer" ]; then
+  pnpm --filter @verdant/instant-indexer exec ponder db prune ||
+    echo "prune failed, starting anyway"
+  exec pnpm --filter @verdant/instant-indexer exec ponder start \
+    --schema "$RAILWAY_DEPLOYMENT_ID" \
+    --hostname 0.0.0.0
+fi
+
 # The indexer, unchanged. `||` and not `&&` on the prune is load-bearing; see the comment
 # in railway.toml for the outage that taught us the difference.
 pnpm --filter @verdant/indexer exec ponder db prune || echo "prune failed, starting anyway"

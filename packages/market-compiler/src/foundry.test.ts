@@ -105,11 +105,20 @@ describe("the scratch workspace", () => {
 
     await expect(
       space.write([{ path: "../../packages/contracts/src/VerdantHook.sol", content: "" }]),
-    ).rejects.toThrow(/escapes the workspace/);
+    ).rejects.toThrow(/escapes the workspace|must be normalized/);
 
     await expect(space.write([{ path: "/etc/passwd", content: "" }])).rejects.toThrow(
       /must be relative/,
     );
+    await expect(
+      space.write([{ path: "test/../src/Replacement.sol", content: "" }]),
+    ).rejects.toThrow(/must be normalized/);
+    await expect(
+      space.write([
+        { path: "test/Duplicate.sol", content: "first" },
+        { path: "test/Duplicate.sol", content: "second" },
+      ]),
+    ).rejects.toThrow(/must be unique/);
   });
 });
 
@@ -195,6 +204,38 @@ contract Broken {
 });
 
 describe("the test runner", () => {
+  it("reports a setUp revert as infrastructure before any behavior test runs", async () => {
+    const space = await open();
+    await space.write([
+      {
+        path: "test/SetupFailure.t.sol",
+        content: `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.26;
+
+import {Test} from "forge-std/Test.sol";
+
+contract SetupFailureTest is Test {
+    function setUp() public pure {
+        revert("canonical setup failed");
+    }
+
+    function test_neverRuns() public pure {
+        assertTrue(false);
+    }
+}
+`,
+      },
+    ]);
+
+    const result = await runTests({ root: space.root });
+
+    expect(result.ok).toBe(false);
+    expect(result.buildFailure).toBeNull();
+    expect(result.outcomes).toHaveLength(1);
+    expect(result.outcomes[0]?.name).toBe("setUp()");
+    expect(result.outcomes[0]?.reason).toContain("canonical setup failed");
+  });
+
   it("reports passing and failing generated tests separately", async () => {
     const space = await open();
     await space.write([

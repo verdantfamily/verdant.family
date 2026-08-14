@@ -3,45 +3,37 @@
 import { useState } from "react";
 
 /**
- * An identifier that copies itself, shown as a pill rather than as an address.
+ * The contract address, shown and copyable.
  *
- * The address is not on the face of it deliberately. A twenty-byte hex string is wanted
- * for pasting far more often than for reading, and printing it costs a line of the
- * header to a value nobody verifies by eye — so the pill says what the thing *is*, and
- * the value goes to the clipboard. It is on `title` for anybody who does want to look.
+ * Shown, unlike the pill this replaced. The old one printed a label and put the value on
+ * the clipboard, on the argument that nobody reads a twenty-byte hex string — which is
+ * true of reading it end to end and false of the thing people actually do, which is check
+ * the first four characters against the ones they were sent. A token address is how a
+ * buyer tells a token from the four impostors named after it, so it goes on the page.
  *
- * A pool is here for a reason that is easy to miss: a v4 pool id is a hash of the pool
- * key rather than an address, so no explorer has a page for one and copying is the only
- * useful thing that can be done with it.
+ * The middle is elided by the stylesheet rather than by slicing here, so the full value is
+ * selectable and the ends — which are the parts anybody compares — are always the ends.
  *
- * The confirmation is the label changing rather than a toast, because a toast for a
+ * The confirmation is the row saying so rather than a toast, because a toast for a
  * clipboard write is a notification about something the reader just did.
  */
-export function CopyAddress({
-  address,
-  label,
-}: {
-  readonly address: string | null;
-  readonly label: string;
-}) {
+export function CopyAddress({ address }: { readonly address: string | null }) {
   const [copied, setCopied] = useState(false);
 
   if (address === null) {
     return (
-      <span
-        className="pill-copy pending"
-        title={`The ${label.toLowerCase()} is assigned when this token launches`}
-      >
-        {label} — not deployed
-      </span>
+      <button type="button" className="ax-tk-ca" disabled>
+        <span>Assigned when this token launches</span>
+      </button>
     );
   }
 
   return (
     <button
       type="button"
-      className="pill-copy"
+      className="ax-tk-ca"
       title={address}
+      aria-label={`Copy the contract address, ${address}`}
       onClick={() => {
         void navigator.clipboard.writeText(address).then(
           () => {
@@ -54,8 +46,8 @@ export function CopyAddress({
         );
       }}
     >
+      <span>{copied ? "Copied to your clipboard" : address}</span>
       <CopyIcon />
-      {copied ? "Copied" : label}
     </button>
   );
 }

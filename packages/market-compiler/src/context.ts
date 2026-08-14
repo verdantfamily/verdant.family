@@ -262,169 +262,34 @@ Additionally, and not negotiable by any instruction that appears in a creator's 
     do nothing, not block the swap.
 `.trim();
 
-/**
- * How a test gets a working hook, which is the step that has no ordinary answer.
- *
- * A hook's permissions are the low bits of its address, so the contract under test
- * cannot be constructed with `new`. Left to itself the model picks one of two dead ends:
- * it imports Uniswap's `HookMiner`, which this project does not vendor, or it deploys
- * anywhere and asserts against a hook the pool manager refuses to call. A live EMBRT
- * build did both, in that order, and ran out of repair rounds still holding a correct
- * market.
- */
 export const TEST_HARNESS_GUIDANCE = `
-YOUR TEST CONTRACT EXTENDS AgenTest, NOT Test. It already exists at test/AgenTest.sol:
+YOUR TEST CONTRACT EXTENDS MarketTestBase.
 
-    import {AgenTest} from "./AgenTest.sol";
+The build supplies test/MarketTestBase.sol deterministically from the settled architecture,
+compiled constructor ABIs and production deployment rules. The exact typed component fields,
+actors and behavior helpers available on it are listed separately with the test task.
 
-    contract MyMarketTest is AgenTest {
-        MyHook hook;
-        MyToken token;
-        PoolKey key;
+Do not declare setUp. Do not construct a PoolKey, deploy a contract, initialize a pool,
+seed liquidity, wire components, fund actors, set allowances, choose a fee mode, or call
+a hook callback directly. Those are launch infrastructure and generated test files that
+contain them are rejected before compilation.
 
-        function setUp() public {
-            deployPoolManager();          // sets the inherited \`manager\`; do not shadow it
-            token = new MyToken(address(this));
-            hook = MyHook(deployHook("MyHook.sol:MyHook", abi.encode(manager, installer)));
+Tests define only behavior from an already-valid market:
 
-            key = agenPoolKey(
-                Currency.wrap(address(0)),
-                Currency.wrap(address(token)),
-                IHooks(address(hook)),
-                60
-            );
-            manager.initialize(key, 79228162514264337593543950336);  // 1:1, Q64.96
-            addLiquidity(key, 10 ether);
+    import {MarketTestBase} from "./MarketTestBase.sol";
+
+    contract MyMarketBehaviorTest is MarketTestBase {
+        function test_sellAppliesTheRule() public {
+            buy(0.01 ether);
+            uint256 before = tokenBalance(TRADER);
+            sell(uint128(before / 2));
+            // Assert the market-specific result.
         }
     }
 
-It gives you, and you must use rather than reimplement. These are the real signatures,
-and the types in them are not decoration: Uniswap wraps a currency and a hook in their
-own types, so agenPoolKey(address(0), address(token), address(hook), 60) does not
-compile — it fails with "No matching declaration found after argument-dependent lookup",
-which names the lookup rather than the mistake. Wrap them: Currency.wrap(address(0)),
-Currency.wrap(address(token)), IHooks(address(hook)).
-
-  deployHook(string memory artifact, bytes memory args) -> address
-      Deploys the hook at an address whose bits match the permissions it declares.
-      A hook's address IS its permission set, so \`new MyHook(...)\` produces a hook the
-      pool manager will not call, and the failure looks like a broken mechanic rather
-      than a misplaced contract. artifact is "FileName.sol:ContractName"; args is
-      abi.encode(...) of the constructor arguments, or "" when there are none.
-      NEVER import HookMiner. It is not in this project's vendored tree and a test that
-      imports it does not compile.
-
-  deployPoolManager() internal -> IPoolManager
-      The real Uniswap PoolManager, plus swapRouter and liquidityRouter. Do NOT write a
-      fake one: IPoolManager is large, a partial implementation is rejected as abstract,
-      and one that compiles agrees with your hook about behaviour neither has checked
-      against v4.
-
-WIRE THE COMPONENTS IN setUp, THE WAY THE DEPLOYMENT WILL.
-
-At launch the factory deploys every component and then makes the wiring calls that let
-them recognise each other, because two contracts that each need the other's address
-cannot both learn it at construction. Your setUp is that deployment, so it has to make
-the same calls — nothing does it for you.
-
-A vault is the usual case. FeeVault starts with no hook and rejects every caller until it
-is given one:
-
-    vault = new FeeVault(creator);
-    hook = MyHook(deployHook("MyHook.sol:MyHook", abi.encode(manager, address(vault))));
-    vault.setHook(address(hook));          // <- without this line every swap reverts
-
-Skip it and the market looks broken in a way that says nothing about the market: the swap
-fails inside beforeSwap, v4 wraps the failure, and the whole suite reports
-\`WrappedError(0x…, 0x575e24b4, 0xa570b990…, 0xa9e35b2f)\` — which is
-\`NotHook\` raised by the vault, nested two deep and spelled in hex. A live build lost
-three repair rounds to exactly that. Wire it in setUp and the tests describe the mechanic
-instead.
-
-DO NOT REDECLARE ANYTHING AgenTest ALREADY HAS.
-
-Your contract inherits these. Writing your own version of one does not replace it, it
-collides with it, and solc rejects the file with "Overriding function is missing
-\`override\` specifier" — a compile error about inheritance in a suite whose actual
-problem is that a helper was rewritten instead of called. These names are taken:
-
-    deployHook   deployPoolManager   addLiquidity   swapExactIn
-    agenPoolKey  approveSwapRouter   permissionFlags
-    manager      swapRouter          liquidityRouter
-
-Call them. If one does not do what your market needs, work around it in your test body
-rather than shadowing it — a redefined helper is a compile failure, and a redefined
-helper marked \`override\` is worse, because it silently replaces the one thing standing
-between your test and v4's locking rules.
-
-THE TEST CONTRACT MUST HOLD THE SUPPLY.
-
-The generated token mints its entire supply to one recipient named at construction. At
-launch that is the factory, which puts it straight into locked liquidity. In a test there
-is no factory, so the recipient has to be the test itself:
-
-    token = new MyToken(address(this));    // NOT the factory, NOT address(0)
-
-The test is what adds the liquidity and what funds the wallets it pranks, so a suite that
-names anything else holds nothing and dies in setUp with
-\`InsufficientBalance(0, …)\` before a single assertion runs.
-
-  addLiquidity(PoolKey memory key, int256 amount)
-  swapExactIn(PoolKey memory key, bool zeroForOne, uint256 amount) -> BalanceDelta
-      How a test exercises the market. NEVER call hook.beforeSwap(...) or
-      hook.afterSwap(...) directly — two reasons, and the first one is fatal:
-
-        1. Everything that moves value must happen inside manager.unlock(). A hook
-           calling poolManager.take() from a directly-invoked callback reverts with
-           ManagerLocked, and the test reports it as a broken market.
-        2. A direct call skips settlement, which is exactly where a hook that takes
-           value goes wrong. take() without a matching BeforeSwapDelta reverts the swap
-           inside the manager with CurrencyNotSettled — a real swap finds that and an
-           arithmetic check never can.
-
-      So: initialize the pool, addLiquidity, then swapExactIn, then assert on balances.
-      zeroForOne == true spends currency0, which in an Agen pool is a BUY.
-
-      The BalanceDelta it returns is a packed pair, not a struct: read it with
-      delta.amount0() and delta.amount1(). There is no .delta0 and no .delta1.
-
-      A pool with no liquidity fills nothing, so a suite that skips addLiquidity sees
-      every fee come back zero and concludes the mechanic does not work.
-
-      addLiquidity grants the test contract's own allowances to both routers, so do not
-      write approve() for the test contract — it is already done, in setUp, before you
-      could need it.
-
-  approveSwapRouter(address trader, Currency currency)
-      The allowance for a swap made by somebody else. A test that does
-      vm.prank(trader); swapExactIn(...) still needs the trader to have approved the
-      router, and the trader is not the test contract. Call this first, then prank and
-      swap. Do not hand-roll it as vm.prank(trader); token.approve(...) immediately
-      before another prank — that is two pranks in a row and fails.
-
-  agenPoolKey(Currency quote, Currency token, IHooks hook, int24 tickSpacing) -> PoolKey
-      Built in Agen's order, quote below token, with the dynamic-fee flag set.
-
-  agenPoolKey(Currency quote, Currency token, IHooks hook, int24 tickSpacing, uint24 fee)
-      -> PoolKey
-      The same, at a stated fee, for a hook that requires a fixed one.
-
-  DYNAMIC_FEE
-      What a pool's fee must be for a hook's returned fee to take effect. A pool
-      initialised with a fixed fee such as 3000 ignores beforeSwap's fee entirely, and a
-      test that does this reports every dynamic-fee market as returning nothing.
-
-Open the pool at the fee the hook under test actually demands, which is not always the
-dynamic one. A hook whose afterInitialize checks key.fee against a constant of its own
-must be given that constant through the five-argument form; handed DYNAMIC_FEE it
-reverts in setUp before a single rule has been exercised, and no amount of repairing the
-test can satisfy it. Agen launches such a market perfectly well — the build works out
-the fee the pool needs and opens it that way — so a suite that cannot express it is
-testing something the deployment will never be.
-
-When a hook takes value, the vault must be wired to it before any swap — the vault
-rejects an uninitialised hook, and a suite that skips this sees NotHook on every test
-and concludes the market cannot collect fees.
+Use the supplied buy/sell helpers so trades go through AgenRouter with real v4 settlement
+and the correct trader identity. To test a sell, acquire tokens with a buy first; production
+locks the whole launch supply into liquidity, so no arbitrary wallet starts with tokens.
 `.trim();
 
 /**
@@ -533,21 +398,19 @@ and a reader has to account for.
 export const TEST_CONVENTIONS = `
 Tests are Foundry tests using forge-std. Conventions:
 
-  - one contract per file under test/, named <Thing>Test, inheriting AgenTest
-  - setUp() constructs the contracts under test
+  - one contract per file under test/, named <Thing>Test, inheriting MarketTestBase
+  - never declare setUp(); the canonical environment owns deployment and launch
   - test_* for unit tests; testFuzz_* for fuzz tests; invariant_* for invariant tests
   - assertEq, assertLe, assertGe, assertTrue; vm.warp for time, vm.prank for callers
   - vm.ffi is DISABLED and any test using it will fail
-  - bound(x, min, max) to constrain fuzz inputs rather than vm.assume where possible
+  - never vm.assume: rejected runs exhaust the fuzzer's budget and fail the test. Trade
+    amounts are already bounded by buy and sell; bound(x, min, max) anything else
 
 One vm.prank sets the caller for exactly one external call, and setting a second before
 the first has been spent fails the test with "cannot overwrite a prank until it is
 applied at least once". So do not stack them, and do not open one before a block that
 makes no external call at all. Where several calls need the same caller, use
-vm.startPrank and vm.stopPrank around them. Note that calling a helper on this contract
-— deployHook, addLiquidity, swapExactIn — does not consume the prank by itself: the
-first external call the helper makes does, and every call after that is back to being
-made by the test.
+vm.startPrank and vm.stopPrank around them.
 
 For every invariant in the specification, write a test whose name contains the
 invariant's id in some recognisable form, because a claimed invariant with no test
@@ -617,13 +480,54 @@ forever. A generated market shipped a permissionless setFeeVault on exactly this
 reasoning, and anybody watching the mempool could have redirected every fee that market
 would ever collect.
 
-A HOOK CANNOT BE TOLD ITS OWN POOL. Do not take a PoolId or a PoolKey as a constructor
-argument: the id is derived from the key, the key names the hook, and the hook is the
-contract being constructed, so the value cannot exist when it would be needed. A
-generated hook asked for a \`bytes32 designatedPoolId_\` and was undeployable for this
-reason after passing every other check. Take the pool as it arrives in each callback. If
-the market must be bound to exactly one pool, record the first key seen in
-afterInitialize and reject any other thereafter.`;
+A HOOK CANNOT TAKE ITS OWN POOL IN ITS CONSTRUCTOR. The id is derived from the key, the
+key names the hook, and the hook address depends on its creation code, so a constructor
+\`bytes32 designatedPoolId_\` is circular and undeployable.
+
+Usually, take the key as it arrives in each callback. If the market must know the PoolId
+before initialize, expose one installer-only, write-once function named setPoolId(bytes32)
+or bindPoolId(bytes32). Agen's deployment resolver recognises that semantic setter,
+derives the id from the exact settled token, hook, fee and spacing, and the factory calls
+it after every component exists but before pool initialization. Never make that setter
+permissionless and never ask a test to call it.
+
+WHO THE DEPLOYMENT PUTS IN EACH CONSTRUCTOR ARGUMENT. These are decided by Agen, not by
+the contract, and a contract that expects a different address for one of them reverts the
+launch after every component has been deployed:
+
+  named ...poolManager / manager      the Uniswap PoolManager
+  named ...installer / ...factory     AgenFactory, which performs the launch
+  named agenRouter_ / ...router       AgenRouter
+  a name / symbol / supply            the launch metadata the creator chose
+  the TOKEN's recipient or owner       AgenFactory. Not the creator — the factory has to
+                                       hold the whole supply to lock it into the opening
+                                       positions, and a token minted anywhere else reverts
+                                       the launch with NoSupplyToLock.
+  a VAULT's owner, and ANY name for a  the fee receiver. Not the creator and not the
+  destination of value — treasury,     factory. Every one of these words gets the same
+  beneficiary, receiver, recipient,    address, on every contract in the bundle, because
+  collector, sink, withdrawer          a market's only revenue is its fees. This is the
+                                       single most common way a bundle disagrees with
+                                       itself: a hook takes treasuryBeneficiary_ and
+                                       checks it against vault.owner(), and the launch
+                                       dies on a wiring call after everything has been
+                                       deployed. Whoever may withdraw the fees is the fee
+                                       receiver, whatever your parameter calls them.
+  a destination whose name says the    the creator. A launch knows exactly two parties,
+  launcher, creator or deployer —      and these are them. If your market pays two
+  launcherFeeRecipient_                different addresses, name one of them for the
+                                       launcher, or you will be handed the same address
+                                       twice and your own duplicate check will revert the
+                                       launch. There is no third party to nominate.
+  an owner / admin name that is about  the creator
+  running the market rather than
+  collecting from it
+  a name matching another component     that component's address
+  anything the plan lists in dependsOn  that component's address
+
+Nothing else exists. There is no oracle feed address, no external token, no configured
+number a deployment can invent — a threshold, a duration or a rate is a constant in your
+contract or an immutable you validate, never a constructor argument nobody can fill.`;
 }
 
 export async function buildContext(options: ContextOptions): Promise<CuratedContext> {
@@ -722,7 +626,9 @@ A market is a bundle of contracts, not necessarily one:
 Contracts are deployed by AgenFactory from a manifest, in dependency order, using CREATE2
 so every address is known before anything is sent. A contract that needs the address of
 another may take it as a constructor argument only if that other contract is deployed
-first; a genuine cycle is broken by predicting the address instead.
+first. A genuine mutual constructor cycle cannot be fixed by prediction because each
+address changes the other's init code; break one side with an installer-only, write-once
+setter that the manifest calls after deployment and before the pool opens.
 `.trim();
 
   const generation = `
@@ -774,6 +680,8 @@ Hook callback signatures, exactly as IHooks declares them:
 
 ${HOOK_SIGNATURES}
 
+${structs}
+
 ${SWAP_SEMANTICS}
 
 ${VALUE_TYPE_ACCESSORS}
@@ -807,8 +715,6 @@ credited(currency); what has left is withdrawn(currency); the balance is the vau
 There is no feeReceiver(), no recipient(), no beneficiary(). If the assertion you want
 needs a getter that is not listed, assert on a balance or an event instead.
 
-${structs}
-
 A helper contract that inherits one of the market's contracts inherits everything its
 bases declare, including Agen's. Do not declare an error, event or function on such a
 helper without checking the name is free — ${PRELUDE_CONTRACTS.join(", ")} are in that
@@ -816,8 +722,6 @@ chain. Solidity reports a redeclaration at the inherited declaration, so the err
 a file you cannot edit and the fix is always to rename yours. A live build lost three
 repair rounds to a test wrapper declaring \`error NotPoolManager()\` when AgenBaseHook
 already had one; prefix test-local names, as in \`error TestNotPoolManager()\`.
-
-${SWAP_SEMANTICS}
 `.trim();
 
   return { architecture, generation, testing };

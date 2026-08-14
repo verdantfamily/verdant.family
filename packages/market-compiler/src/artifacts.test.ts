@@ -152,16 +152,35 @@ describe("artefacts are written only for a build that was cleared", () => {
     const hook = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-contract StreakHook {
+import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
+import {Hooks} from "v4-core/src/libraries/Hooks.sol";
+import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
+import {PoolKey} from "v4-core/src/types/PoolKey.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
+import {SwapParams} from "v4-core/src/types/PoolOperation.sol";
+import {AgenBaseHook} from "./AgenBaseHook.sol";
+
+contract StreakHook is AgenBaseHook {
     uint256 public consecutiveBuys;
 
-    function onSwap(bool isBuy) external returns (uint24) {
-        if (!isBuy) {
+    constructor(IPoolManager manager_) AgenBaseHook(manager_) {}
+
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory permissions) {
+        permissions.beforeSwap = true;
+    }
+
+    function _beforeSwap(address, PoolKey calldata, SwapParams calldata params, bytes calldata)
+        internal
+        override
+        returns (BeforeSwapDelta, uint24)
+    {
+        if (!isBuy(params)) {
             consecutiveBuys = 0;
-            return 5_000;
+        } else {
+            consecutiveBuys += 1;
         }
-        consecutiveBuys += 1;
-        return consecutiveBuys >= 10 ? 0 : 5_000;
+        uint24 fee = consecutiveBuys >= 10 ? 0 : 5_000;
+        return (BeforeSwapDeltaLibrary.ZERO_DELTA, fee | LPFeeLibrary.OVERRIDE_FEE_FLAG);
     }
 }
 `;
@@ -169,18 +188,12 @@ contract StreakHook {
     const suite = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import {Test} from "forge-std/Test.sol";
-import {StreakHook} from "../contracts/StreakHook.sol";
+import {MarketTestBase} from "./MarketTestBase.sol";
 
-contract StreakHookTest is Test {
-    StreakHook hook;
-
-    function setUp() public {
-        hook = new StreakHook();
-    }
-
+contract StreakHookTest is MarketTestBase {
     function test_feeCeiling_holds() public {
-        assertLe(hook.onSwap(true), 30_000);
+        assertGt(buy(0.000001 ether), 0);
+        assertEq(hook.consecutiveBuys(), 1);
     }
 }
 `;
@@ -225,37 +238,66 @@ contract StreakHookTest is Test {
           // Planning is two calls: what is already solved, then what to build.
           { reuse: [{ catalogueId: "base-hook", why: "it needs a hook" }], novel: [] },
           {
-            approach: "one hook",
-            components: [
-      {
-        id: "streakToken",
-        contractName: "StreakToken",
-        role: "token",
-        origin: "generate",
-        purpose: "The traded token",
-        requiredBy: [],
-        reuses: [],
-        dependsOn: [],
-        hookPermissions: [],
-        custodial: false,
-        implementationNotes: [],
-      },
-              {
-                id: "streakHook",
-                contractName: "StreakHook",
-                role: "hook",
-                origin: "extend",
-                purpose: "counts buys",
-                requiredBy: ["streak"],
-                reuses: ["base-hook"],
-                dependsOn: [],
-                hookPermissions: ["beforeSwap"],
-                custodial: false,
-                implementationNotes: [],
-              },
-            ],
-            dependencies: [],
-            adaptations: [],
+            plan: {
+              approach: "one hook",
+              components: [
+                {
+                  id: "streakToken",
+                  contractName: "StreakToken",
+                  role: "token",
+                  origin: "generate",
+                  purpose: "The traded token",
+                  requiredBy: [],
+                  reuses: [],
+                  dependsOn: [],
+                  hookPermissions: [],
+                  custodial: false,
+                  implementationNotes: [],
+                },
+                {
+                  id: "streakHook",
+                  contractName: "StreakHook",
+                  role: "hook",
+                  origin: "extend",
+                  purpose: "counts buys",
+                  requiredBy: ["streak"],
+                  reuses: ["base-hook"],
+                  dependsOn: [],
+                  hookPermissions: ["beforeSwap"],
+                  custodial: false,
+                  implementationNotes: [],
+                },
+              ],
+              dependencies: [],
+              adaptations: [],
+            },
+            deployment: {
+              components: [
+                {
+                  componentId: "streakToken",
+                  constructorArguments: [
+                    { name: "recipient", type: "address", source: "INFRA:INSTALLER" },
+                  ],
+                  immutable: ["recipient"],
+                  wiring: [],
+                  controller: null,
+                },
+                {
+                  componentId: "streakHook",
+                  constructorArguments: [
+                    { name: "manager_", type: "address", source: "INFRA:POOL_MANAGER" },
+                  ],
+                  immutable: ["manager_"],
+                  wiring: [],
+                  controller: null,
+                },
+              ],
+              // The hook returns an override fee on every swap, so the pool is opened dynamic.
+              pool: { feeMode: "dynamic", lpFee: "8388608" },
+              custodyComponentId: null,
+              feeClaimComponentId: null,
+              oneTimeInitialization: [],
+            },
           },
           { content: hook, notes: [] },
           { files: [{ path: "test/StreakHook.t.sol", content: suite }], notes: [] },

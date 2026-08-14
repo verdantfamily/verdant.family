@@ -323,13 +323,17 @@ const SHALLOW = {
 } as const;
 
 export async function test(
-  options: ForgeOptions & { readonly depth?: TestDepth },
+  options: ForgeOptions & { readonly depth?: TestDepth; readonly matchPath?: string },
 ): Promise<TestResult> {
   const started = Date.now();
   const depth = options.depth ?? "all";
 
   const { stdout } = await forge(
-    ["test", "--json"],
+    [
+      "test",
+      "--json",
+      ...(options.matchPath === undefined ? [] : ["--match-path", options.matchPath]),
+    ],
     options,
     depth === "critical" ? SHALLOW : {},
   );

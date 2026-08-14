@@ -18,6 +18,7 @@ import {
   combine,
   elevatedRiskIsCovered,
   hookPermissionParity,
+  invariantCoverage,
   invariantsWereProven,
 } from "./gates.js";
 import type { Workspace } from "./workspace.js";
@@ -486,6 +487,110 @@ describe("evidence for claimed invariants", () => {
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]?.detail).toContain("reserves-conserved");
     expect(result.findings[0]?.detail).toContain("no evidence");
+  });
+
+  // A live GROVE build tested all six of its invariants, passed all 22 tests, and was
+  // refused at the last gate because one test was called what it does rather than what
+  // it proves. The evidence was there and the gate was reading the wrong field.
+  it("clears an invariant a passing test claims in the comment above it", () => {
+    const suite = {
+      content: [
+        "contract GroveBehaviorTest is MarketTestBase {",
+        "    // Invariant: buy-fee-free — Every swap that buys GROVE has no trading fee.",
+        "    function test_buy_has_no_fee() public {",
+        "        assertEq(credited(), 0);",
+        "    }",
+        "}",
+      ].join("\n"),
+    };
+
+    const result = invariantsWereProven({
+      invariantIds: ["buy-fee-free"],
+      passingTests: ["test_buy_has_no_fee()"],
+      coverage: invariantCoverage({ invariantIds: ["buy-fee-free"], sources: [suite] }),
+    });
+
+    expect(result.passed).toBe(true);
+  });
+
+  it("refuses an invariant whose only claiming test did not pass", () => {
+    const suite = {
+      content: [
+        "    // Invariant: buy-fee-free",
+        "    function test_buy_has_no_fee() public {}",
+      ].join("\n"),
+    };
+
+    const result = invariantsWereProven({
+      invariantIds: ["buy-fee-free"],
+      passingTests: ["test_something_else()"],
+      coverage: invariantCoverage({ invariantIds: ["buy-fee-free"], sources: [suite] }),
+    });
+
+    expect(result.passed).toBe(false);
+  });
+});
+
+describe("which test stands behind which invariant", () => {
+  it("attaches a comment to the declaration below it, and not to the rest of the file", () => {
+    const coverage = invariantCoverage({
+      invariantIds: ["fee-ceiling", "buy-fee-free"],
+      sources: [
+        {
+          content: [
+            "    // Invariant: fee-ceiling — no trade may be charged more than 2%.",
+            "    function test_fee_is_capped() public {}",
+            "",
+            "    function test_unrelated() public {}",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    expect(coverage.get("fee-ceiling")).toEqual(["test_fee_is_capped"]);
+    expect(coverage.get("buy-fee-free")).toEqual([]);
+  });
+
+  // The distinction the old whole-file search could not make. A suite that lists its
+  // invariants at the top and then tests three of them is a suite with an untested
+  // invariant, and generation has to hear that before the market is built on it.
+  it("does not read a file-header list of invariants as coverage", () => {
+    const coverage = invariantCoverage({
+      invariantIds: ["treasury-destination"],
+      sources: [
+        {
+          content: [
+            "// Invariants covered here: treasury-destination",
+            "",
+            "contract T is MarketTestBase {",
+            "    function test_sells_are_charged() public {}",
+            "}",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    expect(coverage.get("treasury-destination")).toEqual([]);
+  });
+
+  it("matches a fuzz test against the name forge reports for it", () => {
+    const result = invariantsWereProven({
+      invariantIds: ["fee-conservation"],
+      passingTests: ["testFuzz_sells_conserve_fees(uint128)"],
+      coverage: invariantCoverage({
+        invariantIds: ["fee-conservation"],
+        sources: [
+          {
+            content: [
+              "    /// Invariant: fee-conservation",
+              "    function testFuzz_sells_conserve_fees(uint128 amount) public {}",
+            ].join("\n"),
+          },
+        ],
+      }),
+    });
+
+    expect(result.passed).toBe(true);
   });
 });
 

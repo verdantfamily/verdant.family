@@ -326,6 +326,35 @@ const plan = {
   ],
 };
 
+/**
+ * How the bundle is deployed. The hook takes the pool manager and nothing else; its
+ * rewards are claimed by whoever won them, so no single address controls it.
+ */
+const deployment = {
+  components: [
+    {
+      componentId: "regentToken",
+      constructorArguments: [{ name: "recipient", type: "address", source: "INFRA:INSTALLER" }],
+      immutable: ["recipient"],
+      wiring: [],
+      controller: null,
+    },
+    {
+      componentId: "regentHook",
+      constructorArguments: [
+        { name: "poolManager_", type: "address", source: "INFRA:POOL_MANAGER" },
+      ],
+      immutable: ["poolManager_"],
+      wiring: [],
+      controller: null,
+    },
+  ],
+  pool: { feeMode: "dynamic", lpFee: "8388608" },
+  custodyComponentId: "regentHook",
+  feeClaimComponentId: "regentHook",
+  oneTimeInitialization: [],
+};
+
 const job = await runBuild(
   {
     prompt:
@@ -346,7 +375,7 @@ const job = await runBuild(
       { suggestions: [] },
       // Planning is two calls: what is already solved, then what to build.
       { reuse: [{ catalogueId: "base-hook", why: "it needs a hook" }], novel: [] },
-      plan,
+      { plan, deployment },
       // One answer per generated component; the token is written by Agen, not scripted.
       { content: HOOK, notes: [] },
       { files: [{ path: "test/RegentHook.t.sol", content: TESTS }], notes: [] },

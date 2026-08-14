@@ -147,6 +147,15 @@ export const AGEN_LAUNCH = {
   valuationWei: 1_500_000_000_000_000_000n,
 
   /**
+   * The v4 tick representing the standard supply at the standard opening valuation.
+   *
+   * Kept beside those inputs so the compiler fixture, protocol prelude and production
+   * launch cannot silently open the same market at three different prices. SDK parity
+   * tests verify that the valuation formula still derives this exact grid point.
+   */
+  initialTick: 203_200,
+
+  /**
    * The depth of the opening band, in ether of buying pressure to cross it.
    *
    * Not read by anything: the allocation that produces it is `AgenCurve.OPENING_BPS`, and
@@ -156,6 +165,46 @@ export const AGEN_LAUNCH = {
    * place the intent is written down.
    */
   openingDepthEth: 0.25,
+} as const;
+
+/**
+ * What an Instant market charges, and how that charge divides.
+ *
+ * Three numbers, none of them a parameter: 1.50% of every trade, of which 1.00% of the
+ * trade is the creator's and 0.50% is the platform's. A creator who wants to choose a
+ * fee wants Programmable, whose stages are a per-market input; Instant's whole claim is
+ * that there is nothing to decide, and a fee schedule is the most consequential thing a
+ * launchpad can put in a form.
+ *
+ * ## Why parts per million, and why both shares come off the trade
+ *
+ * The natural encoding is a total plus the protocol's share *of that total*, which is how
+ * `FeeSplitter` divides an ordinary Verdant market and what `BOUNDS.splits.protocolBps`
+ * describes. It cannot express this split. The platform's cut is 0.50/1.50 of the fee —
+ * one third — and one third is not a whole number of basis points: 3 333 bps pays
+ * 0.49995% and 1.00005%. So each share is taken from the trade instead, where all three
+ * numbers are exact.
+ *
+ * That also puts the split beyond `MAX_PROTOCOL_BPS`, which is an immutable seeded at
+ * 2 000 on the live `ModelRegistry`. It is not reachable there and is not meant to be:
+ * these are constants of the Instant hook, which is a different deployment. See ADR-014.
+ *
+ * ## Why the numbers live here as well as in Solidity
+ *
+ * `InstantFees.sol` is what the chain enforces and this is what the interface reads, for
+ * the reason `AGEN_LAUNCH` gives above: Solidity cannot import TypeScript. The duplication
+ * is held to one value by the parity test in `packages/sdk/src/config.test.ts`, which
+ * reads the constants back out of the Solidity rather than trusting this file.
+ */
+export const INSTANT_FEES = {
+  /** Everything an Instant trade costs, in ppm. The whole charge, not a component. */
+  totalPpm: 15_000,
+  /** The creator's share of the trade, in ppm. Paid in ether on buys and sells alike. */
+  creatorPpm: 10_000,
+  /** The platform's share of the trade, in ppm. Paid in ether, to the treasury. */
+  platformPpm: 5_000,
+  /** The denominator the three above are expressed in. */
+  denominatorPpm: 1_000_000,
 } as const;
 
 /** Native ETH is always currency0, so no address sorting is ever required (D4). */

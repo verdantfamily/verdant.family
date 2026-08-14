@@ -104,7 +104,9 @@ console.log("=".repeat(72));
 console.log("\nstages:");
 for (const record of job.stages) {
   const took =
-    record.completedAt === null ? "" : ` ${String(record.completedAt - record.startedAt)}s`;
+    record.completedAt === null
+      ? ""
+      : ` ${((record.completedAt - record.startedAt) / 1_000).toFixed(1)}s`;
   const attempt = record.attempt > 1 ? ` (attempt ${String(record.attempt)})` : "";
   console.log(`  ${record.status.padEnd(9)} ${record.stage}${attempt}${took}`);
   if (record.detail !== null) console.log(`            ${record.detail.slice(0, 160)}`);
@@ -150,7 +152,10 @@ console.log(
     job.testOutcomes.length,
   )} passing`,
 );
-console.log(`repairs:   ${String(job.compilationAttempts)} compile, ${String(job.testAttempts)} test`);
+console.log(
+  `repairs:   ${String(job.compilationAttempts)} compile, ` +
+    `${String(job.harnessAttempts)} harness, ${String(job.testAttempts)} behavior test`,
+);
 
 for (const finding of job.gateFindings) {
   console.log(`gate [${finding.severity}] ${finding.code} ${finding.file ?? ""}:${String(finding.line ?? 0)}`);

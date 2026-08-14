@@ -47,8 +47,9 @@ describe("failures this project has already paid for", () => {
     const entry = recognise([], [failing("InvalidBaseFee(8388608)")]);
 
     expect(entry?.id).toBe("fee_mode_rejected");
-    expect(entry?.remedy).toContain("agenPoolKey(quote, token, hook, tickSpacing, fee)");
-    expect(entry?.remedy).toContain("Do not relax the hook's check");
+    expect(entry?.blame).toBe(Blame.HarnessInfrastructure);
+    expect(entry?.remedy).toContain("canonical deployment");
+    expect(entry?.remedy).toContain("Do not relax the hook");
   });
 
   /**
@@ -133,15 +134,17 @@ describe("failures this project has already paid for", () => {
 
     expect(entry?.id).toBe("overload_lookup");
     expect(entry?.blame).toBe(Blame.HarnessMisuse);
-    expect(entry?.remedy).toContain("Currency.wrap");
+    expect(entry?.remedy).toContain("MarketTestBase");
+    expect(entry?.remedy).not.toContain("agenPoolKey");
   });
 
-  it("knows an unapproved router, and blames the test rather than the token", () => {
+  it("knows an unapproved canonical router is infrastructure rather than the token", () => {
     const entry = recognise([], [failing("InsufficientAllowance(0, 10000000000000000000)")]);
 
     expect(entry?.id).toBe("missing_allowance");
-    expect(entry?.remedy).toContain("approveSwapRouter");
-    expect(entry?.remedy).toContain("Do not weaken");
+    expect(entry?.blame).toBe(Blame.HarnessInfrastructure);
+    expect(entry?.remedy).toContain("MarketTestBase");
+    expect(entry?.remedy).toContain("Do not add approve");
   });
 
   it("answers stack-too-deep with a compiler backend rather than a rewrite", () => {
@@ -168,7 +171,7 @@ describe("failures this project has already paid for", () => {
     expect(entries.map((entry) => entry.id).sort()).toEqual(["missing_allowance", "prank_overwrite"]);
 
     const brief = remedyBrief(entries);
-    expect(brief).toContain("approveSwapRouter");
+    expect(brief).toContain("MarketTestBase");
     expect(brief).toContain("vm.startPrank");
   });
 });
@@ -185,20 +188,53 @@ describe("naming a failure", () => {
     expect(result.playbook).toBe("overload_lookup");
   });
 
-  it("separates a market that misbehaves from a test that is wrong about it", () => {
-    const wrongTest = classify({
+  it("separates canonical routing failures from a market that misbehaves", () => {
+    const wrongEnvironment = classify({
       stage: Stage.TestExecution,
-      failingTests: [failing("ManagerLocked")],
+      failingTests: [failing("ManagerLocked", "test_directCallback()")],
     });
-    expect(wrongTest.category).toBe(FailureCategory.TestFailure);
-    expect(wrongTest.blame).toBe(Blame.Test);
+    expect(wrongEnvironment.category).toBe(FailureCategory.HarnessInfrastructure);
+    expect(wrongEnvironment.blame).toBe(Blame.HarnessInfrastructure);
 
     const wrongMarket = classify({
       stage: Stage.TestExecution,
-      failingTests: [failing("CurrencyNotSettled")],
+      failingTests: [failing("CurrencyNotSettled", "test_feeConservation()")],
     });
     expect(wrongMarket.category).toBe(FailureCategory.SemanticFailure);
     expect(wrongMarket.blame).toBe(Blame.Contract);
+  });
+
+  it("owns every setUp revert as harness infrastructure before behavior runs", () => {
+    for (const reason of [
+      "InsufficientAllowance(0, 1)",
+      "CurrencyNotSettled()",
+      "InvalidBaseFee(8388608)",
+      "WiringFailed(2, 0x)",
+      "ZeroFeeReceiver()",
+    ]) {
+      const result = classify({
+        stage: Stage.TestExecution,
+        failingTests: [failing(reason)],
+      });
+
+      expect(result.category, reason).toBe(FailureCategory.HarnessInfrastructure);
+      expect(result.blame, reason).toBe(Blame.HarnessInfrastructure);
+    }
+  });
+
+  it("owns a compiler failure in the deterministic base as harness infrastructure", () => {
+    const result = classify({
+      stage: Stage.TestExecution,
+      diagnostics: [
+        diagnostic({
+          file: "test/MarketTestBase.sol",
+          message: "Member setHook not found",
+        }),
+      ],
+    });
+
+    expect(result.category).toBe(FailureCategory.HarnessInfrastructure);
+    expect(result.blame).toBe(Blame.HarnessInfrastructure);
   });
 
   it("treats a suite that will not build as a compile problem, not a behaviour question", () => {

@@ -35,7 +35,17 @@
  * addresses appear in a row.
  */
 
-import { encodeFunctionData, keccak256, toHex, type Abi, type Address, type Hex } from "viem";
+import {
+  encodeAbiParameters,
+  encodeFunctionData,
+  keccak256,
+  toHex,
+  type Abi,
+  type Address,
+  type Hex,
+} from "viem";
+
+import { TICK_SPACING } from "@verdant/config";
 
 import type { ContractArtifact } from "./artifacts.js";
 import {
@@ -46,7 +56,14 @@ import {
   type DeployableManifest,
   type WiringCall,
 } from "./manifest.js";
-import { deploymentOrder, type MarketComponent, type MarketImplementationPlan } from "./plan.js";
+import type {
+  DeclaredWiringCall,
+  DeployedComponent,
+  DeploymentSpecification,
+  SymbolicRef,
+} from "./deployment-spec.js";
+import { deploymentSpecOrder, parseRef, POOL_ID_REF } from "./deployment-spec.js";
+import type { MarketComponent, MarketImplementationPlan } from "./plan.js";
 
 /** What a deployment knows before any contract exists. */
 export interface DeploymentEnvironment {
@@ -77,6 +94,18 @@ export interface DeploymentEnvironment {
    * looks like a broken mechanic.
    */
   readonly agenRouter: Address | null;
+  /**
+   * The other two destinations a market can name, as `ROLE:TREASURY` and `ROLE:BENEFICIARY`.
+   *
+   * Separate fields rather than aliases of `feeReceiver` because a market that names two
+   * destinations means two, and resolving both to one address is how a vault with a
+   * `DuplicateRecipient` guard reverts its own constructor. Agen's launch screen collects
+   * one destination today, so both are set to the fee receiver by every caller — but they
+   * are resolved here rather than substituted in the deployment, so the day a creator can
+   * name a treasury the change is to this environment and to nothing else.
+   */
+  readonly treasury: Address;
+  readonly beneficiary: Address;
   readonly name: string;
   readonly symbol: string;
   /** Whole tokens, before decimals. */
@@ -90,7 +119,7 @@ export interface DeploymentEnvironment {
  * predicted by `buildManifest`, which has not run yet. `encodeWiring` turns these into
  * real calls once it has.
  */
-export interface WiringIntent {
+export interface ComponentWiringIntent {
   /** The component whose setter is called. */
   readonly componentId: string;
   readonly functionName: string;
@@ -98,6 +127,31 @@ export interface WiringIntent {
   readonly targetComponentId: string;
   readonly purpose: string;
 }
+
+/** A component that must know the canonical pool before `initialize` calls its hook. */
+export interface PoolIdWiringIntent {
+  readonly componentId: string;
+  readonly functionName: string;
+  readonly poolId: true;
+  readonly purpose: string;
+}
+
+/**
+ * A setter told an address that is not a component of this bundle.
+ *
+ * A market whose accounting is told where fees go at launch rather than in its constructor
+ * is doing something ordinary, and there was no way to express it while wiring was scraped
+ * from the ABI: a one-argument address setter could only ever mean a sibling component,
+ * because a sibling was the only thing the scraper could name.
+ */
+export interface ExternalWiringIntent {
+  readonly componentId: string;
+  readonly functionName: string;
+  readonly address: Address;
+  readonly purpose: string;
+}
+
+export type WiringIntent = ComponentWiringIntent | PoolIdWiringIntent | ExternalWiringIntent;
 
 export interface ResolvedDeployment {
   readonly deployments: readonly ComponentDeployment[];
@@ -110,301 +164,344 @@ interface AbiParameter {
 }
 
 /**
- * Work out how every component in the plan is constructed and wired.
+ * Turn a declared deployment into a placeable bundle.
  *
- * Throws `ManifestError` listing every parameter it could not place, rather than the
- * first — a market with three unresolvable arguments should take one run to diagnose.
+ * This replaced an inference engine, and the difference is the whole point of the module.
+ * The old resolver was handed compiled contracts and asked what their constructors meant:
+ * nineteen ordered rules over lowercased parameter names, a synonym list for "somewhere
+ * value goes", and a setter scraper that decided a one-argument address setter must name a
+ * sibling because a sibling was the only thing it could name. It was right most of the
+ * time, which is worse than being wrong reliably — the failures arrived inside a wiring
+ * call, after every component had been deployed and paid for, with an immutable already
+ * set to an address no later repair could change.
+ *
+ * Nothing is inferred here. Every argument has a declared source, every wiring call was
+ * declared, and this function's only jobs are resolving symbols against an environment and
+ * refusing to proceed when the compiled contract does not match what was declared.
+ *
+ * ## Why it checks parity rather than trusting the declaration
+ *
+ * The specification is written before the Solidity, so the Solidity can still disagree with
+ * it — a generator that wrote `constructor(address manager_, address feeReceiver_)` against
+ * a declaration of one argument produces a bundle whose creation code takes an argument
+ * nobody supplied. `deploymentValidation` reports that as an architecture inconsistency and
+ * a component is regenerated. This function checks the same thing and throws, because a
+ * materializer that silently produced a bundle from a stale declaration would be the
+ * original bug with extra steps.
  */
-export function resolveDeployment({
-  plan,
+export function materializeDeployment({
+  spec,
   artifacts,
   environment,
 }: {
-  readonly plan: MarketImplementationPlan;
+  readonly spec: DeploymentSpecification;
   readonly artifacts: readonly ContractArtifact[];
   readonly environment: DeploymentEnvironment;
 }): ResolvedDeployment {
-  const byName = new Map(artifacts.map((artifact) => [artifact.contractName, artifact]));
-  const ordered = deploymentOrder(plan);
+  const parity = deploymentParityProblems({ spec, artifacts });
+  if (parity.length > 0) {
+    throw new ManifestError(
+      `the contracts do not match the deployment this market declared:\n  ${parity.join("\n  ")}`,
+    );
+  }
 
-  const deployments: ComponentDeployment[] = [];
-  const problems: string[] = [];
-
-  // Components already placed by the time each constructor runs. A reference to a
-  // component deployed later cannot be a constructor argument — that is the cycle
-  // CREATE2 does not untie — and has to become a wiring call instead.
+  const ordered = deploymentSpecOrder(spec);
   const placed = new Set<string>();
+  const deployments: ComponentDeployment[] = [];
+  const wiring: WiringIntent[] = [];
 
   for (const component of ordered) {
-    const artifact = byName.get(component.contractName);
-    if (artifact === undefined) {
-      problems.push(`${component.contractName}: the plan names it but nothing compiled under that name`);
-      continue;
-    }
-
-    const constructor = (artifact.abi as readonly { type?: string; inputs?: AbiParameter[] }[]).find(
-      (entry) => entry.type === "constructor",
-    );
-
-    const inputs = constructor?.inputs ?? [];
     const types: string[] = [];
     const values: ConstructorArgument[] = [];
 
-    for (const input of inputs) {
-      const resolved = resolveArgument({ input, plan, placed, environment, component });
-
-      if (resolved === null) {
-        problems.push(
-          `${component.contractName}: nothing known about the constructor argument ` +
-            `\`${input.type ?? "?"} ${input.name ?? "(unnamed)"}\`. A deployment can supply the ` +
-            `pool manager, the installer, the creator, the fee receiver, the token name, symbol ` +
-            `and supply, and the address of another component in this market — nothing else ` +
-            `exists yet.`,
-        );
-        continue;
-      }
-
-      types.push(input.type!);
-      values.push(resolved);
+    for (const argument of component.constructorArguments) {
+      types.push(argument.type);
+      values.push(resolveSymbol({ reference: argument.source, environment, placed, component }));
     }
 
-    placed.add(component.id);
+    placed.add(component.componentId);
     if (types.length > 0) {
-      deployments.push({ componentId: component.id, argumentTypes: types, argumentValues: values });
-    }
-  }
-
-  if (problems.length > 0) {
-    throw new ManifestError(
-      `this market cannot be deployed as generated:\n  ${problems.join("\n  ")}`,
-    );
-  }
-
-  return { deployments, wiring: wiringFor({ plan, artifacts, placedOrder: ordered }) };
-}
-
-/**
- * Place one constructor argument, or null if nothing known fits it.
- *
- * Name first, then type. A generated constructor names its parameters after what they
- * are, which is more signal than the type carries — `address` alone could be any of five
- * things.
- */
-function resolveArgument({
-  input,
-  plan,
-  placed,
-  environment,
-  component,
-}: {
-  readonly input: AbiParameter;
-  readonly plan: MarketImplementationPlan;
-  readonly placed: ReadonlySet<string>;
-  readonly environment: DeploymentEnvironment;
-  /** The component being constructed. The token's recipient depends on it. */
-  readonly component: MarketComponent;
-}): ConstructorArgument | null {
-  const type = input.type ?? "";
-  // Trailing underscores are the Solidity convention for "same name as the state
-  // variable this sets", and carry no meaning of their own.
-  const name = (input.name ?? "").replace(/_+$/, "").toLowerCase();
-
-  if (type === "string") {
-    if (name.includes("name")) return { kind: "value", value: environment.name };
-    if (name.includes("symbol")) return { kind: "value", value: environment.symbol };
-    return null;
-  }
-
-  if (/^uint\d*$/.test(type)) {
-    // The only quantity a launch knows. Anything else — a threshold, a duration, a fee —
-    // belongs to the market's own configuration and should be a constant in the
-    // contract, not something the deployment is expected to invent.
-    if (name.includes("supply")) {
-      return { kind: "value", value: environment.supplyTokens * 10n ** 18n };
-    }
-    return null;
-  }
-
-  if (type !== "address") return null;
-
-  if (name.includes("poolmanager") || name === "manager") {
-    return { kind: "external", address: environment.poolManager };
-  }
-  if (name.includes("installer") || name.includes("factory")) {
-    return { kind: "external", address: environment.installer };
-  }
-
-  /**
-   * The canonical trading route, for a hook that authenticates its trades.
-   *
-   * Ahead of every other address rule because the names collide with nothing else and
-   * getting it wrong is silent: a hook handed the creator's address where it expected
-   * the router compares every swap's sender against a wallet, matches never, and either
-   * refuses all trading or credits every trade to whoever called. Both look like the
-   * mechanic being wrong.
-   *
-   * Refused rather than defaulted when the chain has no router. `AgenRouted` holds this
-   * in an immutable, so a zero here is a market that can never authenticate anything,
-   * deployed and permanently broken. See `agenRouter` on the environment.
-   */
-  if (name.includes("agenrouter") || name === "router" || name.includes("tradingrouter")) {
-    if (environment.agenRouter === null) {
-      throw new ManifestError(
-        `${component.contractName} takes the Agen router as ${input.name ?? "an argument"}, and no ` +
-          `router is deployed on this chain. A market that authenticates its trades cannot be ` +
-          `launched here.`,
-      );
-    }
-    return { kind: "external", address: environment.agenRouter };
-  }
-
-  // The launch token's supply goes to the factory, and this is the one argument in a
-  // bundle where the obvious answer is the wrong one. `AgenFactory` locks the entire
-  // supply into the three launch positions before `deployMarket` returns, and it can
-  // only do that with tokens it holds — a token minted to the creator instead leaves
-  // the factory with nothing to lock and reverts the launch with `NoSupplyToLock`,
-  // after every component has been deployed. The recipient is baked into the token's
-  // creation code, so this cannot be corrected later: it is decided here or the market
-  // is undeployable.
-  //
-  // The creator is not short-changed by it. They receive their position the way every
-  // other holder does, by buying from the launch liquidity — with the launch buy if the
-  // market's hook permits one, and otherwise in the next block.
-  const holdsTheSupply =
-    name.includes("recipient") || name.includes("owner") || name.includes("treasury") || name.includes("mintto");
-
-  if (component.role === "token" && holdsTheSupply) {
-    return { kind: "external", address: environment.installer };
-  }
-
-  /**
-   * Where the fees go, which is a different address from who owns the market.
-   *
-   * Checked before the general case below, because a `feeReceiver_` matches "receiver"
-   * and would otherwise resolve to the creator — which is right by default and wrong
-   * the moment somebody points their fees at a splitter or a multisig, silently, in an
-   * immutable, forever.
-   *
-   * The name has to mention fees for this to fire. A bare `receiver_` on some other
-   * component is not necessarily about money, and guessing that it is would bake the
-   * fee receiver into a contract that meant something else by it.
-   */
-  const aboutFees = name.includes("fee") || name.includes("revenue") || name.includes("royalt");
-  const isDestination =
-    name.includes("receiver") ||
-    name.includes("recipient") ||
-    name.includes("collector") ||
-    name.includes("sink") ||
-    name.includes("treasury") ||
-    name.includes("beneficiary");
-
-  if (aboutFees && isDestination) {
-    return { kind: "external", address: environment.feeReceiver };
-  }
-
-  if (
-    name.includes("owner") ||
-    name.includes("recipient") ||
-    name.includes("receiver") ||
-    name.includes("beneficiary") ||
-    name.includes("treasury")
-  ) {
-    return { kind: "external", address: environment.creator };
-  }
-
-  // A reference to another contract in this bundle, but only one that already exists at
-  // the moment this constructor runs.
-  const referenced = componentNamed(plan, name);
-  if (referenced !== null && placed.has(referenced.id)) {
-    return { kind: "component", componentId: referenced.id };
-  }
-
-  return null;
-}
-
-/**
- * The component a parameter name refers to, if any.
- *
- * Matched on the component's role and on its contract name, both ways round, because a
- * hook's reference to the market token is called `token` in one generated market and
- * `pulseToken` in the next.
- */
-function componentNamed(plan: MarketImplementationPlan, name: string): MarketComponent | null {
-  if (name.length === 0) return null;
-
-  for (const component of plan.components) {
-    const contract = component.contractName.toLowerCase();
-    if (name === contract || name.includes(contract) || contract.includes(name)) return component;
-  }
-
-  for (const component of plan.components) {
-    const role = component.role.toLowerCase();
-    if (name === role || name.includes(role)) return component;
-  }
-
-  return null;
-}
-
-/**
- * The setter calls that finish the bundle once every address exists.
- *
- * Found in the ABI rather than declared in the plan: the contract that needs telling is
- * the one with a one-argument address setter named after another component, and it knows
- * that about itself more reliably than the planner remembers to write it down.
- *
- * Only components deployed before the one being referenced are skipped — those got the
- * address in their constructor and do not need telling twice.
- */
-function wiringFor({
-  plan,
-  artifacts,
-  placedOrder,
-}: {
-  readonly plan: MarketImplementationPlan;
-  readonly artifacts: readonly ContractArtifact[];
-  readonly placedOrder: readonly MarketComponent[];
-}): readonly WiringIntent[] {
-  const byName = new Map(artifacts.map((artifact) => [artifact.contractName, artifact]));
-  const position = new Map(placedOrder.map((component, index) => [component.id, index]));
-
-  const calls: WiringIntent[] = [];
-
-  for (const component of placedOrder) {
-    const artifact = byName.get(component.contractName);
-    if (artifact === undefined) continue;
-
-    for (const entry of artifact.abi as readonly {
-      type?: string;
-      name?: string;
-      inputs?: AbiParameter[];
-    }[]) {
-      if (entry.type !== "function") continue;
-      if (!/^set[A-Z]/.test(entry.name ?? "")) continue;
-
-      const inputs = entry.inputs ?? [];
-      if (inputs.length !== 1 || inputs[0]?.type !== "address") continue;
-
-      // `setFeeVault` refers to the fee vault. The parameter name is often just
-      // `vault_`, so the function name is the better signal.
-      const target = componentNamed(plan, (entry.name ?? "").slice(3).toLowerCase());
-      if (target === null || target.id === component.id) continue;
-
-      // Already known at construction time, so this setter is for something else.
-      const mine = position.get(component.id) ?? 0;
-      const theirs = position.get(target.id) ?? 0;
-      if (theirs < mine) continue;
-
-      calls.push({
-        componentId: component.id,
-        functionName: entry.name!,
-        targetComponentId: target.id,
-        purpose: `tell ${component.contractName} the address of ${target.contractName}`,
+      deployments.push({
+        componentId: component.componentId,
+        argumentTypes: types,
+        argumentValues: values,
       });
     }
   }
 
-  return calls;
+  // Wiring runs after every component exists, so it is collected in a second pass and in
+  // declaration order. The factory makes the calls in exactly this order.
+  for (const component of ordered) {
+    for (const call of component.wiring) {
+      wiring.push(
+        wiringIntentFor({
+          component,
+          call,
+          environment,
+          named: new Map(spec.components.map((entry) => [entry.componentId, entry.contractName])),
+        }),
+      );
+    }
+  }
+
+  return { deployments, wiring };
 }
+
+/**
+ * Where the declared deployment and the compiled contracts disagree.
+ *
+ * Positional and exact: same number of constructor arguments, same ABI types in the same
+ * order, same parameter names. The names matter because they are the one part a person
+ * reads — a market whose declaration says `owner_` and whose contract says `treasury_` has
+ * two people describing different things — and because the declaration is what the
+ * generator was told to write, so a mismatch means the generator went its own way.
+ *
+ * Wiring is checked the same way: a declared call must exist, take one argument, and take
+ * it in the type the reference resolves to.
+ */
+export function deploymentParityProblems({
+  spec,
+  artifacts,
+}: {
+  readonly spec: DeploymentSpecification;
+  readonly artifacts: readonly ContractArtifact[];
+}): readonly string[] {
+  const byName = new Map(artifacts.map((artifact) => [artifact.contractName, artifact]));
+  const problems: string[] = [];
+
+  for (const component of spec.components) {
+    const artifact = byName.get(component.contractName);
+    if (artifact === undefined) {
+      problems.push(
+        `${component.contractName}: the deployment names it but nothing compiled under that name`,
+      );
+      continue;
+    }
+
+    const abi = artifact.abi as readonly {
+      type?: string;
+      name?: string;
+      inputs?: AbiParameter[];
+    }[];
+
+    const declaredArguments = component.constructorArguments;
+    const actual = abi.find((entry) => entry.type === "constructor")?.inputs ?? [];
+
+    if (actual.length !== declaredArguments.length) {
+      problems.push(
+        `${component.contractName}: the deployment declares a constructor taking ` +
+          `${describeSignature(declaredArguments.map((argument) => `${argument.type} ${argument.name}`))} ` +
+          `and the contract takes ` +
+          `${describeSignature(actual.map((input) => `${input.type ?? "?"} ${input.name ?? "?"}`))}. ` +
+          `The launch can only pass the arguments that were declared.`,
+      );
+      continue;
+    }
+
+    for (const [position, declared] of declaredArguments.entries()) {
+      const input = actual[position]!;
+
+      if (input.type !== declared.type) {
+        problems.push(
+          `${component.contractName}: argument ${String(position + 1)} is declared ` +
+            `\`${declared.type} ${declared.name}\` and the contract takes ` +
+            `\`${input.type ?? "?"} ${input.name ?? "?"}\``,
+        );
+        continue;
+      }
+
+      if (input.name !== declared.name) {
+        problems.push(
+          `${component.contractName}: argument ${String(position + 1)} is declared ` +
+            `\`${declared.name}\` and the contract calls it \`${input.name ?? "(unnamed)"}\`. ` +
+            `They are the same value under two names, and the deployment record is what a ` +
+            `person reads.`,
+        );
+      }
+    }
+
+    for (const call of component.wiring) {
+      const entries = abi.filter((entry) => entry.type === "function" && entry.name === call.functionName);
+
+      if (entries.length === 0) {
+        problems.push(
+          `${component.contractName}: the deployment says the launch calls ` +
+            `${call.functionName} and the contract has no such function`,
+        );
+        continue;
+      }
+
+      if (entries.length > 1) {
+        problems.push(
+          `${component.contractName}.${call.functionName} is overloaded, so the launch cannot ` +
+            `tell which one it is meant to call. Give the wiring setter a name of its own.`,
+        );
+        continue;
+      }
+
+      const inputs = entries[0]!.inputs ?? [];
+      if (inputs.length !== 1) {
+        problems.push(
+          `${component.contractName}.${call.functionName} takes ` +
+            `${String(inputs.length)} arguments and a wiring call carries exactly one. A value ` +
+            `the launch cannot supply belongs in the contract as a constant.`,
+        );
+        continue;
+      }
+
+      const expected = call.argument === POOL_ID_REF ? "bytes32" : "address";
+      if (inputs[0]!.type !== expected) {
+        problems.push(
+          `${component.contractName}.${call.functionName} takes ` +
+            `\`${inputs[0]!.type ?? "?"}\` and the launch passes ${call.argument}, which is a ` +
+            `\`${expected}\``,
+        );
+      }
+    }
+  }
+
+  return problems;
+}
+
+function describeSignature(parts: readonly string[]): string {
+  return parts.length === 0 ? "no arguments" : `(${parts.join(", ")})`;
+}
+
+/** One declared reference, against the addresses this launch actually has. */
+function resolveSymbol({
+  reference,
+  environment,
+  placed,
+  component,
+}: {
+  readonly reference: SymbolicRef;
+  readonly environment: DeploymentEnvironment;
+  readonly placed: ReadonlySet<string>;
+  readonly component: DeployedComponent;
+}): ConstructorArgument {
+  const parsed = parseRef(reference);
+  if (parsed === null) {
+    throw new ManifestError(
+      `${component.contractName}: "${reference}" is not a reference Agen can resolve`,
+    );
+  }
+
+  switch (parsed.kind) {
+    case "component":
+      // Unreachable after `deploymentSpecOrder`, which places dependencies first, and
+      // after the cycle check that refuses a bundle where it would not be.
+      if (!placed.has(parsed.componentId)) {
+        throw new ManifestError(
+          `${component.contractName} is handed the address of ${parsed.componentId}, which is ` +
+            `deployed after it`,
+        );
+      }
+      return { kind: "component", componentId: parsed.componentId };
+
+    case "role":
+      switch (parsed.role) {
+        case "CREATOR":
+          return { kind: "external", address: environment.creator };
+        case "FEE_RECEIVER":
+          return { kind: "external", address: environment.feeReceiver };
+        case "TREASURY":
+          return { kind: "external", address: environment.treasury };
+        case "BENEFICIARY":
+          return { kind: "external", address: environment.beneficiary };
+      }
+
+    case "infra":
+      switch (parsed.infra) {
+        case "POOL_MANAGER":
+          return { kind: "external", address: environment.poolManager };
+        case "INSTALLER":
+          return { kind: "external", address: environment.installer };
+        case "AGEN_ROUTER":
+          // Refused rather than defaulted. `AgenRouted` holds this in an immutable, so a
+          // zero here is a market that can never authenticate a trade, deployed and
+          // permanently broken.
+          if (environment.agenRouter === null) {
+            throw new ManifestError(
+              `${component.contractName} takes the Agen router as \`${reference}\`, and no ` +
+                `router is deployed on this chain. A market that authenticates its trades ` +
+                `cannot be launched here.`,
+            );
+          }
+          return { kind: "external", address: environment.agenRouter };
+      }
+
+    case "literal":
+      switch (parsed.literal) {
+        case "NAME":
+          return { kind: "value", value: environment.name };
+        case "SYMBOL":
+          return { kind: "value", value: environment.symbol };
+        case "SUPPLY":
+          return { kind: "value", value: environment.supplyTokens * 10n ** 18n };
+      }
+  }
+}
+
+function wiringIntentFor({
+  component,
+  call,
+  environment,
+  named,
+}: {
+  readonly component: DeployedComponent;
+  readonly call: DeclaredWiringCall;
+  readonly environment: DeploymentEnvironment;
+  readonly named: ReadonlyMap<string, string>;
+}): WiringIntent {
+  if (call.argument === POOL_ID_REF) {
+    return {
+      componentId: component.componentId,
+      functionName: call.functionName,
+      poolId: true,
+      purpose: `tell ${component.contractName} the id of its Agen pool`,
+    };
+  }
+
+  const parsed = parseRef(call.argument);
+  if (parsed === null) {
+    throw new ManifestError(
+      `${component.contractName}.${call.functionName}: "${call.argument}" is not a reference ` +
+        `Agen can resolve`,
+    );
+  }
+
+  if (parsed.kind === "component") {
+    return {
+      componentId: component.componentId,
+      functionName: call.functionName,
+      targetComponentId: parsed.componentId,
+      purpose: `tell ${component.contractName} the address of ${named.get(parsed.componentId) ?? parsed.componentId}`,
+    };
+  }
+
+  const resolved = resolveSymbol({
+    reference: call.argument,
+    environment,
+    // Wiring runs after everything is deployed, so nothing about placement constrains it.
+    placed: new Set(named.keys()),
+    component,
+  });
+
+  if (resolved.kind !== "external") {
+    throw new ManifestError(
+      `${component.contractName}.${call.functionName} is passed ${call.argument}, which is not ` +
+        `an address`,
+    );
+  }
+
+  return {
+    componentId: component.componentId,
+    functionName: call.functionName,
+    address: resolved.address,
+    purpose: `tell ${component.contractName} the address it was launched with`,
+  };
+}
+
 
 /**
  * Turn wiring intentions into calls, now that the addresses are known.
@@ -417,26 +514,47 @@ export function encodeWiring({
   intents,
   components,
   artifacts,
+  poolId,
 }: {
   readonly intents: readonly WiringIntent[];
   /** As produced by `buildManifest`: component ids against predicted addresses. */
   readonly components: readonly { readonly componentId: string; readonly contractName: string; readonly expected: Address }[];
   readonly artifacts: readonly ContractArtifact[];
+  /** The id of the manifest's exact key, when a component binds itself before initialize. */
+  readonly poolId?: Hex;
 }): readonly WiringCall[] {
   const address = new Map(components.map((component) => [component.componentId, component.expected]));
   const contract = new Map(components.map((component) => [component.componentId, component.contractName]));
   const byName = new Map(artifacts.map((artifact) => [artifact.contractName, artifact]));
 
   return intents.map((intent) => {
-    const target = address.get(intent.targetComponentId);
     const name = contract.get(intent.componentId);
     const artifact = name === undefined ? undefined : byName.get(name);
 
-    if (target === undefined || artifact === undefined) {
+    if (artifact === undefined) {
       throw new ManifestError(
-        `cannot encode the call to ${intent.functionName}: ` +
-          `${target === undefined ? intent.targetComponentId : intent.componentId} is not in the manifest`,
+        `cannot encode the call to ${intent.functionName}: ${intent.componentId} is not in the manifest`,
       );
+    }
+
+    let argument: Address | Hex;
+    if ("poolId" in intent) {
+      if (poolId === undefined) {
+        throw new ManifestError(
+          `cannot encode the call to ${intent.functionName}: the canonical pool id was not supplied`,
+        );
+      }
+      argument = poolId;
+    } else if ("address" in intent) {
+      argument = intent.address;
+    } else {
+      const target = address.get(intent.targetComponentId);
+      if (target === undefined) {
+        throw new ManifestError(
+          `cannot encode the call to ${intent.functionName}: ${intent.targetComponentId} is not in the manifest`,
+        );
+      }
+      argument = target;
     }
 
     return {
@@ -444,11 +562,37 @@ export function encodeWiring({
       data: encodeFunctionData({
         abi: artifact.abi as Abi,
         functionName: intent.functionName,
-        args: [target],
+        args: [argument],
       }),
       purpose: intent.purpose,
     };
   });
+}
+
+/** The same `PoolIdLibrary.toId` calculation the factory performs on-chain. */
+export function poolIdFor({
+  quoteAsset,
+  token,
+  lpFee,
+  hook,
+}: {
+  readonly quoteAsset: Address;
+  readonly token: Address;
+  readonly lpFee: number;
+  readonly hook: Address;
+}): Hex {
+  return keccak256(
+    encodeAbiParameters(
+      [
+        { type: "address" },
+        { type: "address" },
+        { type: "uint24" },
+        { type: "int24" },
+        { type: "address" },
+      ],
+      [quoteAsset, token, lpFee, TICK_SPACING, hook],
+    ),
+  );
 }
 
 // --- the whole assembly ------------------------------------------------------
@@ -478,7 +622,19 @@ export interface LaunchChoices {
 }
 
 export interface AssembleManifestInput extends LaunchChoices {
+  /**
+   * The plan, for identity: which component is the hook, what each contract is called,
+   * which permissions the hook's address is mined for.
+   */
   readonly plan: MarketImplementationPlan;
+  /**
+   * The deployment, for everything else.
+   *
+   * The same document the canonical fixture ran, so a production launch places every
+   * argument exactly where the launch that was tested placed it. A manifest assembled from
+   * anything else would be bytes a wallet signs for a bundle nothing has ever executed.
+   */
+  readonly deployment: DeploymentSpecification;
   readonly artifacts: readonly ContractArtifact[];
   readonly environment: DeploymentEnvironment;
   readonly specificationHash: Hex;
@@ -505,8 +661,8 @@ export interface AssembleManifestInput extends LaunchChoices {
  * partial result: half a bundle is not something to hand a wallet.
  */
 export function assembleManifest(input: AssembleManifestInput): DeployableManifest {
-  const resolved = resolveDeployment({
-    plan: input.plan,
+  const resolved = materializeDeployment({
+    spec: input.deployment,
     artifacts: input.artifacts,
     environment: input.environment,
   });
@@ -514,6 +670,7 @@ export function assembleManifest(input: AssembleManifestInput): DeployableManife
   const common = {
     plan: input.plan,
     artifacts: input.artifacts,
+    order: deploymentSpecOrder(input.deployment).map((component) => component.componentId),
     deployments: resolved.deployments,
     specificationHash: input.specificationHash,
     implementationHash: input.implementationHash,
@@ -536,10 +693,28 @@ export function assembleManifest(input: AssembleManifestInput): DeployableManife
 
   if (resolved.wiring.length === 0) return placed;
 
+  const tokenId = input.plan.components.find(
+    (component: MarketComponent) => component.role === "token",
+  )?.id;
+  const hookId = input.plan.components.find(
+    (component: MarketComponent) => component.role === "hook",
+  )?.id;
+  const token = placed.components.find((component) => component.componentId === tokenId)?.expected;
+  const hook = placed.components.find((component) => component.componentId === hookId)?.expected;
+  if (token === undefined || hook === undefined) {
+    throw new ManifestError("cannot encode wiring without the manifest's token and hook");
+  }
+
   const wiring = encodeWiring({
     intents: resolved.wiring,
     components: placed.components,
     artifacts: input.artifacts,
+    poolId: poolIdFor({
+      quoteAsset: input.quoteAsset,
+      token,
+      lpFee: input.lpFee,
+      hook,
+    }),
   });
 
   const manifest = buildManifest({ ...common, wiring });

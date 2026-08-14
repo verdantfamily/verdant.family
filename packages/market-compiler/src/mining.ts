@@ -22,7 +22,7 @@
  */
 
 import type { Address, Hex } from "viem";
-import { getCreate2Address } from "viem";
+import { encodeAbiParameters, getCreate2Address, keccak256 } from "viem";
 
 import type { HookPermission } from "./gates.js";
 import { HOOK_ADDRESS_MASK, HOOK_FLAGS } from "./gates.js";
@@ -38,7 +38,14 @@ import { HOOK_ADDRESS_MASK, HOOK_FLAGS } from "./gates.js";
  */
 export const CREATE2_DEPLOYER: Address = "0x4e59b44847b379578588920cA78FbF26c0B4956C";
 
-/** How far the search will look before admitting something is wrong. */
+/**
+ * How far the search will look before admitting something is wrong.
+ *
+ * The Solidity miner in MarketTestBase uses this same limit and the same salt
+ * rule, but it must hash in scratch space. An `abi.encode` loop here is cheap;
+ * the same loop inside `setUp` reverted `EvmError: MemoryOOG` and failed the
+ * Testing stage before any generated test ran.
+ */
 export const MINING_LIMIT = 400_000;
 
 export interface MinedAddress {
@@ -62,8 +69,17 @@ export function permissionsOf(address: Address): readonly HookPermission[] {
   );
 }
 
-function saltAt(index: number): Hex {
-  return `0x${index.toString(16).padStart(64, "0")}` as Hex;
+function saltAt(index: number, namespace: Hex | undefined): Hex {
+  if (namespace === undefined) {
+    return `0x${index.toString(16).padStart(64, "0")}` as Hex;
+  }
+
+  return keccak256(
+    encodeAbiParameters(
+      [{ type: "bytes32" }, { type: "uint256" }],
+      [namespace, BigInt(index)],
+    ),
+  );
 }
 
 /**
@@ -79,6 +95,7 @@ export function mineHookAddress({
   permissions,
   limit = MINING_LIMIT,
   deployer,
+  namespace,
 }: {
   /** keccak256 of the contract's creation code with its constructor arguments. */
   readonly initCodeHash: Hex;
@@ -93,12 +110,20 @@ export function mineHookAddress({
    * generated one.
    */
   readonly deployer: Address;
+  /**
+   * A market-specific domain for the search.
+   *
+   * Production supplies the creator/market/component salt here. Without it, two
+   * byte-identical hooks behind the shared AgenDeployer would mine the same address and
+   * the second market could never launch.
+   */
+  readonly namespace?: Hex;
 }): MinedAddress {
   const target = permissionBits(permissions);
   const started = Date.now();
 
   for (let index = 0; index < limit; index++) {
-    const salt = saltAt(index);
+    const salt = saltAt(index, namespace);
     const address = getCreate2Address({ from: deployer, salt, bytecodeHash: initCodeHash });
 
     if ((BigInt(address) & HOOK_ADDRESS_MASK) === target) {

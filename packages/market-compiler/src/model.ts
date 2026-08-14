@@ -486,6 +486,186 @@ export function openAiProvider(options: OpenAiOptions): ModelProvider {
   };
 }
 
+// --- the Anthropic Messages provider ---------------------------------------
+
+export interface AnthropicOptions {
+  readonly apiKey: string;
+  /** The model for `strong` work, and the default when a call names no role. */
+  readonly model: string;
+  readonly fastModel?: string;
+  readonly baseUrl?: string;
+  /** Anthropic dates its API rather than versioning it. */
+  readonly version?: string;
+  readonly maxOutputTokens?: number;
+  readonly fetch?: typeof globalThis.fetch;
+}
+
+interface MessagesBody {
+  stop_reason?: string;
+  content?: { type?: string; text?: string; name?: string; input?: unknown }[];
+  usage?: { input_tokens?: number; output_tokens?: number };
+}
+
+/**
+ * A second vendor, behind the same interface, for when the first keeps being wrong.
+ *
+ * This is not a failover — `fallbackProvider` is, and it triggers on a vendor being
+ * unreachable. This exists for the opposite situation: the vendor answered promptly and
+ * confidently, twice, with the same wrong idea. A model's mistakes are correlated with
+ * itself far more than with the problem, so the third attempt at a repair is worth more
+ * from a different family than from a longer prompt to the same one. The pipeline decides
+ * when that is; all this does is make it possible.
+ *
+ * ## Structured output through a tool, and why
+ *
+ * Anthropic has no direct equivalent of the Responses API's `json_schema` format. What it
+ * has is tool use, where a tool's `input_schema` is JSON Schema and the model is forced to
+ * call it: `tool_choice` names the tool, and the arguments come back as a parsed object
+ * rather than as text that has to survive a round trip through prose. That is a closer
+ * match to what this interface promises than asking for JSON in the prompt and hoping.
+ *
+ * Anthropic's schema dialect is also wider than OpenAI's strict mode rather than narrower,
+ * so the schemas the stages already write — which are constrained to strict mode's subset
+ * — are accepted unchanged. `additionalProperties: false` and an exhaustive `required` are
+ * legal here; they are simply not compulsory.
+ */
+export function anthropicProvider(options: AnthropicOptions): ModelProvider {
+  const doFetch = options.fetch ?? globalThis.fetch;
+  const baseUrl = (options.baseUrl ?? "https://api.anthropic.com/v1").replace(/\/$/, "");
+  const version = options.version ?? "2023-06-01";
+
+  return {
+    name: "anthropic",
+    model: options.model,
+
+    generate: async <T>(request: StructuredRequest): Promise<StructuredResponse<T>> => {
+      if (options.fetch === undefined) await widenTransportTimeouts();
+
+      const abort = new AbortController();
+      const timer = setTimeout(() => abort.abort(), request.timeoutMs);
+      const started = Date.now();
+      const model =
+        request.model ??
+        (request.role === "fast" ? (options.fastModel ?? options.model) : options.model);
+
+      // The tool's name has to be identifier-shaped, which `schemaName` already is
+      // because the other provider requires the same thing.
+      const tool = request.schemaName;
+
+      try {
+        const response = await doFetch(`${baseUrl}/messages`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-api-key": options.apiKey,
+            "anthropic-version": version,
+          },
+          signal: abort.signal,
+          body: JSON.stringify({
+            model,
+            // Required by this API, unlike the Responses API where it is a cap. Large
+            // enough for a Solidity file, which is the longest thing any stage asks for.
+            max_tokens: request.maxOutputTokens ?? options.maxOutputTokens ?? 32_000,
+            system: request.instructions,
+            messages: [{ role: "user", content: request.input }],
+            tools: [
+              {
+                name: tool,
+                description: "Return the result in this shape.",
+                input_schema: request.schema,
+              },
+            ],
+            tool_choice: { type: "tool", name: tool },
+          }),
+        });
+
+        if (!response.ok) {
+          const reason = await refusal(response);
+
+          if (reason === "insufficient_quota" || reason === "credit_balance_too_low") {
+            throw new ModelError(
+              "anthropic",
+              request.stage,
+              "the Anthropic account has no credits left, so no model call can succeed " +
+                "until it is topped up",
+              { retryable: false },
+            );
+          }
+
+          throw new ModelError(
+            "anthropic",
+            request.stage,
+            `the model provider answered ${String(response.status)} ${response.statusText}`,
+            {
+              retryable: response.status === 429 || response.status >= 500,
+              ...(retryAfter(response) === null ? {} : { retryAfterMs: retryAfter(response) }),
+            },
+          );
+        }
+
+        const body = (await response.json()) as MessagesBody;
+
+        if (body.stop_reason === "max_tokens") {
+          throw new ModelError(
+            "anthropic",
+            request.stage,
+            "the model stopped early: max_tokens",
+            { retryable: false },
+          );
+        }
+
+        const call = (body.content ?? []).find(
+          (block) => block.type === "tool_use" && block.name === tool,
+        );
+
+        if (call?.input === undefined) {
+          throw new ModelError(
+            "anthropic",
+            request.stage,
+            "the model returned no structured content",
+          );
+        }
+
+        const usage: ModelUsage = {
+          ...(typeof body.usage?.input_tokens === "number"
+            ? { inputTokens: body.usage.input_tokens }
+            : {}),
+          ...(typeof body.usage?.output_tokens === "number"
+            ? { outputTokens: body.usage.output_tokens }
+            : {}),
+        };
+
+        // Serialised back for the record, so an exchange from this vendor is stored in the
+        // same shape as one from the other and nothing reading the job has to know which
+        // answered.
+        return {
+          value: call.input as T,
+          raw: JSON.stringify(call.input),
+          usage,
+          model,
+          durationMs: Date.now() - started,
+        };
+      } catch (error) {
+        if (error instanceof ModelError) throw error;
+        if (error instanceof Error && error.name === "AbortError") {
+          throw new ModelError(
+            "anthropic",
+            request.stage,
+            `the model did not answer within ${String(request.timeoutMs)}ms`,
+            { retryable: true },
+          );
+        }
+        throw new ModelError("anthropic", request.stage, "the model provider could not be reached", {
+          retryable: true,
+          cause: error,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  };
+}
+
 // --- composing providers ---------------------------------------------------
 
 /**

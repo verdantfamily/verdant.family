@@ -34,10 +34,30 @@
 import { keccak256, toHex } from "viem";
 import type { Hex } from "viem";
 
+import { TICK_SPACING } from "@verdant/config";
+
 import type { Diagnostic, TestOutcome } from "./foundry.js";
 import { forModel } from "./foundry.js";
+import type { ContractApi } from "./contract-api.js";
+import { renderContractApis } from "./contract-api.js";
 import type { CuratedContext } from "./context.js";
+import type { FeeMode } from "./feemode.js";
+import type {
+  DeployedComponent,
+  DeploymentSpecification,
+  SymbolicRef,
+  WiringArgument,
+  WiringPhase,
+} from "./deployment-spec.js";
+import {
+  parseRef,
+  POOL_ID_REF,
+  TOKEN_CONSTRUCTOR,
+  validateDeploymentSpec,
+  WIRING_PHASES,
+} from "./deployment-spec.js";
 import type { GateFinding } from "./gates.js";
+import { invariantCoverage } from "./gates.js";
 import type { JsonSchema, ModelProvider, ModelRole, StructuredResponse } from "./model.js";
 import { array, bounded, object, optional, text } from "./model.js";
 import { PRELUDE_CONTRACTS } from "./prelude.js";
@@ -59,6 +79,7 @@ import {
   SUGGESTION_CATEGORIES,
   validateSpecification,
 } from "./spec.js";
+import { manualTestInfrastructureProblems } from "./test-environment.js";
 import type { GeneratedSource } from "./workspace.js";
 
 /**
@@ -284,9 +305,9 @@ could be credited the entire reward pool.
 When two contracts you generate need each other's address, do not take both in
 constructors. Deployment cannot satisfy that: each address is derived from creation code
 that would have to contain the other, and no ordering or address prediction unties it.
-Give exactly one of them a one-time setter — settable once, by anyone, and thereafter
-immutable — and let the deployment wire it after both exist. Take the dependency in the
-constructor on the side that can, and use the setter on the other.
+Give exactly one of them an installer-only, one-time setter by inheriting AgenWired, and
+let the factory wire it after both exist. Take the dependency in the constructor on the
+side that can, and use the guarded setter on the other.
 
 Prefer being explicit about what you could not determine over inventing a plausible
 answer. An unresolved assumption that a creator can correct is worth more than a
@@ -761,6 +782,164 @@ const planSchema: JsonSchema = object({
     "where the implementation deliberately differs from the literal request",
   ),
 });
+
+/**
+ * The deployment half of the architecture call.
+ *
+ * Only what the model alone decides. Everything derivable is derived in `design` instead of
+ * asked for: a contract's name and role are already in the plan, the tick spacing is the
+ * protocol's, the caller of a wiring call is always the factory, and whether the bundle
+ * needs the router or the pool's id follows from the arguments themselves. Asking twice
+ * buys nothing and costs a retry every time the two answers disagree.
+ */
+const deploymentSchema: JsonSchema = object({
+  components: array(
+    object({
+      componentId: text("the id of a component in your plan, exactly as you wrote it there"),
+      constructorArguments: array(
+        object({
+          name: text("the parameter name. The contract you generate must use exactly this"),
+          type: text("the ABI type: address, uint256, string. A contract type is address"),
+          source: text(
+            "where the value comes from, as a reference: COMPONENT:<id> for another " +
+              "component of this market, ROLE:CREATOR, ROLE:FEE_RECEIVER, ROLE:TREASURY or " +
+              "ROLE:BENEFICIARY for a party, INFRA:POOL_MANAGER, INFRA:AGEN_ROUTER or " +
+              "INFRA:INSTALLER for something already deployed, LITERAL:NAME, LITERAL:SYMBOL " +
+              "or LITERAL:SUPPLY for the token's own three values",
+          ),
+        }),
+        "the constructor, in order, exactly as it will be written. This is binding: the " +
+          "generated contract is checked against it. A launch can supply addresses and the " +
+          "token's name, symbol and supply, and nothing else — a fee, a threshold or a " +
+          "duration is the market's own configuration and belongs in the contract as a " +
+          "constant, never as a constructor argument",
+      ),
+      immutable: array(
+        text("the name of one of the constructor arguments above"),
+        "which of those the contract holds immutably. An immutable set wrong cannot be " +
+          "repaired afterwards; the market has to be deployed again",
+      ),
+      wiring: array(
+        object({
+          functionName: text("the function the factory calls after every component exists"),
+          argument: text(
+            "its single argument, as a reference: COMPONENT:<id>, a ROLE, an INFRA " +
+              "address, or POOL_ID for the pool's own id",
+          ),
+          phase: {
+            type: "string",
+            enum: [...WIRING_PHASES],
+            description:
+              "before_pool_initialize in every case Agen can execute: the factory deploys, " +
+              "wires, then opens the pool. Say after_pool_initialize only if this call " +
+              "genuinely cannot happen before the pool exists, and expect to be told the " +
+              "market has to be designed differently",
+          },
+          once: {
+            type: "boolean",
+            description: "true if a second call must revert. Wiring is not reconfiguration",
+          },
+        }),
+        "the calls that finish this component after deployment. Use one for every " +
+          "dependency that cannot be a constructor argument because the other contract does " +
+          "not exist yet. Each must be guarded so that only the factory may call it",
+      ),
+      controller: optional(
+        text(
+          "who must own or control this contract, as a COMPONENT, ROLE or INFRA reference, " +
+            "or JSON null if it checks nobody. A vault holding what a hook diverts is owned " +
+            "either by ROLE:FEE_RECEIVER, when fees are withdrawn directly, or by the " +
+            "COMPONENT that accounts for them, when the market moves its own money. Both are " +
+            "valid and Agen cannot tell them apart from the code, so this decides it",
+        ),
+      ),
+    }),
+    "one entry for every component in your plan, including the token and any contract you " +
+      "are reusing unchanged",
+  ),
+  pool: object({
+    feeMode: {
+      type: "string",
+      enum: ["dynamic", "zero", "fixed"],
+      description:
+        "dynamic: the hook sets the fee on every swap, which is the usual answer for a " +
+        "market with a fee rule. zero: the pool itself charges nothing and the hook takes " +
+        "everything the market takes. fixed: an ordinary constant pool fee the hook does " +
+        "not vary",
+    },
+    lpFee: text(
+      "PoolKey.fee as a decimal string: \"8388608\" for dynamic, \"0\" for zero, or the fee " +
+        "in hundredths of a basis point for fixed, e.g. \"3000\" for 0.3%",
+    ),
+  }),
+  custodyComponentId: optional(
+    text("the id of the component that holds this market's value, or JSON null if none does"),
+  ),
+  feeClaimComponentId: optional(
+    text("the id of the component fees are withdrawn or claimed from, or JSON null"),
+  ),
+  oneTimeInitialization: array(
+    object({
+      componentId: text("the component"),
+      functionName: text("one of its wiring calls, declared above"),
+      why: text("what breaks if it is called a second time"),
+    }),
+    "the wiring calls that may happen exactly once, and why. Usually every setter that " +
+      "binds a permanent relationship",
+  ),
+});
+
+/**
+ * The architecture call answers both halves at once.
+ *
+ * One call rather than two because they are one decision: what the components are and how
+ * they are wired together cannot be designed apart without the second contradicting the
+ * first, and a separate call would add a strong-model round trip to every build to arrive
+ * at the same answer less reliably.
+ */
+const architectureSchema: JsonSchema = object({
+  plan: planSchema,
+  deployment: deploymentSchema,
+});
+
+/** What the model returns for the deployment half, before anything derivable is filled in. */
+interface RawDeployment {
+  readonly components: readonly {
+    readonly componentId: string;
+    readonly constructorArguments: readonly {
+      readonly name: string;
+      readonly type: string;
+      readonly source: string;
+    }[];
+    readonly immutable: readonly string[];
+    readonly wiring: readonly {
+      readonly functionName: string;
+      readonly argument: string;
+      readonly phase: WiringPhase;
+      readonly once: boolean;
+    }[];
+    readonly controller: string | null;
+  }[];
+  readonly pool: { readonly feeMode: FeeMode; readonly lpFee: string };
+  readonly custodyComponentId: string | null;
+  readonly feeClaimComponentId: string | null;
+  readonly oneTimeInitialization: readonly {
+    readonly componentId: string;
+    readonly functionName: string;
+    readonly why: string;
+  }[];
+}
+
+interface RawArchitecture {
+  readonly plan: Omit<MarketImplementationPlan, "version" | "specificationVersion">;
+  readonly deployment: RawDeployment;
+}
+
+/** Both halves of the architecture stage, validated and consistent with each other. */
+export interface ArchitectureDesign {
+  readonly plan: MarketImplementationPlan;
+  readonly deployment: DeploymentSpecification;
+}
 
 const sourcesSchema: JsonSchema = object({
   files: array(
@@ -1948,8 +2127,8 @@ export async function design(
     readonly problems?: readonly string[];
     readonly timeoutMs?: number;
   },
-): Promise<StageOutput<MarketImplementationPlan>> {
-  const output = await ask<Omit<MarketImplementationPlan, "version" | "specificationVersion">>(
+): Promise<StageOutput<ArchitectureDesign>> {
+  const output = await ask<RawArchitecture>(
     provider,
     {
       stage: "architecture_planning",
@@ -1991,7 +2170,28 @@ export async function design(
         "The requirement is only that you can say what each component is for: every one " +
         "names, in requiredBy, the rules or invariants it implements, and those names are " +
         "checked against the specification. A component you cannot justify that way is one " +
-        "the market does not need yet.",
+        "the market does not need yet.\n\n" +
+        "Then say how the bundle is deployed, in `deployment`.\n\n" +
+        "This is the half that decides whether the market can be launched at all, and it is " +
+        "not a description of the contracts — it is the contract the contracts are written " +
+        "to. Every constructor you declare here is the constructor the generator will be " +
+        "told to write and the compiler will be checked against, so declare the one you want " +
+        "rather than the one you would recognise.\n\n" +
+        "Two things have to be decided here that cannot be recovered from Solidity " +
+        "afterwards, and both have ended real launches. The first is who owns a contract " +
+        "that holds value: a vault is owned either by the address the fees are paid to or by " +
+        "the sibling contract that accounts for them, and reading the code cannot tell you " +
+        "which was intended — a market given the wrong one reverts during wiring, after " +
+        "every contract has been deployed, with an immutable already set. The second is any " +
+        "value the market needs installed at launch. A launch can pass addresses and the " +
+        "token's name, symbol and supply. It cannot pass a fee, a threshold or a duration, " +
+        "so a contract that expects one through a setter opens with that field at zero and " +
+        "silently does nothing: hold those as constants in the contract instead.\n\n" +
+        "Use a constructor argument when the other contract already exists, and a wiring " +
+        "call when it does not. Two contracts that each need the other's address cannot both " +
+        "be placed — CREATE2 derives each address from creation code containing the other — " +
+        "so one of them takes the address afterwards, through a setter only the factory may " +
+        "call.",
       input: [
         "The market to implement, which this system produced and you may trust:",
         architectureDigest(specification),
@@ -2007,8 +2207,8 @@ export async function design(
             ]),
         ...(problems === undefined || problems.length === 0 ? [] : [retryNote(problems)]),
       ].join("\n"),
-      schemaName: "market_implementation_plan",
-      schema: planSchema,
+      schemaName: "market_architecture",
+      schema: architectureSchema,
       timeoutMs,
       effort: STAGE_EFFORT.design,
       role: STAGE_ROLES.design,
@@ -2021,8 +2221,8 @@ export async function design(
     value === null || value === undefined || value.trim() === "" || /^(null|none|n\/a)$/i.test(value);
 
   const plan: MarketImplementationPlan = {
-    ...output.value,
-    dependencies: output.value.dependencies.map((dependency) => {
+    ...output.value.plan,
+    dependencies: output.value.plan.dependencies.map((dependency) => {
       const { componentId, ...rest } = dependency as PlannedDependency & {
         componentId?: string | null;
       };
@@ -2038,11 +2238,116 @@ export async function design(
     ...unknownReuse(plan),
   ];
 
+  // The deployment is checked against the plan, so a plan that is not coherent on its own
+  // terms is reported first: every complaint about a component id would otherwise be a
+  // second complaint about the same mistake.
   if (rejected.length > 0) {
     throw new ArtefactError("plan", rejected, output.raw);
   }
 
-  return { ...output, value: plan };
+  const deployment = assembleDeploymentSpec({
+    raw: output.value.deployment,
+    plan,
+    specification,
+    absent,
+  });
+
+  const deploymentProblems = validateDeploymentSpec(deployment, plan).map(
+    (problem) => `deployment.${problem.path}: ${problem.detail}`,
+  );
+
+  if (deploymentProblems.length > 0) {
+    throw new ArtefactError("deployment specification", deploymentProblems, output.raw);
+  }
+
+  return { ...output, value: { plan, deployment } };
+}
+
+/**
+ * Fill in everything about a deployment that is not the model's to decide.
+ *
+ * A contract's name and role are already settled by the plan, the tick spacing is the
+ * protocol's, only the factory can complete a market, and whether the bundle needs the
+ * router or the pool's id follows from the arguments that were declared. Asking for any of
+ * it a second time invites two answers that disagree, and a disagreement between two copies
+ * of the same fact is a retry spent on bookkeeping rather than on the market.
+ */
+function assembleDeploymentSpec({
+  raw,
+  plan,
+  specification,
+  absent,
+}: {
+  readonly raw: RawDeployment;
+  readonly plan: MarketImplementationPlan;
+  readonly specification: MarketSpecification;
+  readonly absent: (value: string | null | undefined) => boolean;
+}): DeploymentSpecification {
+  const planned = new Map(plan.components.map((component) => [component.id, component]));
+  const custodyComponentId = absent(raw.custodyComponentId) ? null : raw.custodyComponentId!;
+  const feeClaimComponentId = absent(raw.feeClaimComponentId) ? null : raw.feeClaimComponentId!;
+
+  const components: DeployedComponent[] = raw.components.map((entry) => {
+    const inPlan = planned.get(entry.componentId);
+
+    return {
+      componentId: entry.componentId,
+      // Taken from the plan rather than restated. A mismatch here would be two names for
+      // one file, and `validateDeploymentSpec` reports an id that names nothing.
+      contractName: inPlan?.contractName ?? entry.componentId,
+      role: inPlan?.role ?? "component",
+      // The token is written by Agen and its constructor is the same every time. See
+      // TOKEN_CONSTRUCTOR: the supply goes to the factory because the factory is what
+      // locks it into the opening positions.
+      constructorArguments:
+        inPlan?.role === "token"
+          ? TOKEN_CONSTRUCTOR
+          : entry.constructorArguments.map((argument) => ({
+              name: argument.name,
+              type: argument.type,
+              source: argument.source as SymbolicRef,
+            })),
+      immutable: inPlan?.role === "token" ? ["recipient"] : entry.immutable,
+      wiring: entry.wiring.map((call) => ({
+        functionName: call.functionName,
+        argument: call.argument as WiringArgument,
+        // Never asked for. A setter anybody may call is front-runnable even when it may
+        // only be called once, so the factory is the only answer there has ever been.
+        caller: "INSTALLER" as const,
+        phase: call.phase,
+        once: call.once,
+      })),
+      controller: absent(entry.controller) ? null : (entry.controller as SymbolicRef),
+      custody: (inPlan?.custodial ?? false) || entry.componentId === custodyComponentId,
+      claimsFees: entry.componentId === feeClaimComponentId,
+    };
+  });
+
+  const hook = plan.components.find((component) => component.role === "hook");
+  const lpFee = Number(raw.pool.lpFee);
+
+  return {
+    version: 1,
+    specificationVersion: specification.version,
+    components,
+    pool: {
+      feeMode: raw.pool.feeMode,
+      lpFee: Number.isFinite(lpFee) ? lpFee : Number.NaN,
+      // One grid for every Agen market. `AgenCurve` reverts off it, so there is nothing
+      // here to decide and a declared spacing is only worth checking a hook against.
+      tickSpacing: TICK_SPACING,
+    },
+    hookPermissions: hook?.hookPermissions ?? [],
+    requiresPoolIdBeforeInitialize: components.some((component) =>
+      component.wiring.some((call) => call.argument === POOL_ID_REF),
+    ),
+    requiresAgenRouter: components.some((component) =>
+      component.constructorArguments.some((argument) => argument.source === "INFRA:AGEN_ROUTER"),
+    ),
+    custodyComponentId,
+    feeClaimComponentId,
+    oneTimeInitialization: raw.oneTimeInitialization,
+  };
 }
 
 /**
@@ -2125,11 +2430,31 @@ interface RawSources {
 
 function asSources(raw: RawSources, expect: "contracts" | "test"): readonly GeneratedSource[] {
   const files = raw.files.filter((file) => file.path.startsWith(`${expect}/`));
+  const unsafe = files.filter((file) => {
+    const segments = file.path.split("/");
+    return (
+      segments.some((segment) => segment === "" || segment === "." || segment === "..") ||
+      !file.path.endsWith(".sol")
+    );
+  });
 
   if (files.length === 0) {
     throw new ArtefactError(
       expect === "contracts" ? "contract generation" : "test generation",
       [`no files under ${expect}/ were returned`],
+      JSON.stringify(raw).slice(0, 2_000),
+    );
+  }
+
+  if (unsafe.length > 0 || new Set(files.map((file) => file.path)).size !== files.length) {
+    throw new ArtefactError(
+      expect === "contracts" ? "contract generation" : "test generation",
+      [
+        ...unsafe.map((file) => `${file.path}: generated source paths must be normalized Solidity paths`),
+        ...(new Set(files.map((file) => file.path)).size === files.length
+          ? []
+          : ["generated source paths must be unique"]),
+      ],
       JSON.stringify(raw).slice(0, 2_000),
     );
   }
@@ -2146,6 +2471,120 @@ function componentSummary(component: MarketComponent): Record<string, unknown> {
     purpose: component.purpose,
     ...(component.dependsOn.length === 0 ? {} : { dependsOn: component.dependsOn }),
   };
+}
+
+/**
+ * The deployment this contract is being written to, in the terms it has to satisfy.
+ *
+ * The generator used to be told what the component was for and left to invent how it is
+ * assembled, which meant the launcher then had to work out what had been invented. Both
+ * halves of that were guesswork and the guesses did not have to agree.
+ *
+ * So the constructor is dictated rather than described: the signature below is the one the
+ * compiled ABI is checked against, and a contract that writes a different one is rejected
+ * as an inconsistency rather than repaired into shape. The ownership sentence is the same
+ * fact from the other side — a vault whose owner is the accounting contract needs that
+ * contract's check to say `address(this)`, and the two cannot be decided independently.
+ */
+function deploymentBrief(deployed: DeployedComponent, spec: DeploymentSpecification): string {
+  const named = new Map(spec.components.map((entry) => [entry.componentId, entry.contractName]));
+
+  const describe = (reference: string): string => {
+    const parsed = parseRef(reference);
+    if (parsed === null) return reference;
+
+    switch (parsed.kind) {
+      case "component":
+        return `the address of ${named.get(parsed.componentId) ?? parsed.componentId}`;
+      case "role":
+        return parsed.role === "CREATOR"
+          ? "the creator's wallet"
+          : parsed.role === "FEE_RECEIVER"
+            ? "the address this market's fees are paid to, which is not the creator's wallet"
+            : `the market's ${parsed.role.toLowerCase()} address`;
+      case "infra":
+        return parsed.infra === "POOL_MANAGER"
+          ? "the Uniswap v4 PoolManager"
+          : parsed.infra === "INSTALLER"
+            ? "AgenFactory, which performs the launch and is the only address allowed to wire"
+            : "AgenRouter, the canonical trading route";
+      case "literal":
+        return `the token's ${parsed.literal.toLowerCase()}`;
+    }
+  };
+
+  const constructor =
+    deployed.constructorArguments.length === 0
+      ? [
+          "Your constructor takes no arguments. The launch passes nothing, so anything this " +
+            "contract needs to know it holds as a constant.",
+        ]
+      : [
+          "Your constructor is exactly this, in this order, with these parameter names:",
+          "",
+          `    constructor(${deployed.constructorArguments
+            .map((argument) => `${argument.type} ${argument.name}`)
+            .join(", ")})`,
+          "",
+          "What each one will be given at launch:",
+          ...deployed.constructorArguments.map(
+            (argument) => `  ${argument.name} — ${describe(argument.source)}`,
+          ),
+          "",
+          "Write that signature and no other. The compiled ABI is compared against it, and a " +
+            "constructor that takes different arguments, in a different order, or under " +
+            "different names is a build that stops here rather than one that is repaired: the " +
+            "launcher has no way to fill in an argument nobody declared.",
+        ];
+
+  const wiring =
+    deployed.wiring.length === 0
+      ? []
+      : [
+          "",
+          "After every component is deployed and before the pool is opened, AgenFactory calls " +
+            "these on this contract. Each one must exist with exactly this name and one " +
+            "argument, and must be guarded so that only the installer may call it — inherit " +
+            "AgenWired and use its onlyInstaller modifier:",
+          "",
+          ...deployed.wiring.map((call) => {
+            const argument =
+              call.argument === POOL_ID_REF
+                ? "the id of this market's pool, as bytes32"
+                : describe(call.argument);
+            const once = call.once
+              ? " It may be called once; a second call must revert."
+              : "";
+            return `  ${call.functionName} — receives ${argument}.${once}`;
+          }),
+          "",
+          "Declare nothing else as onlyInstaller. A setter the launch does not call leaves its " +
+            "field at zero for the life of the market, and the build is stopped for it.",
+        ];
+
+  const ownership =
+    deployed.controller === null
+      ? []
+      : [
+          "",
+          `Ownership: ${describe(deployed.controller)} controls this contract. ` +
+            (parseRef(deployed.controller)?.kind === "component"
+              ? "That contract, not a wallet, is what may move what this one holds — so its own " +
+                "check on this contract is against `address(this)`, and any withdrawal path here " +
+                "answers to it."
+              : "That address, not a sibling contract, is what may move what this one holds."),
+        ];
+
+  const configuration = [
+    "",
+    "A launch supplies addresses and the token's name, symbol and supply, and nothing else. " +
+      "Every fee, threshold, duration and share this market needs is a constant in this " +
+      "contract, written into the code — never a constructor argument and never installed by " +
+      "a setter afterwards, because there is nothing to install it and the field would stay " +
+      "at zero while the market quietly did nothing.",
+  ];
+
+  return [...constructor, ...wiring, ...ownership, ...configuration].join("\n");
 }
 
 /**
@@ -2201,18 +2640,38 @@ export async function generateComponent(
   provider: ModelProvider,
   {
     component,
+    deployed,
+    deployment,
     specification,
     plan,
     context,
+    apis,
     timeoutMs = STAGE_TIMEOUTS.generateContracts,
   }: {
     readonly component: MarketComponent;
+    /** How this contract is deployed, which decides its constructor. */
+    readonly deployed: DeployedComponent;
+    /** The whole deployment, so a reference to a sibling can be named. */
+    readonly deployment: DeploymentSpecification;
     readonly specification: MarketSpecification;
     readonly plan: MarketImplementationPlan;
     readonly context: CuratedContext;
+    /**
+     * The exact interfaces of contracts this one may call.
+     *
+     * On the first pass the generated siblings are being written in the same round and do
+     * not exist yet, so this is Agen's own contracts — the vault, the hook base, the
+     * accumulators. That is not a small subset: they are the ones every market calls, and
+     * two of the classes of error this prevents (a `FeeVault` cast without `payable`, a
+     * `credit` call with the wrong arity) are entirely about them.
+     */
+    readonly apis?: ReadonlyMap<string, ContractApi>;
     readonly timeoutMs?: number;
   },
 ): Promise<StageOutput<GeneratedSource>> {
+  const interfaces =
+    apis === undefined ? "" : renderContractApis(apis, { exclude: [component.contractName] });
+
   const output = await ask<{ content: string; notes: string[] }>(provider, {
     stage: "code_generation",
     instructions:
@@ -2223,6 +2682,11 @@ export async function generateComponent(
       `your constructor, since every address is fixed before deployment.\n\n` +
       "No placeholders, no TODOs, no elisions: a file that says 'implementation omitted' " +
       "fails the build and wastes a repair round.\n\n" +
+      // How this contract is assembled was decided when the market was designed, and it
+      // is not open here. A generator left to invent its own constructor produces a
+      // contract the launcher then has to reverse-engineer, and the two only agree by
+      // luck — which is the failure this whole document exists to remove.
+      `${deploymentBrief(deployed, deployment)}\n\n` +
       context.generation,
     input: [
       `The component to write:`,
@@ -2235,6 +2699,10 @@ export async function generateComponent(
         2,
       ),
       "",
+      // A summary says what a sibling is for; it does not say what its functions are
+      // called, and a caller that has only the summary has to invent the name. See
+      // `contract-api.ts` for the build that cost.
+      ...(interfaces === "" ? [] : [interfaces, ""]),
       // The rules in full, because this call implements them and the wording of an
       // effect is the specification of a line of code. Everything around them is
       // compressed: prose written for a review screen costs input tokens here and
@@ -2273,6 +2741,111 @@ export async function generateComponent(
   };
 }
 
+/**
+ * Change one component so that it agrees with the deployment it was designed for.
+ *
+ * The distinction between this and `generateComponent` is the whole reason it exists. A
+ * disagreement found at deployment validation used to be answered by generating the
+ * component again from its declaration — the same call that produced the file in the
+ * first place, with the same inputs. That is not a repair, it is a re-roll, and it has
+ * two costs that only show up in a real build.
+ *
+ * The first is that everything learned since is thrown away. A live FLOWTEST build
+ * compiled, hit two ordinary errors, had them diagnosed and fixed correctly by the
+ * compilation repair — the diagnosis named the sibling's real method in its own words —
+ * and was then regenerated from scratch for an unrelated disagreement about the pool's
+ * fee. The regenerated file reintroduced both errors verbatim, because it was produced by
+ * the same prompt that had produced them before, and the build died with no repair budget
+ * spent on the thing that actually killed it.
+ *
+ * The second is that a re-roll changes everything, so the change cannot be reviewed. A
+ * component asked to fix one declared mismatch and returning a file that differs in
+ * thirty places has made twenty-nine changes nobody asked for and nobody checked.
+ *
+ * So this is an edit, not a rewrite: the current file goes in, the disagreements are
+ * listed, the siblings' real interfaces are supplied, and the smallest change that
+ * settles the list comes back.
+ */
+export async function rewriteComponent(
+  provider: ModelProvider,
+  {
+    component,
+    deployed,
+    deployment,
+    current,
+    disagreements,
+    apis,
+    specification,
+    timeoutMs = STAGE_TIMEOUTS.generateContracts,
+  }: {
+    readonly component: MarketComponent;
+    readonly deployed: DeployedComponent;
+    readonly deployment: DeploymentSpecification;
+    /** The contract as it stands, which already compiles. */
+    readonly current: GeneratedSource;
+    /** Why it was stopped, in the validator's words. */
+    readonly disagreements: readonly string[];
+    readonly apis: ReadonlyMap<string, ContractApi>;
+    readonly specification: MarketSpecification;
+    readonly timeoutMs?: number;
+  },
+): Promise<StageOutput<GeneratedSource>> {
+  const interfaces = renderContractApis(apis, { exclude: [component.contractName] });
+
+  const output = await ask<{ content: string; notes: string[] }>(provider, {
+    stage: "code_generation",
+    instructions:
+      `${component.contractName} compiles, and it does not match the deployment this market ` +
+      `was designed for. Return the complete corrected file.\n\n` +
+      "Change as little as settles the disagreements listed below. This file is already " +
+      "correct in every other respect — it has been through compilation and repair — so a " +
+      "rewrite that improves something nobody complained about is a regression waiting to " +
+      "happen, and a rewrite that reintroduces an error a repair already fixed is the exact " +
+      "failure this instruction exists to prevent.\n\n" +
+      "Do not change the market's economics, its fee arithmetic, or who gets paid, and do " +
+      "not change the constructor: its signature is fixed by the deployment below and a " +
+      "different one is rejected rather than repaired.\n\n" +
+      "No placeholders, no TODOs, no elisions.\n\n" +
+      `${deploymentBrief(deployed, deployment)}`,
+    input: [
+      "What disagrees with the declared deployment:",
+      disagreements.map((entry) => `  - ${entry}`).join("\n"),
+      "",
+      ...(interfaces === "" ? [] : [interfaces, ""]),
+      "The market, for context:",
+      architectureDigest(specification),
+      "",
+      `The file as it stands — ${current.path}:`,
+      current.content,
+    ].join("\n"),
+    schemaName: "rewritten_contract",
+    schema: object({
+      content: text("the complete corrected Solidity file, including its SPDX line and pragma"),
+      notes: array(text("what was changed, and why that settles the disagreement")),
+    }),
+    timeoutMs,
+    effort: STAGE_EFFORT.generateContracts,
+    role: STAGE_ROLES.generateContracts,
+  });
+
+  const content = output.value.content.trim();
+  if (content.length === 0 || !content.includes("contract ")) {
+    throw new ArtefactError(
+      "contract rewrite",
+      [`${component.contractName} came back empty or without a contract declaration`],
+      output.raw,
+    );
+  }
+
+  return {
+    ...output,
+    value: normalisePinnedV4Api({
+      path: `contracts/${component.contractName}.sol`,
+      content: `${content}\n`,
+    }),
+  };
+}
+
 /** Write the tests, including the ones that try to break the market's own promises. */
 export async function generateTests(
   provider: ModelProvider,
@@ -2280,38 +2853,51 @@ export async function generateTests(
     specification,
     sources,
     context,
+    testEnvironment,
+    validationProblems,
     timeoutMs = STAGE_TIMEOUTS.generateTests,
   }: {
     readonly specification: MarketSpecification;
     readonly sources: readonly GeneratedSource[];
     readonly context: CuratedContext;
+    readonly testEnvironment?: { readonly guidance: string };
+    readonly validationProblems?: readonly string[];
     readonly timeoutMs?: number;
   },
 ): Promise<StageOutput<readonly GeneratedSource[]>> {
   const output = await ask<RawSources>(provider, {
     stage: "test_generation",
     instructions:
+      (validationProblems === undefined
+        ? ""
+        : "A previous test suite was rejected before compilation for these structural reasons:\n" +
+          validationProblems.map((problem) => `  - ${problem}`).join("\n") +
+          "\nReturn a fresh suite that fixes every one of them.\n\n") +
       "Write a forge test suite under test/ for these contracts. Derive the cases from the " +
       "specification, and cover at least: that the market initialises into the state the " +
       "specification describes; that each rule fires when its conditions hold; that each rule " +
       "does NOT fire when they do not; every state transition, including the ones that must " +
       "be irreversible; that any accumulated value is conserved rather than created or lost; " +
       "and the boundary of every threshold — the trade one unit below it as well as one above. " +
-      "For every invariant in the specification write a fuzz or invariant test whose name " +
-      "contains the invariant's id, because a claimed invariant with no test bearing its id is " +
-      "treated as unproven and blocks deployment. Include adversarial sequences: a trader " +
+      "For every invariant in the specification write a fuzz or invariant test that stands " +
+      "behind it, and say which one it is: either name the test for the invariant's id, or put " +
+      "\"Invariant: <id>\" in the comment directly above the test. An invariant no test claims " +
+      "is treated as unproven and blocks deployment. Include adversarial sequences: a trader " +
       "repeating an action to farm a reward, a sequence straddling a phase transition, a rule " +
       "fired twice in one block.\n\n" +
       "Write adversarial tests as well as correctness ones. For every externally callable " +
-      "function that changes state, write a test proving an unauthorised caller is rejected " +
+      "behavior function that changes state, write a test proving an unauthorised caller is rejected " +
       "— a market has already shipped where the accounting was permissioned and the hook " +
       "was not, and every correctness test passed. Also cover: the same action repeated in " +
       "one block; settlement attempted twice for the same period; a trade at exactly a " +
       "boundary and one unit either side; an amount of zero and an amount near the type's " +
       "maximum; rounding, by asserting that the sum of what everyone is owed never exceeds " +
       "what was collected; and one wallet splitting an action across several addresses, " +
-      "asserting it gains nothing the single action would not have.\n\n" +
-      context.testing,
+      "asserting it gains nothing the single action would not have. Constructors and " +
+      "installer-only wiring setters are deployment infrastructure; do not redeploy a " +
+      "component to test them and do not call them from a generated behavior suite.\n\n" +
+      context.testing +
+      (testEnvironment === undefined ? "" : `\n\n${testEnvironment.guidance}`),
     input: [
       "Specification:",
       JSON.stringify(specification, null, 2),
@@ -2320,7 +2906,8 @@ export async function generateTests(
       // A live build read a five-rule market, tested the accounting contract to death
       // and gave the hook — which held the entire mechanic — a file it called a sanity
       // check, leaving two of three invariants with no test at all.
-      "Every one of these invariants needs a passing test whose name contains its id:",
+      "Every one of these invariants needs a passing test that claims it, by name or by the " +
+        "comment directly above it:",
       specification.invariants.map((invariant) => `  ${invariant.id}: ${invariant.statement}`).join("\n"),
       "",
       "The contracts under test:",
@@ -2341,7 +2928,12 @@ export async function generateTests(
   // several minutes before anyone says so. Here it costs one call, and the complaint
   // names the invariants instead of arriving as a verdict.
   const untested = uncovered(specification, tests);
-  if (untested.length > 0) throw new ArtefactError("test generation", untested, output.raw);
+  const infrastructure =
+    testEnvironment === undefined ? [] : manualTestInfrastructureProblems(tests);
+  const problems = [...untested, ...infrastructure];
+  if (problems.length > 0) {
+    throw new ArtefactError("test generation", problems, output.raw);
+  }
 
   return { ...output, value: tests };
 }
@@ -2349,27 +2941,28 @@ export async function generateTests(
 /**
  * The invariants the suite claims to prove and does not.
  *
- * Matched the way the deployment gate matches — the id with its punctuation removed,
- * looked for inside a test's name — so that passing here is passing there rather than
- * two nearly-identical rules that disagree at the margin.
+ * Runs the deployment gate's own function rather than a second implementation of it.
+ * The two used to be described as identical and were not — this one searched the whole
+ * file, the gate searched test names — so a suite could satisfy the generator and be
+ * refused six minutes later for the same property, on the same evidence.
  */
 function uncovered(
   specification: MarketSpecification,
   tests: readonly GeneratedSource[],
 ): readonly string[] {
-  const flattened = tests
-    .map((test) => test.content)
-    .join("\n")
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
+  const coverage = invariantCoverage({
+    invariantIds: specification.invariants.map((invariant) => invariant.id),
+    sources: tests,
+  });
 
   return specification.invariants
-    .filter((invariant) => !flattened.includes(invariant.id.toLowerCase().replace(/[^a-z0-9]/g, "")))
+    .filter((invariant) => (coverage.get(invariant.id) ?? []).length === 0)
     .map(
       (invariant) =>
-        `no test is named for the invariant "${invariant.id}" (${invariant.statement}). Write a ` +
-        `test whose name contains ${invariant.id.replace(/[^a-zA-Z0-9]/g, "")}, exercising the ` +
-        `contract that implements it rather than the one that is easiest to test.`,
+        `no test stands behind the invariant "${invariant.id}" (${invariant.statement}). Write ` +
+        `one, exercising the contract that implements it rather than the one that is easiest ` +
+        `to test, and either name it for the invariant or put "Invariant: ${invariant.id}" in ` +
+        `the comment directly above it.`,
     );
 }
 
@@ -2417,6 +3010,11 @@ export function relevantSources(
   }
 
   return chosen.size === 0 ? sources : [...chosen.values()];
+}
+
+/** `contracts/FeeVault.sol` to `FeeVault`, which is how the API index is keyed. */
+function contractNameOf(source: GeneratedSource): string {
+  return source.path.split("/").pop()?.replace(/\.sol$/, "") ?? source.path;
 }
 
 export interface Repair {
@@ -2472,6 +3070,33 @@ interface RawRepair {
   diagnosis: string;
   files: { path: string; content: string }[];
   giveUp: boolean;
+}
+
+/**
+ * Correct the one syntactic spelling this pinned v4 cannot accept.
+ *
+ * `toBeforeSwapDelta` is a free function in this commit, but model output frequently
+ * qualifies it with `BeforeSwapDeltaLibrary`. Both spellings express the same operation;
+ * only one exists. Fixing the import and call here is deterministic API normalization,
+ * not a repair decision about market behavior.
+ */
+export function normalisePinnedV4Api(source: GeneratedSource): GeneratedSource {
+  const wrong = "BeforeSwapDeltaLibrary.toBeforeSwapDelta";
+  if (!source.content.includes(wrong)) return source;
+
+  let foundImport = false;
+  const content = source.content
+    .replace(
+      /import\s*\{([^}]*)\}\s*from\s*(["'])([^"']*v4-core\/src\/types\/BeforeSwapDelta\.sol)\2\s*;/g,
+      (statement: string, names: string, quote: string, path: string) => {
+        foundImport = true;
+        if (/\btoBeforeSwapDelta\b/.test(names)) return statement;
+        return `import {${names.trimEnd()}, toBeforeSwapDelta} from ${quote}${path}${quote};`;
+      },
+    )
+    .replaceAll(wrong, "toBeforeSwapDelta");
+
+  return foundImport ? { ...source, content } : source;
 }
 
 /**
@@ -2603,6 +3228,8 @@ export async function repairCompilation(
     attempt,
     remedy = null,
     tactic = Tactic.TargetedRepair,
+    apis,
+    notes = [],
     timeoutMs = STAGE_TIMEOUTS.repair,
   }: {
     readonly sources: readonly GeneratedSource[];
@@ -2612,6 +3239,16 @@ export async function repairCompilation(
     readonly remedy?: string | null;
     /** How hard to try. See `tacticGuidance`. */
     readonly tactic?: Tactic;
+    /**
+     * What the market's other contracts actually expose, from the compiler.
+     *
+     * The reason a cross-component call is wrong is almost never that the caller was
+     * careless — it is that the caller was never told the callee's interface and had to
+     * guess it from a summary. See `contract-api.ts`.
+     */
+    readonly apis?: ReadonlyMap<string, ContractApi>;
+    /** Facts established before the model was asked. See `mechanical-repair.ts`. */
+    readonly notes?: readonly string[];
     readonly timeoutMs?: number;
   },
 ): Promise<StageOutput<Repair>> {
@@ -2620,6 +3257,10 @@ export async function repairCompilation(
   const shown =
     tactic === Tactic.TargetedRepair ? relevantSources(sources, diagnostics) : sources;
   const guidance = tacticGuidance(tactic);
+  const interfaces =
+    apis === undefined
+      ? ""
+      : renderContractApis(apis, { exclude: shown.map(contractNameOf) });
 
   const output = await ask<RawRepair>(provider, {
     stage: "compilation_repair",
@@ -2633,7 +3274,15 @@ export async function repairCompilation(
       "edited. When the compiler blames one, the fault is in the file that inherits from it " +
       "or imports it: an identifier redeclared from a base contract is reported at the base. " +
       "Fix the file you were given, and do not give up merely because the named file is " +
-      "absent." +
+      "absent.\n\n" +
+      // The one instruction that survives every rung. A repair that alters what the market
+      // charges, who it pays or how it is assembled has broken the market to satisfy the
+      // compiler, which is worse than the error it was sent to fix.
+      "Fix only what the compiler objected to. Do not change the market's economics, its " +
+      "fee arithmetic, who is paid, or any constructor signature: those were decided " +
+      "before this file was written and a compiler error is never a reason to revisit " +
+      "them. If the only way you can see to make it compile would change one of those, " +
+      "say so in the diagnosis and set giveUp." +
       (guidance === "" ? "" : `\n\n${guidance}`),
     input: [
       `This is repair attempt ${String(attempt)}.`,
@@ -2644,6 +3293,10 @@ export async function repairCompilation(
       // to make the rest unnecessary: a recognised failure has an answer somebody worked
       // out once, and rediscovering it from the message is what costs the attempts.
       ...(remedy === null ? [] : ["", remedy]),
+      // Established facts, not suggestions: each of these was read off a compiled ABI
+      // rather than inferred from the error text.
+      ...(notes.length === 0 ? [] : ["", "Already established:", ...notes.map((note) => `  - ${note}`)]),
+      ...(interfaces === "" ? [] : ["", interfaces]),
       "",
       // Only the files the compiler complained about, plus anything they import from
       // this bundle. Sending the whole market on every round was costing a minute a
@@ -2663,7 +3316,9 @@ export async function repairCompilation(
     ...output,
     value: {
       diagnosis: output.value.diagnosis,
-      files: output.value.files.map((file) => ({ path: file.path, content: file.content })),
+      files: output.value.files.map((file) =>
+        normalisePinnedV4Api({ path: file.path, content: file.content }),
+      ),
       giveUp: output.value.giveUp,
     },
   };
@@ -2692,6 +3347,7 @@ export async function repairDeployability(
     problem,
     remedy,
     attempt,
+    placement = [],
     timeoutMs = STAGE_TIMEOUTS.repair,
   }: {
     readonly sources: readonly GeneratedSource[];
@@ -2700,6 +3356,15 @@ export async function repairDeployability(
     /** The known fix, where this failure has been met before. */
     readonly remedy: string | null;
     readonly attempt: number;
+    /**
+     * How the launch will construct and wire the bundle. See `describePlacement`.
+     *
+     * Without it this call is asked to fix a disagreement while being shown only one
+     * side of it. A market reverting on `InvalidVaultOwner(0xfee)` is a market whose
+     * check and the launcher's placement of that argument do not match, and which of the
+     * two has to move is not decidable from the contract alone.
+     */
+    readonly placement?: readonly string[];
     readonly timeoutMs?: number;
   },
 ): Promise<StageOutput<Repair>> {
@@ -2723,6 +3388,19 @@ export async function repairDeployability(
       "What the launcher could not do:",
       problem,
       ...(remedy === null ? [] : ["", remedy]),
+      // The launcher's side of the disagreement. Given before the contracts, because it
+      // is what the contracts have to be read against: an argument this list says will
+      // arrive as the fee receiver is not going to arrive as anything else, and a repair
+      // that assumes otherwise is a wasted round.
+      ...(placement.length === 0
+        ? []
+        : [
+            "",
+            "How the launch will build this market. These placements are settled — the " +
+              "launcher will not be changed to suit the contracts, so a contract expecting " +
+              "something else is the thing that has to move:",
+            placement.map((line) => `  ${line}`).join("\n"),
+          ]),
       "",
       "The market's contracts:",
       sources.map((source) => `--- ${source.path} ---\n${source.content}`).join("\n\n"),
@@ -2755,17 +3433,31 @@ export async function repairTests(
     attempt,
     remedy = null,
     tactic = Tactic.TargetedRepair,
+    editableContracts = true,
+    placement = [],
     timeoutMs = STAGE_TIMEOUTS.repair,
   }: {
     readonly specification: MarketSpecification;
     readonly sources: readonly GeneratedSource[];
     readonly tests: readonly GeneratedSource[];
+    /**
+     * How the market under test was deployed. See `describePlacement`.
+     *
+     * The fixture is Agen's, is not in this prompt and is not editable, which is correct
+     * — but a repair that cannot see how the market was assembled will attribute a
+     * failure to it and stop. A live ORBIT build did exactly that, three times, and gave
+     * up with "the fixture must be provided". Stating the deployment answers the
+     * question the fixture was being requested for.
+     */
+    readonly placement?: readonly string[];
     readonly failures: readonly TestOutcome[];
     readonly attempt: number;
     /** The known fix, where this failure has been met before. See `playbook.ts`. */
     readonly remedy?: string | null;
     /** How hard to try. See `tacticGuidance`. */
     readonly tactic?: Tactic;
+    /** False when ownership has established that only a generated assertion may change. */
+    readonly editableContracts?: boolean;
     readonly timeoutMs?: number;
   },
 ): Promise<StageOutput<Repair>> {
@@ -2777,12 +3469,15 @@ export async function repairTests(
   const output = await ask<RawRepair>(provider, {
     stage: "test_repair",
     instructions:
-      "These tests failed. Decide first whether the contract is wrong or the test is wrong: a " +
-      "test asserting behaviour the specification does not describe should be corrected, and a " +
-      "test that correctly catches a contract bug means the contract changes. Never weaken a " +
-      "test merely to make it pass — a market that ships because its invariant test was " +
-      "deleted is the worst outcome this pipeline can produce. Return complete corrected files " +
-      "for whichever side was wrong, or set giveUp with your diagnosis.\n\n" +
+      (editableContracts
+        ? "These tests failed. Decide first whether the contract is wrong or the test is wrong: a " +
+          "test asserting behaviour the specification does not describe should be corrected, and a " +
+          "test that correctly catches a contract bug means the contract changes. "
+        : "Ownership has established that the compiled market contracts are read-only in this " +
+          "repair. Return only corrected files under test/; any contracts/ file is discarded. ") +
+      "Never weaken a test merely to make it pass — a market that ships because its invariant " +
+      "test was deleted is the worst outcome this pipeline can produce. Return complete corrected " +
+      "files for the editable side, or set giveUp with your diagnosis.\n\n" +
       `Agen's own contracts — ${PRELUDE_CONTRACTS.join(", ")} — are fixed and correct and are ` +
       "never the answer. When a compiler error names one, the fault is in whatever inherits " +
       "from it: Solidity reports a redeclared identifier at the base, so a test helper " +
@@ -2809,6 +3504,15 @@ export async function repairTests(
       "What the market is supposed to do, which decides who is wrong:",
       architectureDigest(specification),
       "",
+      ...(placement.length === 0
+        ? []
+        : [
+            "How the market under test was deployed. Agen's fixture did this and it is " +
+              "not yours to change; it is here so a failure is not blamed on plumbing you " +
+              "cannot see:",
+            placement.map((line) => `  ${line}`).join("\n"),
+            "",
+          ]),
       // Only the suites that failed, and only the contracts they exercise. A test repair
       // that is shown the whole market rewrites parts of it that were passing: the
       // largest of these prompts ran to seven thousand input tokens and the model had no
@@ -2832,7 +3536,9 @@ export async function repairTests(
     ...output,
     value: {
       diagnosis: output.value.diagnosis,
-      files: output.value.files.map((file) => ({ path: file.path, content: file.content })),
+      files: output.value.files
+        .map((file) => normalisePinnedV4Api({ path: file.path, content: file.content }))
+        .filter((file) => editableContracts || file.path.startsWith("test/")),
       giveUp: output.value.giveUp,
     },
   };

@@ -153,7 +153,54 @@ function matchAnswer() {
   };
 }
 
-function planAnswer() {
+/**
+ * The architecture call answers the plan and the deployment together.
+ *
+ * The deployment half is what the launcher executes, so a scripted build has to state it
+ * for the same reason a real one does: nothing downstream infers a constructor any more.
+ * `deploymentOver` exists for the suites that need a different pool, which is the only
+ * part of it these markets vary.
+ */
+function planAnswer(
+  hookPermissions: readonly string[] = ["beforeSwap"],
+  deploymentOver: Record<string, unknown> = {},
+) {
+  return {
+    plan: rawPlan(hookPermissions),
+    deployment: { ...rawDeployment(), ...deploymentOver },
+  };
+}
+
+function rawDeployment() {
+  return {
+    components: [
+      {
+        componentId: "streakToken",
+        constructorArguments: [
+          { name: "recipient", type: "address", source: "INFRA:INSTALLER" },
+        ],
+        immutable: ["recipient"],
+        wiring: [],
+        controller: null,
+      },
+      {
+        componentId: "streakHook",
+        constructorArguments: [
+          { name: "manager_", type: "address", source: "INFRA:POOL_MANAGER" },
+        ],
+        immutable: ["manager_"],
+        wiring: [],
+        controller: null,
+      },
+    ],
+    pool: { feeMode: "dynamic", lpFee: "8388608" },
+    custodyComponentId: null,
+    feeClaimComponentId: null,
+    oneTimeInitialization: [],
+  };
+}
+
+function rawPlan(hookPermissions: readonly string[] = ["beforeSwap"]) {
   return {
     approach: "One hook tracking a streak counter in storage.",
     components: [
@@ -179,7 +226,7 @@ function planAnswer() {
         requiredBy: ["buy-streak"],
         reuses: ["base-hook"],
         dependsOn: [],
-        hookPermissions: ["beforeSwap"],
+        hookPermissions,
         custodial: false,
         implementationNotes: [],
       },
@@ -193,55 +240,115 @@ function planAnswer() {
 const GOOD_HOOK = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-contract StreakHook {
+import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
+import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
+import {Hooks} from "v4-core/src/libraries/Hooks.sol";
+import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
+import {PoolKey} from "v4-core/src/types/PoolKey.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
+import {SwapParams} from "v4-core/src/types/PoolOperation.sol";
+import {AgenBaseHook} from "./AgenBaseHook.sol";
+
+contract StreakHook is AgenBaseHook {
     uint256 public consecutiveBuys;
 
-    function onSwap(bool isBuy) external returns (uint24 feePpm) {
-        if (!isBuy) {
+    constructor(IPoolManager manager_) AgenBaseHook(manager_) {}
+
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
+        return Hooks.Permissions({
+            beforeInitialize: false,
+            afterInitialize: false,
+            beforeAddLiquidity: false,
+            afterAddLiquidity: false,
+            beforeRemoveLiquidity: false,
+            afterRemoveLiquidity: false,
+            beforeSwap: true,
+            afterSwap: false,
+            beforeDonate: false,
+            afterDonate: false,
+            beforeSwapReturnDelta: false,
+            afterSwapReturnDelta: false,
+            afterAddLiquidityReturnDelta: false,
+            afterRemoveLiquidityReturnDelta: false
+        });
+    }
+
+    function _beforeSwap(address, PoolKey calldata, SwapParams calldata params, bytes calldata)
+        internal
+        override
+        returns (BeforeSwapDelta, uint24)
+    {
+        uint24 feePpm;
+        if (!isBuy(params)) {
             consecutiveBuys = 0;
-            return 5_000;
+            feePpm = 5_000;
+        } else {
+            consecutiveBuys += 1;
+            if (consecutiveBuys >= 10) {
+                consecutiveBuys = 0;
+                feePpm = 0;
+            } else {
+                feePpm = 5_000;
+            }
         }
-        consecutiveBuys += 1;
-        if (consecutiveBuys >= 10) {
-            consecutiveBuys = 0;
-            return 0;
-        }
-        return 5_000;
+        return (
+            BeforeSwapDeltaLibrary.ZERO_DELTA,
+            feePpm | LPFeeLibrary.OVERRIDE_FEE_FLAG
+        );
     }
 }
 `;
+
+function withHookFunction(source: string): string {
+  return GOOD_HOOK.replace("    function _beforeSwap(", `${source}\n\n    function _beforeSwap(`);
+}
 
 const BROKEN_HOOK = GOOD_HOOK.replace("consecutiveBuys += 1;", "consecutiveBuys += undeclaredThing;");
 
 const GOOD_TESTS = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import {Test} from "forge-std/Test.sol";
-import {StreakHook} from "../contracts/StreakHook.sol";
+import {MarketTestBase} from "./MarketTestBase.sol";
 
-contract StreakHookTest is Test {
-    StreakHook hook;
-
-    function setUp() public {
-        hook = new StreakHook();
-    }
-
+contract StreakHookTest is MarketTestBase {
     function test_feeCeiling_isNeverExceeded(uint8 trades) public {
+        trades = uint8(bound(trades, 1, 12));
         for (uint256 i = 0; i < trades; i++) {
-            assertLe(hook.onSwap(true), 30_000);
+            assertGt(buy(0.000001 ether), 0);
+            assertLe(hook.consecutiveBuys(), 9);
         }
     }
 
     function test_theTenthBuyIsFree() public {
-        for (uint256 i = 0; i < 9; i++) {
-            hook.onSwap(true);
+        for (uint256 i = 0; i < 10; i++) {
+            buy(0.000001 ether);
         }
-        assertEq(hook.onSwap(true), 0);
+        assertEq(hook.consecutiveBuys(), 0);
     }
 }
 `;
 
-const FAILING_TESTS = GOOD_TESTS.replace("assertEq(hook.onSwap(true), 0);", "assertEq(hook.onSwap(true), 12345);");
+const MANUAL_CONSTRUCTOR_TESTS = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.26;
+
+import {MarketTestBase} from "./MarketTestBase.sol";
+
+contract ConstructorTest is MarketTestBase {
+    function test_constructor_reverts_on_zero_fee_receiver() public {
+        new StreakHook(manager, address(0));
+    }
+}
+`;
+
+const FAILING_TESTS = GOOD_TESTS.replace(
+  "assertEq(hook.consecutiveBuys(), 0);",
+  "assertEq(hook.consecutiveBuys(), 12345);",
+);
+
+const UNCOMPILABLE_TESTS = GOOD_TESTS.replace(
+  "assertEq(hook.consecutiveBuys(), 0);",
+  "uint256 impossible = ;",
+);
 
 /**
  * Correct, tested, and impossible to deploy.
@@ -254,14 +361,13 @@ const FAILING_TESTS = GOOD_TESTS.replace("assertEq(hook.onSwap(true), 0);", "ass
 const UNDEPLOYABLE_HOOK = GOOD_HOOK.replace(
   "    uint256 public consecutiveBuys;",
   `    uint256 public consecutiveBuys;
-    bytes32 public immutable designatedPoolId;
-
-    constructor(bytes32 designatedPoolId_) {
+    bytes32 public immutable designatedPoolId;`,
+).replace(
+  "    constructor(IPoolManager manager_) AgenBaseHook(manager_) {}",
+  `    constructor(IPoolManager manager_, bytes32 designatedPoolId_) AgenBaseHook(manager_) {
         designatedPoolId = designatedPoolId_;
     }`,
 );
-
-const UNDEPLOYABLE_TESTS = GOOD_TESTS.replace("new StreakHook()", "new StreakHook(bytes32(uint256(1)))");
 
 /**
  * The same market, plus an opinion about the pool it is opened in.
@@ -271,30 +377,29 @@ const UNDEPLOYABLE_TESTS = GOOD_TESTS.replace("new StreakHook()", "new StreakHoo
  * that matter: one whose requirement can be read, and one whose cannot.
  */
 function withInitialize(declarations: string): string {
-  return GOOD_HOOK.replace(
-    "contract StreakHook {",
-    `import {PoolKey} from "v4-core/src/types/PoolKey.sol";
+  return GOOD_HOOK.replace("            afterInitialize: false,", "            afterInitialize: true,").replace(
+    "    function _beforeSwap(address, PoolKey calldata, SwapParams calldata params, bytes calldata)",
+    `    error InvalidPool();
 
-contract StreakHook {`,
-  ).replace(
-    "    uint256 public consecutiveBuys;",
-    `    uint256 public consecutiveBuys;
+${declarations}
 
-    error InvalidPool();
-
-${declarations}`,
+    function _beforeSwap(address, PoolKey calldata, SwapParams calldata params, bytes calldata)`,
   );
 }
 
 /** EMBER's shape: buys are meant to cost nothing, so a pool-level fee is refused. */
-const ZERO_FEE_HOOK = withInitialize(`    function afterInitialize(address, PoolKey calldata key, uint160, int24) external pure {
+const ZERO_FEE_HOOK = withInitialize(`    function _afterInitialize(address, PoolKey calldata key, uint160, int24) internal pure override {
         if (key.fee != 0) revert InvalidPool();
+    }`);
+
+const SETUP_REVERT_HOOK = withInitialize(`    function _afterInitialize(address, PoolKey calldata, uint160, int24) internal pure override {
+        revert InvalidPool();
     }`);
 
 /** A requirement that exists and cannot be established without running the contract. */
 const UNREADABLE_FEE_HOOK = withInitialize(`    uint24 public immutable requiredFee = 500;
 
-    function afterInitialize(address, PoolKey calldata key, uint160, int24) external view {
+    function _afterInitialize(address, PoolKey calldata key, uint160, int24) internal view override {
         if (key.fee != requiredFee) revert InvalidPool();
     }`);
 
@@ -391,30 +496,37 @@ describe("a build that goes well", () => {
     expect(job.manifest?.devBuyUnavailableReason).toBeNull();
   });
 
-  it("fails rather than shipping a market that cannot be put on a chain", async () => {
-    // A hook asking for the id of the pool it is the hook of: derived from the pool
-    // key, which names the hook, which is the contract being constructed. It compiles,
-    // it passes its tests, and no deployment can supply the argument. The real PULSE
-    // build that did this reached the launch screen.
+  it("stops a contract that did not write the constructor it was told to write", async () => {
+    // A hook asking for the id of the pool it is the hook of: derived from the pool key,
+    // which names the hook, which is the contract being constructed. No launch can supply
+    // it, and no deployment can declare it — there is no reference for a pool id in a
+    // constructor, because the id does not exist until the address does.
+    //
+    // It used to compile, pass its tests, and be discovered at the very end. Now the
+    // declaration says one argument and the contract takes two, which is a disagreement
+    // between the two documents rather than a mystery about what a parameter meant. The
+    // component is written again against its declaration — twice, since that is the budget —
+    // and this one keeps writing the same thing.
     const { options } = pipeline([
       ...interpretationAnswers(),
       matchAnswer(),
       planAnswer(),
       sources(UNDEPLOYABLE_HOOK),
-      tests(UNDEPLOYABLE_TESTS),
-      // A market that reaches this stage is offered a chance to be made launchable
-      // before it is given up on, because the usual cause is the shape of something
-      // rather than anything the market does. This one declines, which is the honest
-      // answer for an argument no deployment can ever supply.
-      { diagnosis: "the hook needs the id of the pool it is the hook of", files: [], giveUp: true },
+      { content: UNDEPLOYABLE_HOOK, notes: [] },
+      { content: UNDEPLOYABLE_HOOK, notes: [] },
     ]);
 
     const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
 
     expect(job.stage).toBe(Stage.Failed);
-    expect(job.failure?.code).toBe(FailureCode.Undeployable);
+    expect(job.failure?.code).toBe(FailureCode.ArchitectureInconsistent);
+    expect(job.failure?.stage).toBe(Stage.DeploymentValidation);
     expect(job.failure?.detail).toMatch(/designatedPoolId/);
     expect(job.manifest).toBeNull();
+
+    // And it stopped before a model wrote a behaviour suite for a market that could never
+    // have been launched, which is what the whole stage is for.
+    expect(job.tests).toHaveLength(0);
   });
 
   it("opens the pool at the fee the hook requires rather than the usual one", async () => {
@@ -424,7 +536,7 @@ describe("a build that goes well", () => {
     const { options } = pipeline([
       ...interpretationAnswers(),
       matchAnswer(),
-      planAnswer(),
+      planAnswer(["afterInitialize", "beforeSwap"], { pool: { feeMode: "zero", lpFee: "0" } }),
       sources(ZERO_FEE_HOOK),
       tests(GOOD_TESTS),
     ]);
@@ -437,16 +549,19 @@ describe("a build that goes well", () => {
     expect(job.manifest?.feeModeReason).toMatch(/requires no pool fee/);
   });
 
-  it("refuses to be ready when the hook's fee requirement cannot be read", async () => {
-    // Compared against an immutable, so the required fee is genuinely unknowable
-    // without running the contract. Guessing is the failure this check exists to
-    // remove, so the build fails and no manifest reaches a launch screen.
+  it("answers a fee requirement it cannot read by running the launch, not by refusing", async () => {
+    // Compared against an immutable, so the required fee is genuinely unknowable without
+    // running the contract. Refusing here used to end the build on the reader's
+    // vocabulary; the launch is now run in Foundry with the fee the manifest would use,
+    // so the market is judged on what its pool actually does. This hook rejects that
+    // pool, so it still cannot be ready — but the creator is told the hook reverted with
+    // InvalidPool, which is a fact about their market, rather than that Agen could not
+    // parse it. A hook whose guard is merely unusual now launches instead of dying here.
     const { options } = pipeline([
       ...interpretationAnswers(),
       matchAnswer(),
-      planAnswer(),
+      planAnswer(["afterInitialize", "beforeSwap"]),
       sources(UNREADABLE_FEE_HOOK),
-      tests(GOOD_TESTS),
       { diagnosis: "the required fee is genuinely not knowable statically", files: [], giveUp: true },
     ]);
 
@@ -454,7 +569,8 @@ describe("a build that goes well", () => {
 
     expect(job.stage).toBe(Stage.Failed);
     expect(job.failure?.code).toBe(FailureCode.Undeployable);
-    expect(job.failure?.detail).toMatch(/cannot open a pool its own rules would accept/);
+    expect(job.failure?.detail).toMatch(/production-faithful test deployment/);
+    expect(job.failure?.detail).toMatch(/InvalidPool/);
     expect(job.manifest).toBeNull();
   });
 
@@ -464,21 +580,20 @@ describe("a build that goes well", () => {
     // Agen cannot read before it opens the pool. Nothing about the market was wrong, and
     // the stage had no repair, so it was thrown away.
     //
-    // The repair returns the same market with the requirement stated plainly, and the
-    // build finishes. The tests are re-run against the rewritten hook before it is
-    // accepted — see the deployment loop — so this also proves a repair that preserved
-    // behaviour is distinguishable from one that did not.
+    // The repair returns the same market with the requirement stated plainly. Agen then
+    // builds and smoke-tests the production-faithful environment before it generates a
+    // single behavior test, so the repaired deployment description cannot bypass launch.
     const { options } = pipeline([
       ...interpretationAnswers(),
       matchAnswer(),
-      planAnswer(),
+      planAnswer(["afterInitialize", "beforeSwap"]),
       sources(UNREADABLE_FEE_HOOK),
-      tests(GOOD_TESTS),
       {
         diagnosis: "stated the fee requirement as a plain guard",
         files: [{ path: "contracts/StreakHook.sol", content: ZERO_FEE_HOOK }],
         giveUp: false,
       },
+      tests(GOOD_TESTS),
     ]);
 
     const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
@@ -487,6 +602,7 @@ describe("a build that goes well", () => {
     expect(job.failure).toBeNull();
     expect(job.manifest?.feeMode).toBe("zero");
     expect(job.manifest?.lpFee).toBe(0);
+    expect(job.harnessAttempts).toBe(1);
   });
 
   it("never claims a simulation it did not run", async () => {
@@ -607,6 +723,84 @@ describe("the compilation repair loop", () => {
 });
 
 describe("the test repair loop", () => {
+  it("rejects model-authored constructor tests before they reach Forge", async () => {
+    const { options, provider } = pipeline([
+      ...interpretationAnswers(),
+      matchAnswer(),
+      planAnswer(),
+      sources(GOOD_HOOK),
+      tests(MANUAL_CONSTRUCTOR_TESTS),
+      tests(GOOD_TESTS),
+    ]);
+
+    const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
+
+    expect(job.stage).toBe(Stage.DeploymentReady);
+    expect(job.failure).toBeNull();
+    expect(job.testAttempts).toBe(0);
+    expect(provider.calls.filter((call) => call.stage === "test_generation")).toHaveLength(2);
+    expect(provider.calls.filter((call) => call.stage === "test_repair")).toHaveLength(0);
+    expect(
+      provider.calls.filter((call) => call.stage === "test_generation")[1]?.instructions,
+    ).toContain("deploys a contract manually");
+  });
+
+  it("never accepts a contract rewrite for a generated-test compile error", async () => {
+    const changedHook = GOOD_HOOK.replace("consecutiveBuys += 1;", "consecutiveBuys += 99;");
+    const { options } = pipeline([
+      ...interpretationAnswers(),
+      matchAnswer(),
+      planAnswer(),
+      sources(GOOD_HOOK),
+      tests(UNCOMPILABLE_TESTS),
+      {
+        diagnosis: "fixed the malformed test expression",
+        files: [
+          { path: "contracts/StreakHook.sol", content: changedHook },
+          { path: "test/StreakHook.t.sol", content: GOOD_TESTS },
+        ],
+        giveUp: false,
+      },
+    ]);
+
+    const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
+
+    expect(job.stage).toBe(Stage.DeploymentReady);
+    expect(job.testAttempts).toBe(1);
+    expect(job.sources.find((source) => source.path.endsWith("StreakHook.sol"))?.content).toBe(
+      GOOD_HOOK,
+    );
+  });
+
+  it("repairs a launch its own contracts revert, without spending a behavior-test round", async () => {
+    // A launch that reverts is a fact about this market's contracts, not about Agen's
+    // fixture, and it used to be reported as an Agen infrastructure failure and stopped
+    // there — telling the creator Agen had broken while the repair budget sat unspent.
+    // It is a repair now. What must stay true is the ownership: the behavior suite is
+    // never written or rewritten to accommodate a market that cannot be launched.
+    const { options, provider } = pipeline([
+      ...interpretationAnswers(),
+      matchAnswer(),
+      planAnswer(["afterInitialize", "beforeSwap"]),
+      sources(SETUP_REVERT_HOOK),
+      { diagnosis: "the hook refuses every pool this launch can open", files: [], giveUp: true },
+    ]);
+
+    const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
+
+    expect(job.failure?.code).toBe(FailureCode.Undeployable);
+    expect(job.failure?.failingTests?.map((outcome) => outcome.name)).toEqual(["setUp()"]);
+    expect(job.failure?.detail).toContain("InvalidPool");
+    expect(job.failure?.stage).toBe(Stage.TestEnvironment);
+    expect(job.harnessAttempts).toBe(1);
+    expect(job.testAttempts).toBe(0);
+    expect(provider.calls.some((call) => call.stage === "test_generation")).toBe(false);
+    expect(provider.calls.some((call) => call.stage === "test_repair")).toBe(false);
+    expect(job.sources.find((source) => source.path.endsWith("StreakHook.sol"))?.content).toBe(
+      SETUP_REVERT_HOOK,
+    );
+  });
+
   it("repairs a failing test and carries on", async () => {
     const { options, provider } = pipeline([
       ...interpretationAnswers(),
@@ -668,8 +862,17 @@ describe("the test repair loop", () => {
       diagnosis: "no change",
       files: [
         {
+          // A real repair's shape, so this exercises the stall ladder rather than the
+          // structural check: a test file that inherits the canonical base and changes
+          // nothing about why the suite is failing.
           path: "test/Other.t.sol",
-          content: "// SPDX-License-Identifier: MIT\npragma solidity 0.8.26;\ncontract OtherTest {}\n",
+          content:
+            "// SPDX-License-Identifier: MIT\npragma solidity 0.8.26;\n\n" +
+            'import {MarketTestBase} from "./MarketTestBase.sol";\n\n' +
+            "contract OtherTest is MarketTestBase {\n" +
+            "    function test_marketExists() public view {\n" +
+            "        assertTrue(address(token).code.length > 0);\n" +
+            "    }\n}\n",
         },
       ],
       giveUp: false,
@@ -811,9 +1014,12 @@ describe("failing closed", () => {
       matchAnswer(),
       {
         ...planAnswer(),
-        components: planAnswer().components.map((component) =>
-          component.role === "hook" ? { ...component, hookPermissions: [] } : component,
-        ),
+        plan: {
+          ...rawPlan(),
+          components: rawPlan().components.map((component) =>
+            component.role === "hook" ? { ...component, hookPermissions: [] } : component,
+          ),
+        },
       },
     ]);
 
@@ -829,13 +1035,10 @@ describe("failing closed", () => {
   it("blocks a market whose contract can delete itself", async () => {
     // selfdestruct stays a hard blocker: it breaks the one promise a launchpad makes
     // that cannot be renegotiated afterwards.
-    const withSelfdestruct = GOOD_HOOK.replace(
-      "    function onSwap(bool isBuy) external returns (uint24 feePpm) {",
+    const withSelfdestruct = withHookFunction(
       `    function rugPull(address payable to) external {
         selfdestruct(to);
-    }
-
-    function onSwap(bool isBuy) external returns (uint24 feePpm) {`,
+    }`,
     );
 
     const { options } = pipeline([
@@ -865,15 +1068,12 @@ describe("failing closed", () => {
     // The failure this replaces: six live PULSE builds from one prompt, some of which
     // guarded their wiring setter and some of which did not, the unguarded ones dying at
     // the last gate after seven minutes of work that was otherwise correct.
-    const unguarded = GOOD_HOOK.replace(
-      "    function onSwap(bool isBuy) external returns (uint24 feePpm) {",
+    const unguarded = withHookFunction(
       `    address public feeVault;
 
     function setFeeVault(address vault) external {
         feeVault = vault;
-    }
-
-    function onSwap(bool isBuy) external returns (uint24 feePpm) {`,
+    }`,
     );
 
     const { options, provider } = pipeline([
@@ -914,14 +1114,11 @@ describe("failing closed", () => {
   it("allows low-level code that has been fuzzed, and discloses it", async () => {
     // The policy this replaced rejected delegatecall outright, which meant refusing a
     // legitimate architecture because of how it was implemented.
-    const withDelegatecall = GOOD_HOOK.replace(
-      "    function onSwap(bool isBuy) external returns (uint24 feePpm) {",
+    const withDelegatecall = withHookFunction(
       `    function forward(bytes calldata data) external {
         (bool ok,) = address(this).delegatecall(data);
         require(ok);
-    }
-
-    function onSwap(bool isBuy) external returns (uint24 feePpm) {`,
+    }`,
     );
 
     const { options } = pipeline([
@@ -945,14 +1142,11 @@ describe("failing closed", () => {
   });
 
   it("blocks low-level code that nothing fuzzed", async () => {
-    const withDelegatecall = GOOD_HOOK.replace(
-      "    function onSwap(bool isBuy) external returns (uint24 feePpm) {",
+    const withDelegatecall = withHookFunction(
       `    function forward(bytes calldata data) external {
         (bool ok,) = address(this).delegatecall(data);
         require(ok);
-    }
-
-    function onSwap(bool isBuy) external returns (uint24 feePpm) {`,
+    }`,
     );
 
     // Same contract, tests with no fuzzing behind them.
@@ -1010,14 +1204,11 @@ describe("failing closed", () => {
   it("records a failed build's furthest progress rather than resetting it", async () => {
     // Blocked at the last gate rather than earlier: low-level code with nothing fuzzing
     // it, which only the deployment gates can know about.
-    const withDelegatecall = GOOD_HOOK.replace(
-      "    function onSwap(bool isBuy) external returns (uint24 feePpm) {",
+    const withDelegatecall = withHookFunction(
       `    function forward(bytes calldata data) external {
         (bool ok,) = address(this).delegatecall(data);
         require(ok);
-    }
-
-    function onSwap(bool isBuy) external returns (uint24 feePpm) {`,
+    }`,
     );
 
     const { options } = pipeline([
@@ -1120,8 +1311,10 @@ describe("a plan that builds more than the market asked for", () => {
     // buyback executor and a keeper for a market whose rules mentioned neither.
     const speculative = {
       ...planAnswer(),
+      plan: {
+      ...rawPlan(),
       components: [
-        ...planAnswer().components,
+        ...rawPlan().components,
         {
           id: "keeper",
           contractName: "StreakKeeper",
@@ -1136,6 +1329,7 @@ describe("a plan that builds more than the market asked for", () => {
           implementationNotes: [],
         },
       ],
+      },
     };
 
     const { options } = pipeline([...interpretationAnswers(), matchAnswer(), speculative]);
@@ -1152,9 +1346,12 @@ describe("a plan that builds more than the market asked for", () => {
   it("accepts a component that names a rule the specification actually has", async () => {
     const justified = {
       ...planAnswer(),
-      components: planAnswer().components.map((component) =>
-        component.role === "hook" ? { ...component, requiredBy: ["buy-streak", "fee-ceiling"] } : component,
-      ),
+      plan: {
+        ...rawPlan(),
+        components: rawPlan().components.map((component) =>
+          component.role === "hook" ? { ...component, requiredBy: ["buy-streak", "fee-ceiling"] } : component,
+        ),
+      },
     };
 
     const { options } = pipeline([
@@ -1207,8 +1404,9 @@ describe("showing the creator their market before the slow checks finish", () =>
     // The trade the split makes: this market is shown to its creator and then blocked.
     // What protects them is the launch button, not the wait.
     const FUZZ_FINDS_IT = GOOD_TESTS.replace(
-      "assertLe(hook.onSwap(true), 30_000);",
-      "assertLe(hook.onSwap(true), trades > 200 ? 0 : 30_000);",
+      "        trades = uint8(bound(trades, 1, 12));",
+      `        if (trades > 200) assertEq(uint256(1), uint256(0));
+        trades = uint8(bound(trades, 1, 12));`,
     );
 
     const { options } = pipeline([

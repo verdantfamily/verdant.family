@@ -139,14 +139,29 @@ export async function requiredFeeMode(
     read({ callback, body: member["body"], keyId: key, constraints, unreadable });
   }
 
+  /**
+   * A guard this reader cannot decompose is not a market that cannot be launched.
+   *
+   * Refusing here made sense while the only judgement available was this static one:
+   * guessing wrong meant a revert on a real chain, after every contract had been paid
+   * for. That is no longer the situation. The pipeline now opens the pool with exactly
+   * this fee inside the canonical fixture, in Foundry, before anything reaches a chain
+   * — and the manifest is built from the same number the fixture proved. So a fee this
+   * reader cannot parse is answered by trying it: the launch either opens or reverts
+   * with the hook's own error, which is a fact, and which the deployment repair loop can
+   * act on. A refusal here is a market thrown away over the reader's vocabulary, and a
+   * plain "1% on sells" market was thrown away exactly that way.
+   *
+   * The genuinely unsatisfiable cases below stay refusals. No pool can be opened two
+   * ways at once, and running the launch would only confirm it more slowly.
+   */
   if (unreadable.length > 0) {
     return {
       ...DEFAULT,
-      problem:
-        `${input.hookContractName} constrains the pool's fee in a way Agen cannot read: ` +
-        `${[...new Set(unreadable)].join("; ")}. A market whose fee requirement cannot be ` +
-        `established cannot be launched, because opening its pool with the wrong one reverts ` +
-        `the whole launch after every contract has been deployed.`,
+      reason:
+        `Agen could not read the fee guard in ${input.hookContractName} ` +
+        `(${[...new Set(unreadable)].join("; ")}), so the pool was opened dynamic and the ` +
+        `canonical launch was run to confirm the hook accepts it.`,
     };
   }
 

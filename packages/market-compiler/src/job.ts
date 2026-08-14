@@ -27,6 +27,7 @@
 
 import type { Hex } from "viem";
 
+import type { DeploymentSpecification } from "./deployment-spec.js";
 import type { Diagnostic, TestOutcome } from "./foundry.js";
 import type { GateFinding } from "./gates.js";
 import type { LaunchManifest } from "./manifest.js";
@@ -72,6 +73,20 @@ export const Stage = {
    * check becomes a repair round instead of ending a build seven minutes in.
    */
   StaticAnalysis: "static_analysis",
+  /**
+   * Whether the contracts are the contracts the deployment was declared for.
+   *
+   * The architecture stage says how the market is assembled and the generator writes to
+   * that; this is where the two are held against each other, and where the whole bundle is
+   * materialized to prove it can be placed at all. It runs before any model-authored test
+   * exists, because a market that cannot be launched should not have a behaviour suite
+   * written for it and three repair rounds spent making that suite pass.
+   *
+   * A step rather than a detour: every build passes through it.
+   */
+  DeploymentValidation: "deployment_validation",
+  /** Deterministic production-faithful deployment inherited by behavior tests. */
+  TestEnvironment: "test_environment",
   TestGeneration: "test_generation",
   TestExecution: "test_execution",
   TestRepair: "test_repair",
@@ -103,6 +118,8 @@ export const STAGE_SEQUENCE: readonly Stage[] = [
   Stage.ArchitecturePlanning,
   Stage.CodeGeneration,
   Stage.Compilation,
+  Stage.DeploymentValidation,
+  Stage.TestEnvironment,
   Stage.TestGeneration,
   Stage.TestExecution,
   Stage.ReviewReady,
@@ -190,6 +207,8 @@ export const FailureCode = {
   Unsupported: "UNSUPPORTED",
   CompilationUnrepairable: "COMPILATION_UNREPAIRABLE",
   TestsUnrepairable: "TESTS_UNREPAIRABLE",
+  /** Canonical deployment failed before any generated behavior test could run. */
+  HarnessInfrastructure: "HARNESS_INFRASTRUCTURE",
   GateBlocked: "GATE_BLOCKED",
   /**
    * The market is correct and cannot be put on a chain.
@@ -201,6 +220,22 @@ export const FailureCode = {
    * that fails this way needs a different plan, not a repair.
    */
   Undeployable: "UNDEPLOYABLE",
+  /**
+   * The contracts and the deployment they were written to do not agree.
+   *
+   * Distinct from `UNDEPLOYABLE`, which is a market that cannot be launched by any means.
+   * This one is launchable — as soon as one of the two documents is corrected. The
+   * architecture said the vault's owner is the accounting contract and the vault's own
+   * check demands the fee receiver; the deployment declared a three-argument constructor
+   * and the contract wrote four. Something has to move, and which of the two moves is a
+   * question about this market rather than about the launcher.
+   *
+   * Its own code because it takes a different repair. Generic deployment repair asks a
+   * model to reshape a contract until the launcher can read it, which is the loop this
+   * whole design exists to make unnecessary; the answer here is to regenerate the one
+   * component that disagreed, against the declaration it was supposed to satisfy.
+   */
+  ArchitectureInconsistent: "ARCHITECTURE_INCONSISTENT",
   SimulationFailed: "SIMULATION_FAILED",
   /** The build ran out of its time or iteration budget. */
   BudgetExhausted: "BUDGET_EXHAUSTED",
@@ -250,6 +285,15 @@ export interface GenerationJob {
   /** Every specification version, so an edit can be reviewed against its predecessor. */
   readonly specificationHistory: readonly MarketSpecification[];
   readonly plan: MarketImplementationPlan | null;
+  /**
+   * How this market is deployed, decided with the plan and before any Solidity exists.
+   *
+   * The launcher executes this rather than inferring a deployment from the compiled
+   * contracts, so it is as load-bearing as the plan and kept for the same reasons: a
+   * resumed build must not be assembled differently from the one that was tested, and a
+   * failed build is only diagnosable if what it intended is still on the record.
+   */
+  readonly deployment: DeploymentSpecification | null;
   readonly sources: readonly GeneratedSource[];
   readonly tests: readonly GeneratedSource[];
   readonly testOutcomes: readonly TestOutcome[];
@@ -265,6 +309,7 @@ export interface GenerationJob {
 
   /** How many repair rounds each loop has used. */
   readonly compilationAttempts: number;
+  readonly harnessAttempts: number;
   readonly testAttempts: number;
 
   readonly failure: Failure | null;
@@ -313,6 +358,7 @@ export function newJob({
     specification: null,
     specificationHistory: [],
     plan: null,
+    deployment: null,
     sources: [],
     tests: [],
     testOutcomes: [],
@@ -320,6 +366,7 @@ export function newJob({
     simulation: null,
     manifest: null,
     compilationAttempts: 0,
+    harnessAttempts: 0,
     testAttempts: 0,
     failure: null,
   };

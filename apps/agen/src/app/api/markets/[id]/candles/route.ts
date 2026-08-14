@@ -17,7 +17,8 @@ import { candles } from "@verdant/sdk";
 
 import { serializeSeries } from "../../../../lib/candles";
 import { fetchCandles } from "../../../../lib/feed";
-import { buildStoreSource } from "../../../../lib/markets";
+import { fetchInstantCandles } from "../../../../lib/instant-feed";
+import { marketSource } from "../../../../lib/markets";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,17 +41,28 @@ export async function GET(
   const limit =
     Number.isInteger(requested) && requested > 0 ? Math.min(requested, MAX_BUCKETS) : 240;
 
-  // The indexer keys markets by pool id, and this page is addressed by build id. The
-  // build store is what knows the mapping, and a market that has not launched has no
-  // pool at all — which is an empty series rather than an error.
-  const market = await buildStoreSource().read(id);
+  // The indexer keys markets by pool id, and a page is addressed by build id or by token
+  // address depending on which product made it. The source knows both mappings, and a
+  // market that has not launched has no pool at all — an empty series, not an error.
+  const market = await marketSource().read(id);
   const poolId = market?.poolId ?? null;
 
-  if (poolId === null) {
+  if (market === null || poolId === null) {
     return NextResponse.json({ series: null }, { headers: { "cache-control": "no-store" } });
   }
 
-  const series = await fetchCandles(poolId, interval, limit, true);
+  /*
+   * Which half of the feed to ask.
+   *
+   * The two products are indexed into separate tables behind separate routes, so a market
+   * has exactly one namespace that knows it and asking the other returns a 404 — which
+   * this module would render as "no history", indistinguishable from a market that has
+   * never traded. The programmable branch is `fetchCandles` exactly as it was.
+   */
+  const series =
+    market.kind === "instant"
+      ? await fetchInstantCandles(poolId, interval, limit, true)
+      : await fetchCandles(poolId, interval, limit, true);
 
   return NextResponse.json(
     { series: series === null ? null : serializeSeries(series) },

@@ -156,6 +156,63 @@ export interface AgenDeployment {
   readonly deployedAtBlock: number;
 }
 
+/**
+ * Instant's launch layer: a third deployment, sharing a PoolManager with the other two
+ * and nothing else.
+ *
+ * One object rather than five nullable fields, for the same reason as the two above: the
+ * five are a single broadcast. The hook, the deployer and the registry each hold the
+ * factory in an immutable, the factory's constructor checks that all three name it back,
+ * and the hook's permissions are its address — so a build holding four addresses from one
+ * deployment and one from another describes something that cannot exist on chain.
+ *
+ * ## Why Instant is not a preset over one of the others
+ *
+ * It is, in every respect except the fee. Instant promises the creator earns in ether;
+ * `VerdantHook` charges an ordinary LP fee taken from whichever currency is going into the
+ * pool, which on a sell is the launched token. A hook's permissions are its address, so
+ * keeping that promise needs a different hook, and a factory and its hook name each other
+ * in immutables. The liquidity is `VerdantFactory`'s, unchanged. See ADR-014.
+ */
+export interface InstantDeployment {
+  /** The anchor the factory's address was derived from. Deploy-time only. */
+  readonly factoryOrigin: `0x${string}`;
+  /** Holds the bytecode of a market's token, vault and locker. This factory only. */
+  readonly deployer: `0x${string}`;
+  /**
+   * Instant's own `MarketRegistry`, not Verdant's.
+   *
+   * The contract is the same; the instance cannot be. `MarketRegistry.writer` is an
+   * immutable naming `VerdantFactory`, so `InstantFactory` could not write to Verdant's
+   * even if the two should share a table — and they should not, since an Instant market's
+   * fees do not divide into the `creatorBps`/`protocolBps` a row carries.
+   */
+  readonly registry: `0x${string}`;
+  /**
+   * Mined so that its low 14 bits are `0x38cc`.
+   *
+   * Seven permissions where `VerdantHook` has four, and the two that matter are
+   * `beforeSwapReturnsDelta` and `afterSwapReturnsDelta`: without them the PoolManager
+   * never reads the fee this hook returns, every swap balances, and Instant charges
+   * nothing while appearing to work.
+   */
+  readonly hook: `0x${string}`;
+  /** The one contract a creator's wallet ever calls. */
+  readonly factory: `0x${string}`;
+  /**
+   * Where the platform's 0.50% accrues, recorded because nothing on chain can be asked
+   * whether it is the *intended* one.
+   *
+   * Immutable on the factory, and each market's vault snapshots it at creation, so this
+   * is not a lever over markets that already exist. Recording it is what lets
+   * `VerifyInstant.s.sol` check a deployment against what was meant rather than merely
+   * against itself.
+   */
+  readonly treasury: `0x${string}`;
+  /** The block the factory was created in, for indexers to start from. */
+  readonly deployedAtBlock: number;
+}
+
 export interface VerdantAddons {
   /**
    * The Agen agent layer, or `null` where it has not been deployed.
@@ -186,6 +243,17 @@ export interface VerdantAddons {
    * on another chain is a market launched into nothing.
    */
   readonly agen: AgenDeployment | null;
+
+  /**
+   * Instant's launch layer, or `null` where it has not been broadcast.
+   *
+   * `null` reads as "this build cannot launch or read Instant markets", and both consumers
+   * treat it that way: the interface renders the Instant form as held rather than as a
+   * button, and the market source returns an empty list rather than asking a registry that
+   * is not there. Substituting an address from elsewhere would be worse than doing
+   * nothing, for the same reason as `agen`.
+   */
+  readonly instant: InstantDeployment | null;
 }
 
 export const ADDONS = {
@@ -254,8 +322,37 @@ export const ADDONS = {
       router: "0xFaf5734973329797fCD032fa80a8277E906c187A",
       deployedAtBlock: 34_794_810,
     },
+    // Broadcast 2026-08-14, blocks 36378953 to 36378954, from operator
+    // 0x1f23c28F93aE48E6346DD05Ca66ba5e2213b00b8. 9,588,410 gas. Built from the Instant
+    // sources committed alongside this record; `VerifyInstant.s.sol` passed against it
+    // with no warnings, which is what checks that claim rather than this comment.
+    //
+    //   FactoryOrigin   0xa8079923446848879e8a15fd313bce341cedbbb63d1577d1c9b3c5266215ed76
+    //   InstantDeployer 0xeae8076048f4e6fa89cab3ef24296a3fd2946d5fb89fdb87886a77fc3d39d0b6
+    //   MarketRegistry  0x4b54e2916a777680c0dbd593ca3a109b89a10318f60b0c42a88379454fd2e733
+    //   InstantHook     0x5fbd76ec7895bafbabbe2b6c2eb032795d863be67b57cf44116736c5eb1a3d6f
+    //   InstantFactory  0xf6ce847b7558adc1f9c873a799fa8f5dec85c930bbc4e6388d375c7a05590432
+    //
+    // Turning `INSTANT_LAUNCHABLE` over in `apps/agen/src/app/lib/instant.ts` is a
+    // separate, later decision, so that recording addresses and opening the product are
+    // not one commit.
+    instant: {
+      factoryOrigin: "0xF2d8Ed8A66513c57d3c75384C4dA7b20B165B89a",
+      deployer: "0x124b731De0Cc97CcAd5960683FF4E94372B6d582",
+      registry: "0xAE8E1f39680A0fc7a164de25c1533179E853a807",
+      // Mined under salt 0x22a5. Its low 14 bits are 0x38cc.
+      hook: "0xa3a48A91B52e8553a9422f7eD71497d76405B8Cc",
+      factory: "0xF85b06710E2CbEf54230c92733e12824c8fCa2D6",
+      treasury: "0xabfB34D1C870c7b2334E93b25B1299346209bE38",
+      deployedAtBlock: 36_378_954,
+    },
   },
-  [ROBINHOOD_TESTNET_ID]: { agents: null, feeForwarderFactory: null, agen: null },
+  [ROBINHOOD_TESTNET_ID]: {
+    agents: null,
+    feeForwarderFactory: null,
+    agen: null,
+    instant: null,
+  },
 } as const satisfies Record<VerdantChainId, VerdantAddons>;
 
 /**
@@ -282,6 +379,17 @@ export function addonsFor(chainId: VerdantChainId): VerdantAddons {
  */
 export function agenFor(chainId: VerdantChainId): AgenDeployment | null {
   return ADDONS[chainId].agen;
+}
+
+/**
+ * Instant's launch layer for a chain, or `null` where it is not deployed.
+ *
+ * The same shape of accessor as `agenFor`, and the same reason: one call site per consumer
+ * decides what to do about a chain where Instant markets cannot be launched or read,
+ * instead of a null flowing onward into a transaction.
+ */
+export function instantFor(chainId: VerdantChainId): InstantDeployment | null {
+  return ADDONS[chainId].instant;
 }
 
 /**

@@ -69,6 +69,27 @@ describe("mining", () => {
     expect(two.address).not.toBe(one.address);
   });
 
+  it("namespaces byte-identical hooks so markets cannot collide", () => {
+    const initCodeHash = keccak256(toHex("shared-hook-bytecode"));
+    const one = mineHookAddress({
+      initCodeHash,
+      permissions: CNPY_PERMISSIONS,
+      deployer: DEPLOYER,
+      namespace: keccak256(toHex("creator-one-market-one")),
+    });
+    const two = mineHookAddress({
+      initCodeHash,
+      permissions: CNPY_PERMISSIONS,
+      deployer: DEPLOYER,
+      namespace: keccak256(toHex("creator-two-market-one")),
+    });
+
+    expect(two.salt).not.toBe(one.salt);
+    expect(two.address).not.toBe(one.address);
+    expect(permissionsOf(one.address)).toEqual([...CNPY_PERMISSIONS]);
+    expect(permissionsOf(two.address)).toEqual([...CNPY_PERMISSIONS]);
+  });
+
   it("mines against the deployer it is given, not a house default", () => {
     // Agen bundles are deployed by `AgenDeployer`, which runs `create2` from its own
     // address; the protocol's own hook is mined against the canonical factory. Mining a

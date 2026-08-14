@@ -174,6 +174,7 @@ describe("the workspace is isolated per job and identical in shape", () => {
     // The security controls travel with every generated project, not just the first.
     expect(config).toContain("ffi = false");
     expect(config).toContain("ast = true");
+    expect(config).toContain("memory_limit = 1073741824");
   });
 });
 
@@ -221,6 +222,21 @@ describe("the curated context describes this repository, not a remembered one", 
     for (const forbidden of ["inline assembly", "delegatecall", "selfdestruct", "tx.origin"]) {
       expect(context.generation).toContain(forbidden);
     }
+  });
+
+  it("hands tests the canonical market setup instead of asking them to recreate it", async () => {
+    const context = await buildContext({ vendorRoot: VENDOR });
+
+    expect(context.testing).toContain('import {MarketTestBase} from "./MarketTestBase.sol"');
+    expect(context.testing).toContain("Do not declare setUp");
+    expect(context.testing).toContain("already-valid market");
+    expect(context.testing).not.toContain("deployToken(");
+    expect(context.testing).not.toContain("marketKey(");
+    expect(context.testing).not.toContain("openMarket(");
+    expect(context.testing).not.toContain("manager.initialize(");
+    expect(context.testing).not.toContain("addLiquidity(");
+    expect(context.testing).not.toContain("struct PoolKey");
+    expect(context.testing).not.toContain("agenPoolKey(");
   });
 });
 

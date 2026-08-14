@@ -17,7 +17,7 @@
  * and the URL carries its id.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Bloom } from "../bloom";
 import type { PublicJob } from "../lib/builds";
@@ -38,6 +38,43 @@ const SUGGESTIONS: readonly string[] = [
 
 const PLACEHOLDER =
   "every hour the largest buyer becomes king and earns 20% of trading fees, until someone overtakes them.";
+
+interface DetectedIdentity {
+  readonly name?: string;
+  readonly symbol?: string;
+}
+
+/**
+ * Read the two identity phrases people naturally put in the description.
+ *
+ * Deliberately narrow rather than "smart": a false positive here is worse than leaving
+ * the fields empty. Both forms stop at punctuation or at the ticker clause, so a name
+ * never absorbs the market mechanic that follows it.
+ */
+function detectIdentity(description: string): DetectedIdentity {
+  const nameMatch =
+    /\b(?:token\s+)?(?:called|named)\s+(.+?)(?=\s+(?:with\s+(?:the\s+)?)?(?:ticker|symbol)\b|[.,;\n]|$)/i.exec(
+      description,
+    ) ??
+    /\b(?:token\s+)?name\s*(?:is|:|=)\s*(.+?)(?=\s+(?:with\s+(?:the\s+)?)?(?:ticker|symbol)\b|[.,;\n]|$)/i.exec(
+      description,
+    );
+  const symbolMatch = /\b(?:ticker|symbol)\s*(?:is|:|=)?\s*\$?([A-Za-z][A-Za-z0-9]{0,11})\b/i.exec(
+    description,
+  );
+
+  const name = nameMatch?.[1]
+    ?.trim()
+    .replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
+    .replace(/\s+/g, " ")
+    .slice(0, 64);
+  const symbol = symbolMatch?.[1]?.toUpperCase().slice(0, 12);
+
+  return {
+    ...(name === undefined || name === "" ? {} : { name }),
+    ...(symbol === undefined || symbol === "" ? {} : { symbol }),
+  };
+}
 
 /** Poll while a build is in flight; stop the moment it is not. */
 function useJob(jobId: string | null, onMissing: () => void): PublicJob | null {
@@ -117,6 +154,12 @@ export function Flow() {
   const [phase, setPhase] = useState<Phase>("describe");
   const [name, setName] = useState("");
   const [symbol, setSymbol] = useState("");
+  const nameIsManual = useRef(false);
+  const symbolIsManual = useRef(false);
+  const detectedName = useRef("");
+  const detectedSymbol = useRef("");
+  const nameAnimation = useRef<ReturnType<typeof setInterval> | null>(null);
+  const symbolAnimation = useRef<ReturnType<typeof setInterval> | null>(null);
   /**
    * The token's picture, uploaded here and read again on the launch screen.
    *
@@ -138,6 +181,67 @@ export function Flow() {
   }, []);
 
   const job = useJob(jobId, forget);
+
+  useEffect(() => {
+    const debounce = setTimeout(() => {
+      const detected = detectIdentity(description);
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+      const write = (
+        value: string,
+        setValue: (next: string) => void,
+        animation: { current: ReturnType<typeof setInterval> | null },
+      ): void => {
+        if (animation.current !== null) clearInterval(animation.current);
+
+        if (reducedMotion) {
+          setValue(value);
+          animation.current = null;
+          return;
+        }
+
+        let length = 0;
+        setValue("");
+        animation.current = setInterval(() => {
+          length += 1;
+          setValue(value.slice(0, length));
+
+          if (length >= value.length && animation.current !== null) {
+            clearInterval(animation.current);
+            animation.current = null;
+          }
+        }, 45);
+      };
+
+      if (
+        detected.name !== undefined &&
+        !nameIsManual.current &&
+        detected.name !== detectedName.current
+      ) {
+        detectedName.current = detected.name;
+        write(detected.name, setName, nameAnimation);
+      }
+
+      if (
+        detected.symbol !== undefined &&
+        !symbolIsManual.current &&
+        detected.symbol !== detectedSymbol.current
+      ) {
+        detectedSymbol.current = detected.symbol;
+        write(detected.symbol, setSymbol, symbolAnimation);
+      }
+    }, 320);
+
+    return () => clearTimeout(debounce);
+  }, [description]);
+
+  useEffect(
+    () => () => {
+      if (nameAnimation.current !== null) clearInterval(nameAnimation.current);
+      if (symbolAnimation.current !== null) clearInterval(symbolAnimation.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     // Whatever was typed on the front page, carried in the URL so that the composer
@@ -328,6 +432,9 @@ export function Flow() {
                 placeholder="King"
                 autoComplete="off"
                 onChange={(event) => {
+                  nameIsManual.current = true;
+                  if (nameAnimation.current !== null) clearInterval(nameAnimation.current);
+                  nameAnimation.current = null;
                   setName(event.currentTarget.value);
                 }}
               />
@@ -350,6 +457,9 @@ export function Flow() {
                   placeholder="KING"
                   autoComplete="off"
                   onChange={(event) => {
+                    symbolIsManual.current = true;
+                    if (symbolAnimation.current !== null) clearInterval(symbolAnimation.current);
+                    symbolAnimation.current = null;
                     setSymbol(event.currentTarget.value.toUpperCase());
                   }}
                 />

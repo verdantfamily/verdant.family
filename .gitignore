@@ -42,9 +42,12 @@ apps/landing/brand-source/
 !.env.example
 
 # Ponder's local store and generated env types: a PGlite database and a declaration
-# file, both rebuilt from ponder.config.ts on every dev run.
+# file, both rebuilt from ponder.config.ts on every dev run. Twice over, because Instant
+# is indexed by a second Ponder app against a second database — see ADR-014.
 apps/indexer/.ponder/
 apps/indexer/ponder-env.d.ts
+apps/instant-indexer/.ponder/
+apps/instant-indexer/ponder-env.d.ts
 
 # Further Next build directories, so a preview build, a dev server pointed at mainnet and
 # an ordinary dev server can run at once without fighting over .next/. See NEXT_DIST_DIR in
@@ -60,6 +63,7 @@ apps/web/.uploads/
 # The rig's logs and the notes taken while reading other people's contracts. Neither is
 # source and the first is rewritten on every run.
 .proof/
+.instant-proof/
 .research/
 
 # os

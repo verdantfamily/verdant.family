@@ -204,6 +204,35 @@ const plan = {
   ],
 };
 
+/**
+ * How the bundle is deployed, which the architecture call now answers alongside the plan.
+ *
+ * Stated rather than inferred for the same reason a real build states it: nothing
+ * downstream reads a constructor and guesses what belongs in it.
+ */
+const deployment = {
+  components: [
+    {
+      componentId: "canopyToken",
+      constructorArguments: [{ name: "recipient", type: "address", source: "INFRA:INSTALLER" }],
+      immutable: ["recipient"],
+      wiring: [],
+      controller: null,
+    },
+    {
+      componentId: "surchargeHook",
+      constructorArguments: [],
+      immutable: [],
+      wiring: [],
+      controller: null,
+    },
+  ],
+  pool: { feeMode: "dynamic", lpFee: "8388608" },
+  custodyComponentId: null,
+  feeClaimComponentId: null,
+  oneTimeInitialization: [],
+};
+
 const job = await runBuild(
   {
     prompt:
@@ -222,7 +251,7 @@ const job = await runBuild(
       { suggestions: [] },
       // Planning is two calls: what is already solved, then what to build.
       { reuse: [{ catalogueId: "base-hook", why: "it needs a hook" }], novel: [] },
-      plan,
+      { plan, deployment },
       // One answer per generated component; the token is written by Agen, not scripted.
       { content: HOOK, notes: [] },
       { files: [{ path: "test/SurchargeHook.t.sol", content: TESTS }], notes: [] },

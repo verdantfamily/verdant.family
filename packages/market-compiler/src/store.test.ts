@@ -89,6 +89,15 @@ describe("both stores behave the same way", () => {
 });
 
 describe("the file store specifically", () => {
+  it("loads jobs written before harness attempts were tracked", async () => {
+    directory = await mkdtemp(join(tmpdir(), "agen-jobs-"));
+    const store = fileJobStore(directory);
+    const { harnessAttempts: _legacyMissingField, ...legacy } = job("legacy");
+    await writeFile(join(directory, "legacy.json"), JSON.stringify(legacy), "utf8");
+
+    expect((await store.read("legacy"))?.harnessAttempts).toBe(0);
+  });
+
   it("refuses a job id that would name a file elsewhere", async () => {
     directory = await mkdtemp(join(tmpdir(), "agen-jobs-"));
     const store = fileJobStore(directory);

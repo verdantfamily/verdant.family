@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { repairCompilation, repairTests } from "./engineer";
+import { normalisePinnedV4Api, repairCompilation, repairTests } from "./engineer";
 import type { Diagnostic, TestOutcome } from "./foundry";
 import type { ModelProvider, StructuredRequest, StructuredResponse } from "./model";
 import { Tactic } from "./recovery";
@@ -156,6 +156,26 @@ describe("what a test repair is shown", () => {
     });
 
     expect(provider.seen[0]!.instructions).toContain("Do not edit it again");
+  });
+});
+
+describe("pinned v4 API normalization", () => {
+  it("turns the nonexistent delta library member into the free function", () => {
+    const corrected = normalisePinnedV4Api({
+      path: "contracts/FeeHook.sol",
+      content: `import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
+contract FeeHook {
+    function delta() external pure returns (BeforeSwapDelta) {
+        return BeforeSwapDeltaLibrary.toBeforeSwapDelta(1, 0);
+    }
+}`,
+    });
+
+    expect(corrected.content).toContain(
+      'import {BeforeSwapDelta, BeforeSwapDeltaLibrary, toBeforeSwapDelta} from "v4-core/src/types/BeforeSwapDelta.sol";',
+    );
+    expect(corrected.content).toContain("return toBeforeSwapDelta(1, 0);");
+    expect(corrected.content).not.toContain("BeforeSwapDeltaLibrary.toBeforeSwapDelta");
   });
 });
 

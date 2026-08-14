@@ -1,0 +1,235 @@
+import "server-only";
+
+/**
+ * The Instant indexer, which is a different service from the Programmable one.
+ *
+ * A separate module from `lib/feed.ts` rather than a `kind` parameter threaded through it,
+ * because the two address different routes over different tables on different hosts, and
+ * the Programmable ones are in service. Adding a branch inside `fetchCandles` would put
+ * every Programmable chart one typo away from asking the wrong indexer, in exchange for
+ * saving a file.
+ *
+ * ## Its own address, and its own transport
+ *
+ * `AGEN_INSTANT_FEED_URL`, with no fallback to `AGEN_FEED_URL`. The two indexers hold
+ * different tables and answer different paths: pointing this at the Programmable one would
+ * not degrade, it would 404 every request while looking configured. An unset variable is a
+ * supported state — the pages render dashes, exactly as they do when the Programmable feed
+ * is unset — and it is the honest one for a build that has not been told where the Instant
+ * indexer lives.
+ *
+ * The fifteen lines of transport below are therefore a deliberate second copy rather than
+ * an import from `lib/feed.ts`. They were shared while there was one indexer and one URL;
+ * there are now two of each, so the thing that was worth centralising no longer exists.
+ *
+ * ## The mapping below is also deliberately a second copy
+ *
+ * `fetchInstantCandles` repeats the bigint conversion that `fetchCandles` does, rather
+ * than both calling a helper extracted from one of them. Extracting it would mean editing
+ * the function every Programmable chart already depends on to save fourteen lines here.
+ * The shapes are the same because both routes serve the same contract, and if that ever
+ * stops being true this copy is what lets the two diverge without a negotiation.
+ */
+
+import { candles } from "@verdant/sdk";
+
+import type { CandleSeries, MarketStats } from "./feed";
+
+/** Where the Instant indexer is. Empty when this build has not been told. */
+const INSTANT_FEED_URL = process.env.AGEN_INSTANT_FEED_URL?.trim() ?? "";
+
+/** Whether this deployment has been told where the Instant indexer is at all. */
+export const instantFeedConfigured: boolean = INSTANT_FEED_URL !== "";
+
+/** Five seconds, which is a few blocks on this chain. The chart route opts out. */
+const REVALIDATE_SECONDS = 5;
+
+/** Long enough for a cold indexer, short enough not to hold a page render hostage. */
+const TIMEOUT_MS = 4_000;
+
+/**
+ * One request, and null for every way it can fail.
+ *
+ * No indexer configured, a refusal, a timeout, an unreachable host, a malformed body: each
+ * means the same thing to every caller — there is no history to show — and distinguishing
+ * them at the call site would produce five branches that render the same dash.
+ */
+async function ask<T>(path: string, fresh = false): Promise<T | null> {
+  if (!instantFeedConfigured) return null;
+
+  try {
+    const response = await fetch(`${INSTANT_FEED_URL}${path}`, {
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      ...(fresh ? { cache: "no-store" } : { next: { revalidate: REVALIDATE_SECONDS } }),
+    });
+
+    if (!response.ok) return null;
+    return (await response.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+interface RawCandles {
+  readonly interval: candles.CandleInterval;
+  readonly seconds: number;
+  readonly at: number;
+  readonly since: number;
+  readonly anchor: { readonly at: number; readonly price: string };
+  readonly candles: readonly {
+    readonly start: number;
+    readonly open: string;
+    readonly high: string;
+    readonly low: string;
+    readonly close: string;
+    readonly volumeQuote: string;
+    readonly volumeToken: string;
+    readonly trades: number;
+  }[];
+}
+
+interface RawStats {
+  readonly at: number;
+  readonly window: number;
+  readonly day: {
+    readonly since: number;
+    readonly volumeQuote: string;
+    readonly volumeToken: string;
+    readonly trades: number;
+    readonly changePercent: number | null;
+  };
+  readonly allTime: { readonly high: string; readonly low: string };
+}
+
+interface RawSwaps {
+  readonly poolId: string;
+  readonly at: number;
+  readonly total: number;
+  readonly swaps: readonly {
+    readonly id: string;
+    readonly sender: string;
+    readonly buy: boolean;
+    readonly quoteAmount: string;
+    readonly tokenAmount: string;
+    readonly price: string;
+    readonly timestamp: number;
+    readonly transactionHash: string;
+  }[];
+}
+
+/** One trade in an Instant market, in the units the page shows. */
+export interface InstantTrade {
+  readonly id: string;
+  readonly at: number;
+  /**
+   * Whoever called the PoolManager, which for almost every trade is a router rather than
+   * the person. Reported as observed: the alternative is decoding hook data the Instant
+   * hook does not read, and naming a trader this cannot see would be an invention.
+   */
+  readonly sender: string;
+  readonly side: "buy" | "sell";
+  /** Ether, as a float. Wei divided once here rather than at three call sites. */
+  readonly ether: number;
+  /** Whole tokens. */
+  readonly tokens: number;
+  readonly txHash: string;
+}
+
+/**
+ * An Instant market's price history, already gapless.
+ *
+ * The indexer returns the buckets it observed plus the price entering the window, and the
+ * filling happens here through `candles.fill`, so a chart receives one point per interval
+ * and no holes. A bucket nobody traded in still has a price — a constant-function pool
+ * holds whatever the last trade left it at — so a flat filled candle is the truth about
+ * the pool rather than an interpolation of it.
+ *
+ * `id` is a pool id or a token address; the indexer accepts either.
+ */
+export async function fetchInstantCandles(
+  id: string,
+  interval: candles.CandleInterval,
+  limit = 240,
+  fresh = false,
+): Promise<CandleSeries | null> {
+  const raw = await ask<RawCandles>(
+    `/instant/markets/${id}/candles?interval=${interval}&limit=${String(limit)}`,
+    fresh,
+  );
+  if (raw === null) return null;
+
+  const observed = raw.candles.map((candle) => ({
+    start: candle.start,
+    open: BigInt(candle.open),
+    high: BigInt(candle.high),
+    low: BigInt(candle.low),
+    close: BigInt(candle.close),
+    volumeQuote: BigInt(candle.volumeQuote),
+    volumeToken: BigInt(candle.volumeToken),
+    trades: candle.trades,
+    traded: true,
+  }));
+
+  return {
+    interval: raw.interval,
+    seconds: raw.seconds,
+    at: raw.at,
+    candles: candles.fill(observed, {
+      seconds: raw.seconds,
+      since: raw.since,
+      until: raw.at,
+      anchor: { at: raw.anchor.at, price: BigInt(raw.anchor.price) },
+    }),
+  };
+}
+
+/** The rolling day and the all-time extremes an Instant market page shows. */
+export async function fetchInstantStats(
+  id: string,
+  fresh = false,
+): Promise<MarketStats | null> {
+  const raw = await ask<RawStats>(`/instant/markets/${id}/stats`, fresh);
+  if (raw === null) return null;
+
+  return {
+    at: raw.at,
+    day: {
+      volumeQuote: BigInt(raw.day.volumeQuote),
+      trades: raw.day.trades,
+      changePercent: raw.day.changePercent,
+    },
+    allTime: { high: BigInt(raw.allTime.high), low: BigInt(raw.allTime.low) },
+  };
+}
+
+/**
+ * An Instant market's trades, newest first.
+ *
+ * Empty rather than null when the feed cannot answer, because the caller renders a list
+ * and the difference between "no indexer" and "no trades" is already carried by
+ * `feedConfigured` on the page around it.
+ *
+ * There is no fee on a row. `InstantHook` overrides the pool's LP fee to zero and takes
+ * its 1.50% from the ether leg, so the fee v4 reports is zero and printing it would tell
+ * a reader the trade was free. The rate is a constant of the deployment; the page states
+ * it once.
+ */
+export async function fetchInstantTrades(
+  id: string,
+  limit = 50,
+): Promise<readonly InstantTrade[]> {
+  const raw = await ask<RawSwaps>(
+    `/instant/markets/${id}/swaps?limit=${String(limit)}`,
+  );
+  if (raw === null) return [];
+
+  return raw.swaps.map((swap) => ({
+    id: swap.id,
+    at: swap.timestamp,
+    sender: swap.sender,
+    side: swap.buy ? ("buy" as const) : ("sell" as const),
+    ether: Number(swap.quoteAmount) / 1e18,
+    tokens: Number(swap.tokenAmount) / 1e18,
+    txHash: swap.transactionHash,
+  }));
+}

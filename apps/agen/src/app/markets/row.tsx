@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import type { MarketSummary } from "../lib/markets";
 import { age, eth, percent } from "../lib/format";
-import { Machine } from "./machine";
+import { TokenArt } from "./art";
 
 /**
  * A token, as one entry in the index.
@@ -32,23 +32,33 @@ export function TokenRow({
       style={{ ["--i" as string]: String(index) }}
     >
       <span className="ax-row-art">
-        <Machine symbol={market.symbol} mechanics={market.mechanics} size={74} live={live} />
+        <TokenArt market={market} size={74} />
       </span>
 
       <span className="ax-row-id">
         <span className="ax-row-tic">${market.symbol}</span>
         <span className="ax-row-name">{market.name}</span>
+
+        {/* What the chips can truthfully say depends on the product. A compiled market is
+            described by its rules and what it keeps between them; a standardised one has
+            neither to report, and its distinguishing fact is that it is standard. */}
         <span className="ax-chips">
-          <span className="ax-chip">
-            {market.mechanics.ruleCount} {market.mechanics.ruleCount === 1 ? "rule" : "rules"}
-          </span>
-          {market.mechanics.stateCount > 0 ? <span className="ax-chip">stateful</span> : null}
-          {market.mechanics.hasPhases ? <span className="ax-chip">evolves</span> : null}
+          {market.kind === "programmable" ? (
+            <>
+              <span className="ax-chip">
+                {market.mechanics.ruleCount} {market.mechanics.ruleCount === 1 ? "rule" : "rules"}
+              </span>
+              {market.mechanics.stateCount > 0 ? <span className="ax-chip">stateful</span> : null}
+              {market.mechanics.hasPhases ? <span className="ax-chip">evolves</span> : null}
+            </>
+          ) : (
+            <span className="ax-chip">instant</span>
+          )}
           <span className="ax-chip">{age(market.createdAt, now)} old</span>
         </span>
       </span>
 
-      <span className="ax-row-rule">{market.mechanics.headline}</span>
+      <span className="ax-row-rule">{market.headline}</span>
 
       <span className="ax-row-fig">
         <span className="ax-row-val ax-num">{eth(trading?.marketCap)}</span>

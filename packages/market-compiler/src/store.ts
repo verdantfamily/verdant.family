@@ -76,7 +76,12 @@ export function fileJobStore(directory: string): JobStore {
 
   const readOne = async (id: string): Promise<GenerationJob | null> => {
     try {
-      return JSON.parse(await readFile(pathFor(id), "utf8"), reviver) as GenerationJob;
+      const stored = JSON.parse(await readFile(pathFor(id), "utf8"), reviver) as GenerationJob;
+      return {
+        ...stored,
+        // Jobs created before the canonical test-environment lane remain readable.
+        harnessAttempts: stored.harnessAttempts ?? 0,
+      };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw error;

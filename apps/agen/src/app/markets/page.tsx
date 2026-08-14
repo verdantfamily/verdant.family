@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 import { Bloom } from "../bloom";
-import { buildStoreSource } from "../lib/markets";
+import { marketSource } from "../lib/markets";
 import { TokenRow } from "./row";
 
 export const dynamic = "force-dynamic";
@@ -31,7 +31,7 @@ export default async function Markets({
   const raw = parameters["q"];
   const query = (Array.isArray(raw) ? raw[0] : raw)?.trim() ?? "";
 
-  const all = await buildStoreSource().list();
+  const all = await marketSource().list();
   const now = Math.floor(Date.now() / 1000);
 
   const needle = query.toLowerCase();
@@ -39,7 +39,7 @@ export default async function Markets({
     needle.length === 0
       ? all
       : all.filter((market) =>
-          [market.name, market.symbol, market.mechanics.headline]
+          [market.name, market.symbol, market.headline]
             .join(" ")
             .toLowerCase()
             .includes(needle),

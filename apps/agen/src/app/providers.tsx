@@ -2,18 +2,12 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
-import { WagmiProvider, createConfig, http, injected } from "wagmi";
-/*
- * The one connector, from its own module rather than from `wagmi/connectors`.
- *
- * That barrel re-exports every connector wagmi ships, and two of them reach code whose
- * optional dependencies are annotated for Turbopack only — `@wagmi/core`'s Tempo wallet
- * does `import('accounts')` behind a `turbopackOptional` comment. Webpack, which is what
- * `next build` uses here, does not read that comment: it tries to resolve the package,
- * fails, and takes the whole build down. Nothing here uses those connectors, so the fix
- * is not to teach webpack to ignore them but to stop pulling them in.
- */
+// The deep path, not the package barrel. `@wagmi/connectors` re-exports every connector
+// it ships, including Base Account, which drags in the Coinbase SDK and a set of x402
+// packages this app does not install — so the barrel fails to build while the one
+// connector actually wanted resolves cleanly.
 import { walletConnect } from "@wagmi/connectors/walletConnect";
+import { WagmiProvider, createConfig, http, injected, type CreateConnectorFn } from "wagmi";
 
 import { CHAIN_ID, chain } from "./lib/chain";
 
@@ -43,31 +37,54 @@ import { CHAIN_ID, chain } from "./lib/chain";
  */
 const WALLETCONNECT_PROJECT_ID = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID?.trim();
 
-const APP_METADATA = {
-  name: "Agen",
-  description: "The launchpad for programmable markets",
-  // Read from the browser rather than written down: this is the field a wallet shows to
-  // somebody deciding whether to approve a session, and a hardcoded one would keep
-  // claiming the production domain from a preview deployment or a laptop.
-  url: typeof window === "undefined" ? "https://agen.space" : window.location.origin,
-  icons: ["https://agen.space/icon.png"],
-};
+const IN_BROWSER = typeof window !== "undefined";
 
-const config = createConfig({
+/**
+ * Built once, and that is the whole point of the shape below.
+ *
+ * This used to start without WalletConnect and swap in a second config from an effect,
+ * to keep WalletConnect's IndexedDB-backed storage out of the server render. It worked
+ * for its own purpose and quietly broke wallet discovery: `WagmiProvider` subscribes to
+ * EIP-6963 when it mounts, so a config handed to it afterwards never hears a single
+ * announcement. The list collapsed to the two connectors named here, which is why every
+ * browser showed a nameless "Injected" and no MetaMask, Phantom or SafePal.
+ *
+ * So the config is created once, and only the connector list differs between the two
+ * environments. The import is safe in Node; it is *constructing* the connector that
+ * reaches for browser storage, and that is what this guard prevents.
+ */
+function connectorsFor(): CreateConnectorFn[] {
+  // Last, and only as a fallback. Anything that announces itself over EIP-6963 arrives
+  // with its real name and its own logo, and `wallet.tsx` prefers those — this catches
+  // the wallet that takes `window.ethereum` without announcing and nothing else.
+  const connectors: CreateConnectorFn[] = [injected({ shimDisconnect: true })];
+
+  if (!IN_BROWSER || WALLETCONNECT_PROJECT_ID === undefined || WALLETCONNECT_PROJECT_ID === "") {
+    return connectors;
+  }
+
+  connectors.push(
+    walletConnect({
+      projectId: WALLETCONNECT_PROJECT_ID,
+      metadata: {
+        name: "Agen",
+        description: "The launchpad for programmable markets",
+        url: window.location.origin,
+        icons: ["https://agen.space/icon.png"],
+      },
+      showQrModal: true,
+    }),
+  );
+
+  return connectors;
+}
+
+const CONFIG = createConfig({
   chains: [chain],
-  connectors: [
-    injected(),
-    ...(WALLETCONNECT_PROJECT_ID === undefined || WALLETCONNECT_PROJECT_ID === ""
-      ? []
-      : [
-          walletConnect({
-            projectId: WALLETCONNECT_PROJECT_ID,
-            metadata: APP_METADATA,
-            showQrModal: true,
-          }),
-        ]),
-  ],
+  // Every extension that wants to be found announces itself here. This is what puts
+  // real names and real logos in the list instead of one generic entry.
   multiInjectedProviderDiscovery: true,
+  connectors: connectorsFor(),
   transports: { [CHAIN_ID]: http() },
   // This app server-renders, so wagmi must not read a browser store while producing the
   // first HTML. Without it the markup the server sends says "not connected", the
@@ -86,7 +103,7 @@ export function Providers({ children }: { readonly children: ReactNode }) {
   );
 
   return (
-    <WagmiProvider config={config}>
+    <WagmiProvider config={CONFIG}>
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     </WagmiProvider>
   );

@@ -56,13 +56,18 @@ buildCommand = "pnpm --filter \"@verdant/indexer^...\" build"
 # Housekeeping must never be load-bearing for serving traffic. An indexer that starts with
 # stale schemas still answers questions; one that refuses to start answers nothing.
 #
-# Two services now deploy from this repository, and Railway applies the root config to
+# Three services now deploy from this repository, and Railway applies the root config to
 # every one of them: there is no per-service block, and a service only reads a different
 # file if somebody sets its config path in the dashboard. So the first deploy of the Agen
 # app dutifully ran `ponder db prune`, failed a health check on a path it does not serve,
-# and rolled back. Branching on the service name keeps both correct in one file, which is
-# uglier than two files and is the only version that works without a manual step nobody
-# will remember. If Agen ever gets its own config path set, this collapses back.
+# and rolled back. Branching on the service name keeps all three correct in one file, which
+# is uglier than three files and is the only version that works without a manual step
+# nobody will remember. If Agen ever gets its own config path set, this collapses back.
+#
+# The third is `instant-indexer`, which is a second Ponder app against a second Postgres.
+# It needs no change to the build command above: `@verdant/indexer^...` and
+# `@verdant/instant-indexer^...` resolve to the same three workspace packages, so the
+# artifacts either one needs are already built.
 startCommand = "bash scripts/railway-start.sh"
 
 # Both services answer `/health` — the indexer natively, the Agen app through a route

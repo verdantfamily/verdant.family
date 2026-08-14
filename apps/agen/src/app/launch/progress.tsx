@@ -37,6 +37,14 @@ const LINES: readonly {
   readonly note: string;
   readonly mark: StageMark;
   /**
+   * Real pipeline stages folded into this creator-facing line.
+   *
+   * Test generation used to be invisible here, so the completed Compiling card stayed
+   * open for almost a minute while Agen was actively writing the suite. Naming the work
+   * keeps the seven-line view without making a real stage look like a freeze.
+   */
+  readonly activity?: readonly { readonly stage: string; readonly note: string }[];
+  /**
    * The stage that repairs this one, and what to say while it is running.
    *
    * A build that is repairing looks identical to a build that is stuck: the same line,
@@ -76,6 +84,13 @@ const LINES: readonly {
     label: "Compiling",
     note: "building the contracts and checking that everything fits together",
     mark: "compiling",
+    activity: [
+      { stage: "static_analysis", note: "checking the contracts for deployment blockers" },
+      {
+        stage: "deployment_validation",
+        note: "checking the contracts against the deployment they were designed for",
+      },
+    ],
     repair: { stage: "compilation_repair", note: "adjusting the implementation to fit" },
   },
   {
@@ -83,6 +98,13 @@ const LINES: readonly {
     label: "Testing",
     note: "verifying the rules, edge cases and expected token behavior",
     mark: "testing",
+    activity: [
+      {
+        stage: "test_environment",
+        note: "launching the canonical market environment used by every behavior test",
+      },
+      { stage: "test_generation", note: "writing tests for every rule and edge case" },
+    ],
     repair: { stage: "test_repair", note: "verifying the generated behavior" },
   },
   {
@@ -111,6 +133,8 @@ const REMAINING_SECONDS: Readonly<Record<string, number>> = {
   code_generation: 85,
   compilation: 60,
   static_analysis: 55,
+  deployment_validation: 52,
+  test_environment: 50,
   test_generation: 45,
   test_execution: 30,
   review_ready: 15,
@@ -166,6 +190,7 @@ function focusOf(job: PublicJob): string | null {
   const running = LINES.find(
     (line) =>
       stateOf(job, line.stage) === "running" ||
+      line.activity?.some((activity) => stateOf(job, activity.stage) === "running") === true ||
       (line.repair !== undefined && stateOf(job, line.repair.stage) === "running"),
   );
   if (running !== undefined) return running.stage;
@@ -184,19 +209,17 @@ function focusOf(job: PublicJob): string | null {
  * own estimate says so instead of counting down to zero and sitting there, which is the
  * one behaviour that would make every other number on this panel untrustworthy.
  */
-function remainingFor(job: PublicJob, now: number): string {
-  if (job.queue !== null) return "waiting for a slot";
-
+function remainingFor(job: PublicJob, nowSeconds: number): string {
   const budget = REMAINING_SECONDS[job.stage];
   if (budget === undefined) return "any moment now";
   if (budget === 0) return "done";
 
-  const repairs = job.compilationAttempts + job.testAttempts;
+  const repairs = job.compilationAttempts + job.harnessAttempts + job.testAttempts;
   const left = budget + repairs * SECONDS_PER_REPAIR;
 
   // Past the point where the estimate meant anything. Builds do run long — a repair
   // round is a model call — and pretending otherwise is worse than admitting it.
-  const elapsed = (now - job.createdAt) / 1000;
+  const elapsed = nowSeconds - job.createdAt;
   if (elapsed > left + REMAINING_SECONDS.prompt_received!) return "longer than usual";
 
   if (left < 45) return "under a minute";
@@ -205,10 +228,10 @@ function remainingFor(job: PublicJob, now: number): string {
 
 export function Progress({ job }: { readonly job: PublicJob }) {
   const failedAt = job.failure?.stage;
-  const queued = job.queue;
+  const preparing = job.queue !== null;
 
   const planned = job.plan?.components.length ?? null;
-  const focus = focusOf(job);
+  const focus = preparing ? "interpreting" : focusOf(job);
   const waitingOnYou = job.stage === "awaiting_clarification";
 
   return (
@@ -228,24 +251,9 @@ export function Progress({ job }: { readonly job: PublicJob }) {
 
       <header className="ax-progress-head">
         <h2>
-          {queued === null ? "Building your token" : "Queued —"}{" "}
-          <span className="ax-ticker">${job.symbol}</span>
+          Building your token <span className="ax-ticker">${job.symbol}</span>
         </h2>
-
-        {/*
-          A waiting build has no running stage, so without this the list below sits
-          entirely grey and the screen reads as a build that has stalled. Saying the
-          position is the difference between "this is broken" and "this is a line".
-        */}
-        <p>
-          {queued === null
-            ? "This can take a few minutes, you can keep this page open."
-            : queued.position === 1
-              ? "Next to build. Your market starts as soon as a slot frees up."
-              : `${String(queued.position - 1)} ${
-                  queued.position === 2 ? "build is" : "builds are"
-                } ahead of yours. It will start on its own — you can leave this page open.`}
-        </p>
+        <p>This can take a few minutes, you can keep this page open.</p>
       </header>
 
       {/*
@@ -254,7 +262,9 @@ export function Progress({ job }: { readonly job: PublicJob }) {
         it earns its place because the panel is otherwise all waiting.
       */}
       <div className="ax-facts">
-        <span className="ax-factpill">Remaining: {remainingFor(job, Date.now())}</span>
+        <span className="ax-factpill">
+          Remaining: {remainingFor(job, Math.floor(Date.now() / 1000))}
+        </span>
         <span className="ax-factpill">
           Contracts written: {planned === null ? "—" : String(planned)}
         </span>
@@ -267,6 +277,10 @@ export function Progress({ job }: { readonly job: PublicJob }) {
             const state = stateOf(job, line.stage);
             const attempts = attemptsOf(job, line.stage);
             const open = line.stage === focus;
+            const preparingHere = preparing && line.stage === "interpreting";
+            const activity =
+              line.activity?.find((candidate) => stateOf(job, candidate.stage) === "running") ??
+              line.activity?.find((candidate) => stateOf(job, candidate.stage) === "failed");
 
             // The stage stays open across its repairs, so a line that is repairing is a
             // line that is still running — it just isn't doing what its note says.
@@ -276,11 +290,18 @@ export function Progress({ job }: { readonly job: PublicJob }) {
             // A build parked on a question is not doing the thing its note describes, and
             // saying so here is what stops the panel beside it being missed.
             const note =
-              open && waitingOnYou
+              preparingHere
+                ? "preparing your idea for contract generation"
+                : open && waitingOnYou
                 ? "Waiting for your answer in the panel beside this."
                 : repairing
                   ? line.repair!.note
-                  : line.note;
+                  : (activity?.note ?? line.note);
+            const visibleState = preparingHere
+              ? "running"
+              : activity === undefined
+                ? state
+                : stateOf(job, activity.stage);
 
             // A stage entered more than once was repaired between attempts. Shown on
             // compilation and tests, where it means something; a second pass through
@@ -289,10 +310,10 @@ export function Progress({ job }: { readonly job: PublicJob }) {
 
             return (
               <li
-                className={`ax-stage ax-stage-${state}${open ? " ax-stage-open" : ""}`}
+                className={`ax-stage ax-stage-${visibleState}${open ? " ax-stage-open" : ""}`}
                 key={line.stage}
               >
-                <StageIcon mark={line.mark} state={repairing ? "running" : state} />
+                <StageIcon mark={line.mark} state={repairing ? "running" : visibleState} />
 
                 <span className="ax-stage-text">
                   <span className="ax-stage-label">{line.label}</span>

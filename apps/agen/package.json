@@ -10,7 +10,8 @@
     "preview": "python3 -m http.server 4321 --bind 127.0.0.1 --directory out",
     "brand": "node scripts/prepare-brand.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "test": "vitest run"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.101.4",
@@ -34,6 +35,7 @@
     "eslint": "^9.39.5",
     "eslint-config-next": "^15.5.22",
     "sharp": "^0.34.5",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
   }
 }

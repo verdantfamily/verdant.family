@@ -1,0 +1,26 @@
+{
+  "name": "@verdant/instant-indexer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "ponder dev",
+    "start": "ponder start",
+    "codegen": "ponder codegen",
+    "build": "echo \"@verdant/instant-indexer has no build step; ponder-env.d.ts is committed\" && exit 0",
+    "typecheck": "ponder codegen && tsc -p tsconfig.json --noEmit",
+    "proof": "bash ../../scripts/instant-proof.sh"
+  },
+  "dependencies": {
+    "@verdant/config": "workspace:*",
+    "@verdant/sdk": "workspace:*",
+    "@verdant/ui": "workspace:*",
+    "hono": "^4.12.33",
+    "ponder": "^0.17.4",
+    "viem": "^2.40.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "typescript": "^5.9.3"
+  }
+}

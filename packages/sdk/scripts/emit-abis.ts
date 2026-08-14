@@ -89,6 +89,16 @@ const OWN: readonly { readonly contract: string; readonly binding: string }[] = 
   { contract: "AgenFactory", binding: "agenFactoryAbi" },
   { contract: "AgenMarketRegistry", binding: "agenMarketRegistryAbi" },
   { contract: "AgenPositionLocker", binding: "agenPositionLockerAbi" },
+
+  // Instant, which is a preset rather than a model and so has its own factory rather
+  // than a configuration of Verdant's. The factory is here because a creator's wallet
+  // encodes `create` against it, and the vault because the profile reads a creator's
+  // earnings and sends their claim directly to it — Instant's fee never touches the
+  // position, so the collect-then-claim path has nothing to report. See ADR-014.
+  { contract: "InstantFactory", binding: "instantFactoryAbi" },
+  { contract: "InstantDeployer", binding: "instantDeployerAbi" },
+  { contract: "InstantHook", binding: "instantHookAbi" },
+  { contract: "InstantFeeVault", binding: "instantFeeVaultAbi" },
 ];
 
 /**

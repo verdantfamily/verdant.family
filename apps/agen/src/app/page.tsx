@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { buildStoreSource, type MarketSummary } from "./lib/markets";
+import { marketSource, noveltyOf, type MarketSummary } from "./lib/markets";
 import { FeatureCard, TokenCard } from "./markets/card";
 import { Search } from "./search";
 import { TopBar } from "./topbar";
@@ -22,7 +22,7 @@ const SORTS: readonly {
   {
     key: "rules",
     label: "Most unusual",
-    by: (left, right) => right.mechanics.noveltyScore - left.mechanics.noveltyScore,
+    by: (left, right) => noveltyOf(right) - noveltyOf(left),
   },
 ];
 
@@ -49,14 +49,14 @@ export default async function Home({
   const sort = SORTS.find((entry) => entry.key === first("sort")) ?? SORTS[0]!;
   const next = SORTS[(SORTS.indexOf(sort) + 1) % SORTS.length]!;
 
-  const all = await buildStoreSource().list();
+  const all = await marketSource().list();
 
   const needle = query.toLowerCase();
   const found =
     needle.length === 0
       ? all
       : all.filter((market) =>
-          [market.name, market.symbol, market.mechanics.headline]
+          [market.name, market.symbol, market.headline]
             .join(" ")
             .toLowerCase()
             .includes(needle),

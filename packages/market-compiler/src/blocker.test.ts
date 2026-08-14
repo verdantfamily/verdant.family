@@ -87,6 +87,7 @@ describe("what a creator is told", () => {
     const mine = [
       FailureCode.CompilationUnrepairable,
       FailureCode.TestsUnrepairable,
+      FailureCode.HarnessInfrastructure,
       FailureCode.ToolchainError,
       FailureCode.ModelUnavailable,
       FailureCode.InvalidArtefact,

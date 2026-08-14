@@ -39,6 +39,7 @@ import type { Abi, Address, Hex } from "viem";
 import { concatHex, encodeAbiParameters, keccak256, toHex } from "viem";
 
 import type { ContractArtifact } from "./artifacts.js";
+import type { DeploymentSpecification } from "./deployment-spec.js";
 import type { FeeMode } from "./feemode.js";
 import type { HookPermission } from "./gates.js";
 import { mineHookAddress, permissionBits } from "./mining.js";
@@ -186,6 +187,13 @@ export function initialTickProblem(initialTick: number): string | null {
 export interface BuildManifestInput {
   readonly plan: MarketImplementationPlan;
   readonly artifacts: readonly ContractArtifact[];
+  /**
+   * The order to deploy in, as component ids, from the declared deployment graph.
+   *
+   * Absent only where there is no deployment to take it from, which is a hand-written
+   * manifest in a test. See `orderFor`.
+   */
+  readonly order?: readonly string[];
   /** Constructor wiring per component. Absent means no constructor arguments. */
   readonly deployments?: readonly ComponentDeployment[];
   /** Setter calls made after every component is deployed. See `WiringCall`. */
@@ -309,8 +317,8 @@ function encodeArguments(
   );
 }
 
-function abiHasConstructor(abi: Abi): boolean {
-  return abi.some((entry) => entry.type === "constructor");
+function abiHasConstructorArguments(abi: Abi): boolean {
+  return abi.some((entry) => entry.type === "constructor" && (entry.inputs?.length ?? 0) > 0);
 }
 
 /**
@@ -320,9 +328,47 @@ function abiHasConstructor(abi: Abi): boolean {
  * each one's arguments can name the addresses already fixed, and the hook is mined at
  * the point it is reached, which means anything it depends on must precede it.
  */
+/**
+ * Deployment order: the declared graph where one was given, the plan's intent otherwise.
+ *
+ * The fallback exists for hand-written manifests in tests, which have a plan and no
+ * deployment specification. Every real build supplies the order.
+ */
+function orderFor(input: BuildManifestInput): readonly MarketComponent[] {
+  if (input.order === undefined) return deploymentOrder(input.plan);
+
+  const byId = new Map(input.plan.components.map((component) => [component.id, component]));
+  const ordered = input.order.map((id) => {
+    const component = byId.get(id);
+    if (component === undefined) {
+      throw new ManifestError(`the deployment order names "${id}", which is not in the plan`);
+    }
+    return component;
+  });
+
+  if (ordered.length !== input.plan.components.length) {
+    throw new ManifestError(
+      `the deployment order covers ${String(ordered.length)} components and the plan has ` +
+        `${String(input.plan.components.length)}`,
+    );
+  }
+
+  return ordered;
+}
+
 export function buildManifest(input: BuildManifestInput): DeployableManifest {
   const deployer = input.deployerAddress;
-  const ordered = deploymentOrder(input.plan);
+
+  /**
+   * The order components are deployed in, taken from the deployment when there is one.
+   *
+   * It has to be the same order the canonical fixture used. A constructor handed a
+   * sibling's address needs that sibling deployed already, and the two orders are derived
+   * from different things: the plan's `dependsOn` is what the planner intended, and the
+   * deployment's graph is which addresses are actually passed. When they disagree the
+   * fixture proves a launch that production would not perform.
+   */
+  const ordered = orderFor(input);
 
   const tickProblem = initialTickProblem(input.initialTick);
   if (tickProblem !== null) throw new ManifestError(tickProblem);
@@ -388,7 +434,7 @@ export function buildManifest(input: BuildManifestInput): DeployableManifest {
     // A constructor that takes arguments but was given none produces a contract whose
     // immutables are zero — deployable, silently broken, and impossible to spot from
     // the address. Worth catching here rather than in a trace.
-    if (abiHasConstructor(artifact.abi) && args === "0x" && deployment === undefined) {
+    if (abiHasConstructorArguments(artifact.abi) && args === "0x" && deployment === undefined) {
       throw new ManifestError(
         `${component.contractName} has a constructor but no arguments were planned for it`,
       );
@@ -398,13 +444,19 @@ export function buildManifest(input: BuildManifestInput): DeployableManifest {
     const initCodeHash = keccak256(initCode);
 
     const isHook = component.role === "hook";
+    const componentNamespace = saltFor({
+      creator: input.creator,
+      marketSalt: input.marketSalt,
+      componentId: component.id,
+    });
     const salt = isHook
       ? mineHookAddress({
           initCodeHash,
           permissions: (component.hookPermissions ?? []) as readonly HookPermission[],
           deployer,
+          namespace: componentNamespace,
         }).salt
-      : saltFor({ creator: input.creator, marketSalt: input.marketSalt, componentId: component.id });
+      : componentNamespace;
 
     const expected = create2(deployer, salt, initCodeHash);
 
@@ -570,6 +622,16 @@ export interface LaunchManifest {
   readonly feeMode: FeeMode;
   /** Why the pool opens at that fee, for the build record. */
   readonly feeModeReason: string;
+  /**
+   * The deployment this build cleared, which the launch materializes.
+   *
+   * Carried for the same reason as `lpFee`, and more strongly: the launch screen turns
+   * this into bytes a wallet signs, and it must be the document the canonical fixture
+   * actually executed in Foundry. Recomputing a deployment at launch time — from the plan,
+   * from the compiled ABIs, from anything — would mean the bundle a creator signs was
+   * arranged by a reading nothing ever ran.
+   */
+  readonly deployment: DeploymentSpecification;
   /** Whole tokens, before decimals. The launch screen turns this into a valuation. */
   readonly supplyTokens: bigint;
   readonly hookComponentId: string;

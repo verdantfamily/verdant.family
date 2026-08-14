@@ -610,6 +610,67 @@ export function hookPermissionParity({
   };
 }
 
+const compact = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/**
+ * Which test in a suite stands behind which claimed invariant.
+ *
+ * A test earns an invariant by naming it or by carrying it in the comment written
+ * directly above the declaration — `// Invariant: buy-fee-free — ...` over
+ * `test_buy_has_no_fee`, which is how models write these suites when left alone.
+ * Demanding the id inside the function name instead is a demand about spelling, and a
+ * GROVE build lost six minutes to it: every invariant was tested, every test passed,
+ * and the market was refused at the last gate because one honest test was called what
+ * it does rather than what it proves.
+ *
+ * Comments count only where they are attached to a declaration. A file-header list of
+ * invariants is a table of contents, not evidence, and reading one as coverage is the
+ * failure this gate exists to catch.
+ */
+export function invariantCoverage({
+  invariantIds,
+  sources,
+}: {
+  readonly invariantIds: readonly string[];
+  readonly sources: readonly { readonly content: string }[];
+}): ReadonlyMap<string, readonly string[]> {
+  const needles = invariantIds.map((id) => ({ id, needle: compact(id) }));
+  const coverage = new Map<string, string[]>(invariantIds.map((id) => [id, []]));
+
+  for (const source of sources) {
+    const lines = source.content.split("\n");
+
+    lines.forEach((line, index) => {
+      if (isComment(line)) return;
+      const declared = /function\s+(test[A-Za-z0-9_$]*)\s*\(/.exec(line);
+      if (declared === null) return;
+
+      const name = declared[1]!;
+      const claim = compact([name, ...commentAbove(lines, index)].join(" "));
+
+      for (const { id, needle } of needles) {
+        if (claim.includes(needle)) coverage.get(id)!.push(name);
+      }
+    });
+  }
+
+  return coverage;
+}
+
+function isComment(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*");
+}
+
+/** The unbroken run of comment lines immediately above a declaration. */
+function commentAbove(lines: readonly string[], index: number): readonly string[] {
+  const block: string[] = [];
+  for (let above = index - 1; above >= 0 && isComment(lines[above]!); above -= 1) {
+    block.push(lines[above]!);
+  }
+  return block;
+}
+
 /**
  * Insist that the market's own invariants were actually tested.
  *
@@ -618,20 +679,33 @@ export function hookPermissionParity({
  * evidence for that claim is a fuzz or invariant run that tried to break it and could
  * not. A market arriving with the claim and no test has not been checked, and is
  * refused on exactly that basis rather than being passed with a green tick.
+ *
+ * The evidence is a test that claims the invariant AND passed. Claiming is read from
+ * the suite by `invariantCoverage`, which is the same rule test generation is held to,
+ * so a suite that satisfied the generator cannot be refused here for how it spells a
+ * function name.
  */
 export function invariantsWereProven({
   invariantIds,
   passingTests,
+  coverage,
 }: {
   readonly invariantIds: readonly string[];
   /** Test names from the generated suite that passed. */
   readonly passingTests: readonly string[];
+  /** Invariant id to the tests claiming it, from `invariantCoverage`. */
+  readonly coverage?: ReadonlyMap<string, readonly string[]>;
 }): GateResult {
-  const normalised = passingTests.map((name) => name.toLowerCase().replace(/[^a-z0-9]/g, ""));
+  const passed = passingTests.map(compact);
+
+  // A fuzz test passes as testFuzz_x(uint128) and is declared as testFuzz_x, so the
+  // recorded name is a prefix of the reported one rather than equal to it.
+  const ran = (name: string): boolean =>
+    passed.some((reported) => reported.startsWith(compact(name)));
 
   const unproven = invariantIds.filter((id) => {
-    const needle = id.toLowerCase().replace(/[^a-z0-9]/g, "");
-    return !normalised.some((name) => name.includes(needle));
+    if (passed.some((name) => name.includes(compact(id)))) return false;
+    return !(coverage?.get(id) ?? []).some(ran);
   });
 
   return {

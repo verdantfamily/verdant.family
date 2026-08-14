@@ -35,6 +35,7 @@
 
 import {
   AGEN_BAND_WIDTHS,
+  AGEN_LAUNCH,
   MAX_TICK_ABSOLUTE,
   MIN_USABLE_TICK,
   TICK_SPACING,
@@ -43,7 +44,7 @@ import {
 import type { GeneratedSource } from "./workspace.js";
 
 /** Agen's standard one-billion-token, 1.5 ETH launch, asserted in the SDK tests. */
-const AGEN_INITIAL_TICK = 203_200;
+const AGEN_INITIAL_TICK = AGEN_LAUNCH.initialTick;
 
 /** The allocations encoded by AgenCurve for its opening and middle bands. */
 const AGEN_OPENING_BPS = 1_484;
@@ -604,7 +605,11 @@ abstract contract KeeperAdapter {
 `;
 
 /**
- * The base every generated test extends, and the one thing it exists to do.
+ * Low-level v4 substrate for Agen's deterministic MarketTestBase.
+ *
+ * Generated suites never extend this contract directly. The internal launch helpers
+ * remain here for focused protocol regressions; test generation rejects any attempt to
+ * call them or reconstruct launch plumbing.
  *
  * Uniswap reads a hook's permissions from the low fourteen bits of its address, so a
  * test that deploys the hook with `new MyHook(...)` gets whatever address the nonce
@@ -645,7 +650,7 @@ import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 
 /// @title AgenTest
-/// @notice The base for every generated test. Extend this instead of Test.
+/// @notice Low-level substrate used only by Agen's deterministic MarketTestBase.
 /// @dev Provided by Agen, not generated. It exists because a hook's address encodes its
 /// permissions, which makes "deploy the contract under test" a step that cannot be done
 /// the ordinary way and fails confusingly when it is.
@@ -844,17 +849,25 @@ abstract contract AgenTest is Test {
         });
     }
 
-    function openMarket(address token, address hook, uint24 fee)
+    function marketKey(address token, address hook, uint24 fee)
         internal
-        returns (PoolKey memory key)
+        pure
+        returns (PoolKey memory)
     {
-        key = agenPoolKey(
+        return agenPoolKey(
             Currency.wrap(address(0)),
             Currency.wrap(token),
             IHooks(hook),
             ${String(TICK_SPACING)},
             fee
         );
+    }
+
+    function openMarket(address token, address hook, uint24 fee)
+        internal
+        returns (PoolKey memory key)
+    {
+        key = marketKey(token, hook, fee);
 
         manager.initialize(key, TickMath.getSqrtPriceAtTick(${String(AGEN_INITIAL_TICK)}));
 

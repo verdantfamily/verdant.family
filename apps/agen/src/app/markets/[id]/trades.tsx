@@ -1,7 +1,9 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { POLL_MILLISECONDS } from "../../lib/candles";
 import type { EnrichedTrade } from "../../lib/markets";
 import { DASH, age, eth, feeRate, tokens, usd } from "../../lib/format";
 
@@ -30,13 +32,45 @@ function short(address: string): string {
 }
 
 export function Trades({
-  trades,
+  marketId,
+  trades: initial,
   now,
+  live,
 }: {
+  /** How this app's routes address the market, for the poll below. */
+  readonly marketId: string;
   readonly trades: readonly EnrichedTrade[];
   readonly now: number;
+  /** Nothing to poll for a market with no pool. */
+  readonly live: boolean;
 }) {
   const [tab, setTab] = useState<Tab>("trades");
+
+  /*
+   * Refetched beside the chart, at the same interval and for the same reason.
+   *
+   * The list used to be whatever the server had when the page was served, so a market could
+   * take twenty swaps while somebody watched it and the history under the chart would not
+   * move. A live chart above a frozen list is worse than two static things: it invites the
+   * reader to believe the list is current.
+   *
+   * Seeded with the server's own render, so the first paint has real rows in it and the poll
+   * only ever replaces them with newer ones.
+   */
+  const { data } = useQuery({
+    queryKey: ["agen-trades", marketId],
+    queryFn: async (): Promise<readonly EnrichedTrade[]> => {
+      const response = await fetch(`/api/markets/${marketId}/trades`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`the feed answered ${String(response.status)}`);
+      return ((await response.json()) as { trades: readonly EnrichedTrade[] }).trades;
+    },
+    initialData: initial,
+    refetchInterval: POLL_MILLISECONDS,
+    refetchOnWindowFocus: true,
+    enabled: live,
+  });
+
+  const trades = data;
 
   const events = trades.flatMap((trade) =>
     trade.effects.map((effect, at) => ({

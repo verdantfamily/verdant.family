@@ -18,7 +18,7 @@ import { candles } from "@verdant/sdk";
 import { serializeSeries } from "../../../../lib/candles";
 import { fetchCandles } from "../../../../lib/feed";
 import { fetchInstantCandles } from "../../../../lib/instant-feed";
-import { marketSource } from "../../../../lib/markets";
+import { poolFor } from "../../../../lib/pool-id";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,13 +41,18 @@ export async function GET(
   const limit =
     Number.isInteger(requested) && requested > 0 ? Math.min(requested, MAX_BUCKETS) : 240;
 
-  // The indexer keys markets by pool id, and a page is addressed by build id or by token
-  // address depending on which product made it. The source knows both mappings, and a
-  // market that has not launched has no pool at all — an empty series, not an error.
-  const market = await marketSource().read(id);
-  const poolId = market?.poolId ?? null;
+  /*
+   * The indexer keys markets by pool id, and a page is addressed by build id or by token
+   * address depending on which product made it. A market that has not launched has no pool
+   * at all — an empty series, not an error.
+   *
+   * Through `poolFor`, which remembers the mapping. This is polled once a second per open
+   * tab, and resolving it the long way each time cost a registry read, several token reads
+   * and a metadata fetch to learn a value that cannot change.
+   */
+  const market = await poolFor(id);
 
-  if (market === null || poolId === null) {
+  if (market === null) {
     return NextResponse.json({ series: null }, { headers: { "cache-control": "no-store" } });
   }
 
@@ -61,8 +66,8 @@ export async function GET(
    */
   const series =
     market.kind === "instant"
-      ? await fetchInstantCandles(poolId, interval, limit, true)
-      : await fetchCandles(poolId, interval, limit, true);
+      ? await fetchInstantCandles(market.poolId, interval, limit, true)
+      : await fetchCandles(market.poolId, interval, limit, true);
 
   return NextResponse.json(
     { series: series === null ? null : serializeSeries(series) },

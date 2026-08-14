@@ -267,7 +267,7 @@ export default async function Token({ params }: { params: Promise<{ id: string }
           </aside>
 
           <div className="ax-tk-rest">
-            <Trades trades={trades} now={now} />
+            <Trades marketId={market.id} trades={trades} now={now} live={live} />
 
             {/*
               Only a compiled market has mechanics to explain.

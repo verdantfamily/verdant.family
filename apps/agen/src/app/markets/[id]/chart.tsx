@@ -789,6 +789,45 @@ export function Chart({
    */
   const hasFigure = /[0-9]/.test(headline);
 
+  /*
+   * A tick when the figure changes, and which way it went.
+   *
+   * The headline updates every second and, until now, did so invisibly: the digits were
+   * simply different, which is easy to miss on a number somebody is not staring at. A brief
+   * flash in the direction of the move is what makes a live figure read as live.
+   *
+   * Keyed on the rendered string rather than on the price, so it fires exactly when
+   * something visible changed. A move too small to alter the displayed figure is not a move
+   * as far as this page is concerned, and flashing for it would be a flicker with no
+   * information in it.
+   *
+   * Not applied while the crosshair is down: those changes are the reader's own pointer
+   * moving, not the market, and lighting them up would say the opposite.
+   */
+  const [pulse, setPulse] = useState<"up" | "down" | null>(null);
+  const shownBefore = useRef<string | null>(null);
+  const previous = useRef<bigint | null>(null);
+
+  useEffect(() => {
+    if (hovered !== null || shown === undefined) return;
+
+    const was = shownBefore.current;
+    const wasPrice = previous.current;
+    shownBefore.current = headline;
+    previous.current = shown;
+
+    if (was === null || was === headline || wasPrice === null) return;
+
+    setPulse(shown > wasPrice ? "up" : "down");
+    const clear = setTimeout(() => {
+      setPulse(null);
+    }, 700);
+
+    return () => {
+      clearTimeout(clear);
+    };
+  }, [headline, shown, hovered]);
+
   /** A stored price in whatever unit the chart is currently drawing. */
   const label = (price: bigint): string => write(asFloat(price));
 
@@ -861,7 +900,15 @@ export function Chart({
       <div className="ax-tk-cap">
         <span>{valueScale === null ? "Price" : "Market cap"}</span>
 
-        <strong className={hasFigure ? undefined : "absent"}>{headline}</strong>
+        <strong
+          className={
+            [hasFigure ? "" : "absent", pulse === null ? "" : `pulse-${pulse}`]
+              .filter((part) => part !== "")
+              .join(" ") || undefined
+          }
+        >
+          {headline}
+        </strong>
 
         <div className="ax-tk-move">
           {summary?.change == null ? null : (

@@ -4463,6 +4463,31 @@ span.ax-pager-arrow {
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * The tick a live figure makes when it moves.
+ *
+ * Colour rather than motion: the market cap is the largest thing on the page and nudging it
+ * would move everything under it once a second. The colour rises immediately and decays,
+ * which reads as "that just changed" and leaves the resting state untouched — a figure that
+ * stayed green would be making a claim about the market rather than about the last second.
+ *
+ * `prefers-reduced-motion` is handled by the blanket rule at the end of this file, which
+ * collapses every transition and animation here.
+ */
+.ax-tk-cap > strong {
+  transition: color 0.55s var(--ax-ease);
+}
+
+.ax-tk-cap > strong.pulse-up {
+  color: var(--ax-up);
+  transition: color 0.09s var(--ax-ease);
+}
+
+.ax-tk-cap > strong.pulse-down {
+  color: var(--ax-down);
+  transition: color 0.09s var(--ax-ease);
+}
+
 /* Not a figure, so not set at figure size. See `hasFigure` in `chart.tsx`. */
 .ax-tk-cap > strong.absent {
   font-size: clamp(1.15rem, 1rem + 0.6vw, 1.5rem);

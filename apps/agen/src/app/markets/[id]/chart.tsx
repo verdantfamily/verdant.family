@@ -240,6 +240,8 @@ export function Chart({
   const container = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
   const area = useRef<ISeriesApi<"Area"> | null>(null);
+  /** One point, drawn as a dot: where the line is now. */
+  const tip = useRef<ISeriesApi<"Line"> | null>(null);
 
   /**
    * The library's `LineType`, kept from the dynamic import.
@@ -469,8 +471,15 @@ export function Chart({
     let disposed = false;
 
     void (async () => {
-      const { AreaSeries, ColorType, CrosshairMode, LineStyle, LineType, createChart } =
-        await import("lightweight-charts");
+      const {
+        AreaSeries,
+        ColorType,
+        CrosshairMode,
+        LineSeries,
+        LineStyle,
+        LineType,
+        createChart,
+      } = await import("lightweight-charts");
       if (disposed) return;
 
       lineTypes.current = { simple: LineType.Simple, curved: LineType.Curved };
@@ -489,9 +498,11 @@ export function Chart({
         // against a figure on the axis without tracking across the gap; verticals add
         // nothing but ink, and a dash pattern announces itself where a solid hairline does
         // the same work quietly.
+        // Dotted rather than solid: at this opacity a dotted rule reads as a guide and a
+        // solid one starts reading as a boundary the price is inside of.
         grid: {
           vertLines: { visible: false },
-          horzLines: { color: palette.grid, style: LineStyle.Solid },
+          horzLines: { color: palette.grid, style: LineStyle.Dotted },
         },
         /*
          * Room on both sides of the curve, and width reserved for the axis.
@@ -569,6 +580,26 @@ export function Chart({
         priceFormat: { type: "custom", formatter: labelPrice, minMove: scale.current.minMove },
       });
 
+      /*
+       * A dot on the newest point, as its own one-point series.
+       *
+       * `pointMarkersVisible` on the area series would dot every bucket, and
+       * `priceLineVisible` draws a rule across the pane and a label on the axis — too much
+       * for a figure already set in 2.7rem directly above. A line series with one point and
+       * no line is exactly a dot at exactly the right value.
+       */
+      const marker = created.addSeries(LineSeries, {
+        lineVisible: false,
+        pointMarkersVisible: true,
+        pointMarkersRadius: 3,
+        color: palette.rise,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+      });
+
+      tip.current = marker;
+
       created.subscribeCrosshairMove((move) => {
         const time = typeof move.time === "number" ? move.time : undefined;
         const price = time === undefined ? undefined : byTimeRef.current.get(time);
@@ -625,6 +656,7 @@ export function Chart({
       chart.current?.remove();
       chart.current = null;
       area.current = null;
+      tip.current = null;
       applied.current = null;
       setReady(false);
     };
@@ -725,6 +757,12 @@ export function Chart({
         }
       }
     }
+
+    // The dot follows the line's colour and its last point. Set rather than updated: it is
+    // one point, so there is no tail to extend.
+    const last = points[points.length - 1];
+    tip.current?.applyOptions({ color: rising ? palette.rise : palette.fall });
+    tip.current?.setData(last === undefined ? [] : [{ time: last.time, value: last.value }]);
 
     applied.current = { key, points };
   }, [points, rising, ready, labelPrice, valueScale, usdPerEth, marketId, range.id]);

@@ -454,22 +454,56 @@ export function buildStoreSource(): MarketSource {
  * so unlike a build it cannot exist and not be trading.
  */
 /** How much history a card's line shows: two hours at five minutes a bucket. */
-const SPARK_BUCKETS = 24;
+/**
+ * How much history a card's line asks for: ten hours at five minutes a bucket.
+ *
+ * It was two hours, which drew a flat line on a market that had traded and then gone quiet
+ * — every bucket in the window was the last price carried forward, so the card said
+ * "nothing is happening here" about a token with real buys and sells in it. Reaching wider
+ * and then trimming to where the activity is puts the movement back on the card.
+ */
+const SPARK_BUCKETS = 120;
 
 /**
- * The closes behind a card's sparkline.
+ * The closes behind a card's sparkline, trimmed to the part worth drawing.
  *
  * Undefined rather than an empty array where there is nothing to draw, because `Spark`
  * distinguishes "no history" from "a flat line" and only one of those is true of a market
- * nobody has traded.
+ * nobody has traded. A single point is dropped for the same reason: two are the minimum
+ * that make a line, and one drawn as a line would be a shape asserted from one observation.
  *
- * A single point is dropped for the same reason: two are the minimum that make a line, and
- * one drawn as a line would be a shape asserted from a single observation.
+ * ## Why it is trimmed rather than drawn whole
+ *
+ * A 46-pixel line has room for a shape or for a timeline, not both. Drawn whole, a market
+ * that traded for ten minutes and then sat still for nine hours is a dot on the left and a
+ * ruler across the rest — technically the truth and visually indistinguishable from a
+ * market that has never done anything.
+ *
+ * So the leading flat is dropped entirely (it is the price before anyone traded, which is
+ * not history) and the trailing flat is kept but capped at the length of the active span,
+ * so a card still shows that the market has gone quiet without that being all it shows.
+ * The precise version of this claim lives on the token page, where the chart has the room
+ * to say it: a faded tail and `Last trade 2h ago`.
  */
 function sparkFrom(series: CandleSeries | null): readonly number[] | undefined {
   if (series === null) return undefined;
 
-  const closes = series.candles.map((candle) => Number(candle.close) / 1e36);
+  const candles = series.candles;
+
+  let first = candles.findIndex((candle) => candle.traded);
+  if (first < 0) return undefined;
+
+  let last = candles.length - 1;
+  while (last > first && !candles[last]!.traded) last -= 1;
+
+  // One bucket of run-up, so the first real move starts from somewhere rather than at the
+  // very edge of the card.
+  first = Math.max(0, first - 1);
+
+  const active = last - first + 1;
+  const end = Math.min(candles.length - 1, last + active);
+
+  const closes = candles.slice(first, end + 1).map((candle) => Number(candle.close) / 1e36);
   return closes.length < 2 ? undefined : closes;
 }
 

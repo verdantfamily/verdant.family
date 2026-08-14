@@ -1,6 +1,52 @@
 import { describe, expect, it } from "vitest";
 
-import { seriesDelta, type ChartPoint } from "./candles";
+import { curveOvershoot, seriesDelta, CURVE_TOLERANCE, type ChartPoint } from "./candles";
+
+/**
+ * Whether a curved line would draw a price nobody paid.
+ *
+ * `LineType.Curved` is a cardinal spline and is not shape-preserving, so this is the check
+ * that stands between "smoother" and "wrong". The numbers below are not aesthetic
+ * preferences — they are the library's own control-point formula evaluated on shapes that
+ * occur in real series.
+ */
+describe("measuring what a curve would invent", () => {
+  it("finds nothing to worry about in a smooth rise", () => {
+    // Monotone and evenly spaced: a spline through this stays between the points.
+    const smooth = [1, 1.1, 1.25, 1.4, 1.6, 1.85, 2.1];
+    expect(curveOvershoot(smooth)).toBeLessThanOrEqual(CURVE_TOLERANCE);
+  });
+
+  it("finds nothing to worry about in a flat carried-forward tail", () => {
+    expect(curveOvershoot([1, 1, 1, 1, 1, 1])).toBeLessThanOrEqual(CURVE_TOLERANCE);
+  });
+
+  it("catches the spike a V-shaped drop produces", () => {
+    // The shape `$ATEST` actually has: a close, a zero, then a recovery above the start.
+    // The spline overshoots the recovery and dips below the zero, and both are prices that
+    // never existed.
+    const measured = curveOvershoot([1.512, 0, 1.6996, 1.6996, 1.6996]);
+    expect(measured).toBeGreaterThan(CURVE_TOLERANCE);
+  });
+
+  it("puts a number on that spike rather than only a verdict", () => {
+    // ~7% of the range, which is what makes it a claim rather than smoothing: on a $3.2k
+    // market cap it is roughly $240 of value the chart would be inventing.
+    const measured = curveOvershoot([1.512, 0, 1.6996, 1.6996, 1.6996]);
+    expect(measured).toBeGreaterThan(0.05);
+  });
+
+  it("is not fooled by a series too short to curve", () => {
+    expect(curveOvershoot([])).toBe(0);
+    expect(curveOvershoot([1])).toBe(0);
+    expect(curveOvershoot([1, 2])).toBe(0);
+  });
+
+  it("treats a series with no range as safe rather than dividing by zero", () => {
+    expect(curveOvershoot([0, 0, 0, 0])).toBe(0);
+    expect(Number.isFinite(curveOvershoot([5, 5, 5]))).toBe(true);
+  });
+});
 
 /**
  * How a live chart applies a poll.

@@ -11,7 +11,9 @@ import {
   formatInstant,
   parseSeries,
   seriesDelta,
+  curveOvershoot,
   CHART_FRAMES,
+  CURVE_TOLERANCE,
   DEFAULT_FRAME,
   POLL_MILLISECONDS,
   type AxisScale,
@@ -240,6 +242,15 @@ export function Chart({
   const area = useRef<ISeriesApi<"Area"> | null>(null);
 
   /**
+   * The library's `LineType`, kept from the dynamic import.
+   *
+   * The enum arrives with the chart module, which is loaded on demand, but the decision to
+   * curve is made in the effect that applies data. Holding the enum rather than writing its
+   * numeric values keeps that decision readable.
+   */
+  const lineTypes = useRef<{ readonly simple: number; readonly curved: number } | null>(null);
+
+  /**
    * What the series currently holds, and which series it is.
    *
    * The chart is polled every second, and almost every poll brings back the same buckets
@@ -458,10 +469,11 @@ export function Chart({
     let disposed = false;
 
     void (async () => {
-      const { AreaSeries, ColorType, CrosshairMode, LineStyle, createChart } = await import(
-        "lightweight-charts"
-      );
+      const { AreaSeries, ColorType, CrosshairMode, LineStyle, LineType, createChart } =
+        await import("lightweight-charts");
       if (disposed) return;
+
+      lineTypes.current = { simple: LineType.Simple, curved: LineType.Curved };
 
       const palette = readPalette(element);
 
@@ -657,9 +669,30 @@ export function Chart({
       minMove: axisScaleFor(raw).minMove,
     };
 
+    /*
+     * Curved where curving is truthful, straight where it is not.
+     *
+     * `LineType.Curved` is a cardinal spline, which is smooth and not shape-preserving: at a
+     * sharp reversal it bulges past the points it joins, and on a price chart that bulge is
+     * a high nobody paid. `curveOvershoot` measures exactly how far this series would stray,
+     * using the library's own control-point formula, and the curve is used only when the
+     * answer is under half a percent of the visible range — thinner than the stroke, and so
+     * smoothing rather than a claim.
+     *
+     * Measured rather than assumed, and measured per series rather than once: whether a
+     * curve is safe is a property of the data on screen, and it changes with the timeframe.
+     * `$ATEST` at five minutes strays 7.4% because of a sharp jump off a zero close, and
+     * gets straight segments. Almost everything else curves.
+     */
+    const types = lineTypes.current;
+    const overshoot = curveOvershoot(points.map((point) => point.value));
+
     line.applyOptions({
       lineColor: rising ? palette.rise : palette.fall,
       topColor: rising ? palette.riseSoft : palette.fallSoft,
+      ...(types === null
+        ? {}
+        : { lineType: overshoot <= CURVE_TOLERANCE ? types.curved : types.simple }),
       priceFormat: { type: "custom", formatter: labelPrice, minMove: scale.current.minMove },
     });
 

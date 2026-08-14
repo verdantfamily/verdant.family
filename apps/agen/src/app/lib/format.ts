@@ -139,6 +139,30 @@ export function age(unixSeconds: number, now: number = Math.floor(Date.now() / 1
   return `${String(Math.floor(seconds / 86_400))}d`;
 }
 
+/**
+ * How long ago a token launched, as a card says it.
+ *
+ * Coarser than `age` and phrased rather than abbreviated, because it appears on a shelf of
+ * tokens where the question is "is this new?" and not "how old exactly?". Minutes and hours
+ * stay lowercase; days and weeks go uppercase, which is the convention every exchange uses
+ * to stop `1d` and `1D` from being read as the same span at different precisions.
+ *
+ * Weeks are the last unit. A market old enough for months is old enough that its exact age
+ * has stopped being the interesting thing about it.
+ *
+ * `now` is passed in rather than read, so a server-rendered shelf and the client that
+ * hydrates it cannot disagree about the current second and trip a hydration warning.
+ */
+export function sinceLaunch(unixSeconds: number, now: number): string {
+  const seconds = Math.max(0, now - unixSeconds);
+
+  if (seconds < 60) return "just now";
+  if (seconds < 3_600) return `${String(Math.floor(seconds / 60))}m ago`;
+  if (seconds < 86_400) return `${String(Math.floor(seconds / 3_600))}h ago`;
+  if (seconds < 604_800) return `${String(Math.floor(seconds / 86_400))}D ago`;
+  return `${String(Math.floor(seconds / 604_800))}W ago`;
+}
+
 /** A token amount, compact above a thousand and precise below it. */
 export function tokens(value: number | null | undefined): string {
   if (absent(value)) return DASH;

@@ -13,6 +13,7 @@ import { ethUsd } from "../../lib/eth-price";
 import { eth, marketCapUsd } from "../../lib/format";
 import { INSTANT_FEE_PPM } from "../../lib/instant";
 import { marketSource } from "../../lib/markets";
+import { SiteFooter } from "../../footer";
 import { TopBar } from "../../topbar";
 import { TokenArt } from "../art";
 import { Chart } from "./chart";
@@ -293,27 +294,7 @@ export default async function Token({ params }: { params: Promise<{ id: string }
           </div>
         </div>
 
-        <footer className="ax-footpanel ax-reveal">
-          <div>
-            <span className="ax-footmark">
-              <img src="/mark.png" width={24} height={24} alt="" aria-hidden="true" />
-              agen.space
-            </span>
-            <p>Tokens whose markets have their own rules</p>
-          </div>
-
-          <div className="ax-footlinks">
-            <a href="https://x.com/agendotspace" target="_blank" rel="noreferrer">
-              Twitter / X
-            </a>
-            <a href="https://verdant.family" target="_blank" rel="noreferrer">
-              Canopy Website
-            </a>
-            <a href="https://t.me" target="_blank" rel="noreferrer">
-              Telegram
-            </a>
-          </div>
-        </footer>
+        <SiteFooter />
       </main>
     </div>
   );

@@ -189,6 +189,26 @@ export function Preview({
       .reduce((total, log) => total + log.args.value, 0n);
 
     setCreated({ poolId: event.args.poolId, token: event.args.token, bought, hash: send.data });
+
+    /*
+     * Ask for the token to be source-verified, and do not wait for the answer.
+     *
+     * An unverified token is one whose holders have to take somebody's word for what it
+     * does, and Instant's claim — no mint, no owner, immutable metadata — is only checkable
+     * on an explorer showing the source. So this is part of launching rather than something
+     * the creator is left to do.
+     *
+     * Deliberately after `setCreated` and deliberately unawaited. The market exists; the
+     * success screen is already correct; the explorer takes up to two minutes to index the
+     * block and none of that is worth a creator's attention. Errors are swallowed for the
+     * same reason: there is nothing here a creator could act on, and a failed verification
+     * has no bearing on a token that is already live and tradable.
+     */
+    void fetch("/api/instant/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: event.args.token }),
+    }).catch(() => undefined);
   }, [receipt.isSuccess, receipt.data, send.data, address]);
 
   const go = useCallback(() => {

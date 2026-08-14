@@ -4,6 +4,7 @@ import { ethUsd } from "./lib/eth-price";
 import { marketSource, noveltyOf, type MarketSummary } from "./lib/markets";
 import { TokenCard } from "./markets/card";
 import { Search } from "./search";
+import { SiteFooter } from "./footer";
 import { TopBar } from "./topbar";
 
 export const dynamic = "force-dynamic";
@@ -61,6 +62,9 @@ export default async function Home({
   // Both at once: the rate is a cached module read most of the time, and on the two
   // minutes an hour it is not, there is no reason for the catalogue to wait behind it.
   const [all, usdPerEth] = await Promise.all([marketSource().list(), ethUsd()]);
+
+  // Read once for the whole shelf, so every card measures its age against the same second.
+  const now = Math.floor(Date.now() / 1000);
 
   const needle = query.toLowerCase();
   const found =
@@ -168,7 +172,7 @@ export default async function Home({
           ) : (
             <div className="ax-cards">
               {shown.map((market) => (
-                <TokenCard market={market} usdPerEth={usdPerEth} key={market.id} />
+                <TokenCard market={market} usdPerEth={usdPerEth} now={now} key={market.id} />
               ))}
             </div>
           )}
@@ -190,27 +194,7 @@ export default async function Home({
           <p className="ax-empty">Programmable v4 launches coming soon</p>
         </section>
 
-        <footer className="ax-footpanel ax-reveal">
-          <div>
-            <span className="ax-footmark">
-              <img src="/mark.png" width={24} height={24} alt="" aria-hidden="true" />
-              agen.space
-            </span>
-            <p>Tokens whose markets have their own rules</p>
-          </div>
-
-          <div className="ax-footlinks">
-            <a href="https://x.com/agendotspace" target="_blank" rel="noreferrer">
-              Twitter / X
-            </a>
-            <a href="https://verdant.family" target="_blank" rel="noreferrer">
-              Canopy Website
-            </a>
-            <a href="https://t.me" target="_blank" rel="noreferrer">
-              Telegram
-            </a>
-          </div>
-        </footer>
+        <SiteFooter />
       </main>
     </div>
   );

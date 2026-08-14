@@ -20,6 +20,7 @@ import { useAccount } from "wagmi";
 import { BOUNDS } from "@verdant/config";
 
 import { Bloom } from "../../bloom";
+import { SiteFooter } from "../../footer";
 import { chain } from "../../lib/chain";
 import {
   INSTANT_HELD,
@@ -236,27 +237,7 @@ export function Instant() {
             "Launching on agen.space is completely free, you only pay the network fees."}
         </p>
 
-        <footer className="ax-footpanel">
-          <div>
-            <span className="ax-footmark">
-              <img src="/mark.png" width={24} height={24} alt="" aria-hidden="true" />
-              agen.space
-            </span>
-            <p>Tokens whose markets have their own rules</p>
-          </div>
-
-          <div className="ax-footlinks">
-            <a href="https://x.com/agendotspace" target="_blank" rel="noreferrer">
-              Twitter / X
-            </a>
-            <a href="https://verdant.family" target="_blank" rel="noreferrer">
-              Canopy Website
-            </a>
-            <a href="https://t.me" target="_blank" rel="noreferrer">
-              Telegram
-            </a>
-          </div>
-        </footer>
+        <SiteFooter reveal={false} />
       </main>
 
       {previewing && derived !== null ? (

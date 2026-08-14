@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import type { MarketSummary } from "../lib/markets";
-import { eth, marketCapUsd } from "../lib/format";
+import { eth, marketCapUsd, sinceLaunch } from "../lib/format";
 import { TokenArt } from "./art";
 import { Spark } from "./spark";
 
@@ -27,9 +27,12 @@ function cap(ethValue: number | null | undefined, usdPerEth: number | null): str
 export function TokenCard({
   market,
   usdPerEth = null,
+  now,
 }: {
   readonly market: MarketSummary;
   readonly usdPerEth?: number | null;
+  /** Chain-independent wall clock, passed in so server and client agree on the second. */
+  readonly now: number;
 }) {
   return (
     <Link className="ax-tcard" href={`/markets/${market.id}`}>
@@ -42,7 +45,18 @@ export function TokenCard({
         <span className="ax-tcard-val ax-num">{cap(market.trading?.marketCap, usdPerEth)}</span>
       </span>
 
-      <span className="ax-tcard-name">{market.name}</span>
+      {/*
+        The name and how new this is, on one line.
+
+        A shelf sorted by newest is answering "what just launched", and until now the answer
+        was only legible by position — the first card was newest because it was first, which
+        stops being true the moment somebody sorts by market cap instead. The age is the fact
+        that survives the ordering.
+      */}
+      <span className="ax-tcard-line ax-tcard-sub">
+        <span className="ax-tcard-name">{market.name}</span>
+        <span className="ax-tcard-age">{sinceLaunch(market.createdAt, now)}</span>
+      </span>
 
       <Spark points={market.spark} />
     </Link>

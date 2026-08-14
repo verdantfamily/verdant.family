@@ -8,6 +8,7 @@
     "typecheck": "echo \"solidity: covered by forge build\" && exit 0",
     "lint": "forge fmt --check && bash ../../scripts/check-lint.sh",
     "fmt": "forge fmt",
+    "verification:emit": "bash ../../scripts/emit-verification-input.sh",
     "snapshot": "forge snapshot --match-contract \"GasTest\"",
     "snapshot:check": "forge snapshot --check --match-contract \"GasTest\"",
     "coverage": "forge coverage --no-match-coverage \"(vendor|test|script)\" --no-match-contract \"GasTest\""

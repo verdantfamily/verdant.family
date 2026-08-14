@@ -1,6 +1,42 @@
 import { describe, expect, it } from "vitest";
 
-import { marketCapUsd } from "./format";
+import { marketCapUsd, sinceLaunch } from "./format";
+
+/**
+ * How new a token is, as a card says it.
+ *
+ * The unit changes at each natural boundary and stops at weeks, and the case changes with
+ * it: lowercase for minutes and hours, uppercase for days and weeks, which is what stops
+ * `1d` and `1D` reading as the same span at two precisions.
+ */
+describe("how long ago a token launched", () => {
+  const ago = (seconds: number): string => sinceLaunch(1_000_000, 1_000_000 + seconds);
+
+  it("says just now for the first minute", () => {
+    expect(ago(0)).toBe("just now");
+    expect(ago(59)).toBe("just now");
+  });
+
+  it("counts minutes, then hours", () => {
+    expect(ago(60)).toBe("1m ago");
+    expect(ago(20 * 60)).toBe("20m ago");
+    expect(ago(3_599)).toBe("59m ago");
+    expect(ago(3_600)).toBe("1h ago");
+    expect(ago(3 * 3_600)).toBe("3h ago");
+  });
+
+  it("turns over to days at twenty-four hours, and to weeks at seven days", () => {
+    expect(ago(86_399)).toBe("23h ago");
+    expect(ago(86_400)).toBe("1D ago");
+    expect(ago(6 * 86_400)).toBe("6D ago");
+    expect(ago(604_800)).toBe("1W ago");
+    expect(ago(3 * 604_800)).toBe("3W ago");
+  });
+
+  it("does not go negative on a clock that disagrees with the chain", () => {
+    expect(sinceLaunch(1_000_000, 999_000)).toBe("just now");
+  });
+});
 
 /**
  * A market capitalisation, in the notation a trading interface uses.

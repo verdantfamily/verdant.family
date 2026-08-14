@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { Bloom } from "../bloom";
+import { SiteFooter } from "../footer";
 import { ethUsd } from "../lib/eth-price";
 import { marketSource } from "../lib/markets";
 import { Claims } from "./claims";
@@ -41,27 +42,7 @@ export default async function Profile() {
         <Claims />
         <Portfolio markets={markets} now={now} usdPerEth={usdPerEth} />
 
-        <footer className="ax-footpanel ax-reveal">
-          <div>
-            <span className="ax-footmark">
-              <img src="/mark.png" width={24} height={24} alt="" aria-hidden="true" />
-              agen.space
-            </span>
-            <p>Tokens whose markets have their own rules</p>
-          </div>
-
-          <div className="ax-footlinks">
-            <a href="https://x.com/agendotspace" target="_blank" rel="noreferrer">
-              Twitter / X
-            </a>
-            <a href="https://verdant.family" target="_blank" rel="noreferrer">
-              Canopy Website
-            </a>
-            <a href="https://t.me" target="_blank" rel="noreferrer">
-              Telegram
-            </a>
-          </div>
-        </footer>
+        <SiteFooter />
       </main>
     </div>
   );

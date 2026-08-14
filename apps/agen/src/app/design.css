@@ -1339,14 +1339,28 @@ span.ax-pager-arrow {
   color: var(--ax-ink);
 }
 
-.ax-tcard-name {
+/* The second line of a card: the name, and how new it is. Baseline-aligned with the row
+   above it so the four figures on a card sit on two lines rather than four. */
+.ax-tcard-sub {
   margin-top: 1px;
-  padding-inline: 4px;
+  gap: 8px;
+}
+
+.ax-tcard-name {
   font-size: 0.75rem;
   color: var(--ax-faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Never squeezed by a long name: the age is four characters and the name is what elides. */
+.ax-tcard-age {
+  flex: none;
+  font-size: 0.72rem;
+  letter-spacing: -0.004em;
+  color: var(--ax-faint);
+  font-variant-numeric: tabular-nums;
 }
 
 /*
@@ -1417,6 +1431,65 @@ span.ax-pager-arrow {
   font-size: 0.82rem;
   line-height: 1.5;
   color: var(--ax-muted);
+}
+
+/*
+ * The attribution, and the address it names.
+ *
+ * Under the tagline rather than beside it, because it is a second sentence about the same
+ * thing rather than a competing column. Wider than the tagline's 22ch measure — an address
+ * is forty characters and wrapping it mid-word would make the ends, which are the parts
+ * anybody checks, land in the middle of two lines.
+ */
+.ax-footcnpy {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: none !important;
+  margin-top: 14px !important;
+}
+
+.ax-footcnpy strong {
+  font-weight: 500;
+  color: var(--ax-body);
+}
+
+.ax-footca {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  padding: 3px 9px;
+  font: inherit;
+  font-size: 0.74rem;
+  letter-spacing: -0.004em;
+  color: var(--ax-muted);
+  background: var(--ax-paper);
+  border: 1px solid var(--ax-line);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.16s var(--ax-ease), border-color 0.16s var(--ax-ease);
+}
+
+.ax-footca:hover {
+  color: var(--ax-ink);
+  border-color: #d2d2d2;
+}
+
+/* The ends stay the ends. Eliding here rather than slicing in the component keeps the whole
+   address selectable and on the clipboard. */
+.ax-footca span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.ax-footca svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
 }
 
 .ax-footlinks {

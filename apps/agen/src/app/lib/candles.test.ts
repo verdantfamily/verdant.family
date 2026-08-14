@@ -94,6 +94,46 @@ describe("recognising a poll that has to be redrawn", () => {
   });
 });
 
+/**
+ * A bucket that was observed, and one that was only carried forward.
+ *
+ * The distinction is the SDK's — `fill` marks a bucket it invented with `traded: false` and
+ * zero volume — and it has to survive into what is drawn, because a price somebody paid and
+ * a price the pool is merely still holding are different claims.
+ */
+describe("telling a traded bucket from a carried-forward one", () => {
+  it("redraws when a completed bucket has flipped to traded at the same price", () => {
+    // A bucket that had closed as carried-forward and now reports a trade at exactly the
+    // price it was already holding. The value is identical, so comparing values alone calls
+    // this a no-op — and leaves that point drawn as a bucket nothing happened in.
+    const held = points([60, 10], [120, 11], [180, 12], [240, 13]).map((p, i) => ({
+      ...p,
+      traded: i < 1,
+    }));
+    const next = held.map((p, i) => ({ ...p, traded: i < 2 }));
+
+    expect(seriesDelta(held, next)).toEqual({ kind: "redraw" });
+  });
+
+  it("calls a flip in the live bucket a tail, because that point is re-sent anyway", () => {
+    // The newest bucket is always in the updated range, so its colour travels with its
+    // value and there is nothing to redraw for.
+    const held = points([60, 10], [120, 11]).map((p, i) => ({ ...p, traded: i < 1 }));
+    const next = held.map((p) => ({ ...p, traded: true }));
+
+    expect(seriesDelta(held, next)).toEqual({ kind: "tail", from: 1 });
+  });
+
+  it("still calls an unchanged series a tail", () => {
+    const held = points([60, 10], [120, 11]).map((p) => ({ ...p, traded: true }));
+    expect(seriesDelta(held, held)).toEqual({ kind: "tail", from: 1 });
+  });
+
+  it("ignores the flag where it was never set, so plain points behave as before", () => {
+    expect(seriesDelta(HELD, HELD)).toEqual({ kind: "tail", from: 2 });
+  });
+});
+
 describe("the shape of a market's first minutes", () => {
   it("takes one redraw and then only tails, as a market opens and trades", () => {
     // A market is launched and then traded into, second by second. Counting the redraws is

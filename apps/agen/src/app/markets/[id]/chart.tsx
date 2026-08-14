@@ -18,7 +18,7 @@ import {
   type ChartPoint,
   type SerializedSeries,
 } from "../../lib/candles";
-import { marketCapUsd } from "../../lib/format";
+import { age, marketCapUsd } from "../../lib/format";
 
 /**
  * A market's value over the span a reader chooses.
@@ -115,6 +115,36 @@ interface Palette {
  * `fillStyle` untouched, so a result identical to the sentinel means the conversion did
  * not happen and the caller's fallback should stand.
  */
+/**
+ * The ceiling the candles route enforces, restated so the client stops asking rather than
+ * escalating into a request it knows will be trimmed.
+ */
+const MAX_BUCKETS = 1_000;
+
+/**
+ * The fewest observed buckets that describe a movement rather than a level.
+ *
+ * Two points make a line; a third stops that line being an artefact of where the window
+ * was cut. Below this the window reaches further back at the same bucket size.
+ */
+const ENOUGH_TRADED = 3;
+
+/** How far the window may be stretched: 1, then 4, then 16 times the frame's own depth. */
+const MAX_REACH = 16;
+
+/**
+ * The tail after the last trade, in grey rather than in the market's colour.
+ *
+ * Dormant is not a direction. A faded green tail would say the market is quietly rising
+ * when what it is doing is nothing, so the treatment drops the hue entirely — which is
+ * also why this needs no `rise`/`fall` pair and can be a constant the first paint already
+ * has, before the stylesheet has been read.
+ */
+const DORMANT = {
+  line: "rgba(154, 154, 160, 0.55)",
+  top: "rgba(154, 154, 160, 0.06)",
+} as const;
+
 const SENTINEL = "#ff00ff";
 
 function toRgba(value: string): string | null {
@@ -261,20 +291,42 @@ export function Chart({
 
   const labelPrice = write;
 
-  // The server rendered one span and the rest are fetched. `initialData` is given only
-  // for that one, so choosing another shows a load rather than the previous series
-  // relabelled at a scale it was not drawn at.
+  /**
+   * How far back to ask, as a multiple of the timeframe's own window.
+   *
+   * A market that trades every minute needs none of this. A market whose last trade was
+   * twenty minutes ago, viewed at five-minute buckets, has four filled buckets and nothing
+   * else in its window — a flat line with no movement in it, which looks like a broken
+   * chart rather than like a quiet market. Reaching further back at the *same* bucket size
+   * is what puts the last real movement on screen without changing the resolution the
+   * reader asked for.
+   *
+   * Escalated from the answer rather than guessed from the clock, because how much history
+   * is enough depends on when this market last traded and nothing here knows that until it
+   * has asked once.
+   */
+  const [reach, setReach] = useState(1);
+  useEffect(() => {
+    setReach(1);
+  }, [marketId, range.id]);
+
+  const limit = Math.min(range.buckets * reach, MAX_BUCKETS);
+
   const { data, isPending, isError } = useQuery({
-    queryKey: ["agen-candles", marketId, range.id],
+    queryKey: ["agen-candles", marketId, range.id, limit],
     queryFn: async (): Promise<SerializedSeries | null> => {
       const response = await fetch(
-        `/api/markets/${marketId}/candles?interval=${range.id}&limit=${String(range.buckets)}`,
+        `/api/markets/${marketId}/candles?interval=${range.id}&limit=${String(limit)}`,
         { cache: "no-store" },
       );
       if (!response.ok) throw new Error(`the feed answered ${String(response.status)}`);
       return ((await response.json()) as { series: SerializedSeries | null }).series;
     },
-    ...(range.id === DEFAULT_FRAME.id && initial !== null ? { initialData: initial } : {}),
+    // The server rendered the default timeframe at its default depth, so that one paint is
+    // free. Any other timeframe, or a stretched window, is fetched.
+    ...(range.id === DEFAULT_FRAME.id && limit === DEFAULT_FRAME.buckets && initial !== null
+      ? { initialData: initial }
+      : {}),
     refetchInterval: POLL_MILLISECONDS,
     // A token page is often left open in a background tab, and a chart that resumed
     // hours behind is worse than one that reloads when looked at.
@@ -283,19 +335,75 @@ export function Chart({
     enabled: live && feedConfigured,
   });
 
-  const series = useMemo(
-    () => (data === undefined || data === null ? null : parseSeries(data).candles),
+  const parsed = useMemo(
+    () => (data === undefined || data === null ? null : parseSeries(data)),
     [data],
   );
 
-  const points = useMemo(
-    () =>
-      (series ?? []).map((candle) => ({
-        time: candle.start as UTCTimestamp,
-        value: asFloat(candle.close),
-      })),
-    [series],
-  );
+  const series = parsed?.candles ?? null;
+
+  /**
+   * Chart time, from the feed rather than from this device.
+   *
+   * "Twenty minutes ago" is measured against the block the feed answered at. A browser
+   * clock that is a minute out would put the last trade in the future, and the one figure
+   * whose job is to say how stale the line is must not be the stale thing.
+   */
+  const at = parsed?.at ?? null;
+
+  /** Grey, and settled before the stylesheet is read, so the first paint is not colourful. */
+  const fade = DORMANT;
+
+  /** How many buckets in the window were actually traded in, and when the last one was. */
+  const activity = useMemo(() => {
+    const traded = (series ?? []).filter((candle) => candle.traded);
+    return { count: traded.length, lastAt: traded[traded.length - 1]?.start ?? null };
+  }, [series]);
+
+  /*
+   * Reach further back when the window holds almost no real movement.
+   *
+   * `ENOUGH_TRADED` is the smallest number of observed buckets that can describe a
+   * movement rather than a level: two points make a line, and a third stops that line
+   * being an artefact of where the window happened to be cut. Below that the window is
+   * widened, at most twice, and never past what the route will serve.
+   */
+  useEffect(() => {
+    if (series === null || limit >= MAX_BUCKETS) return;
+    if (activity.count >= ENOUGH_TRADED) return;
+
+    setReach((was) => (was >= MAX_REACH ? was : was * 4));
+  }, [series, activity.count, limit]);
+
+  /**
+   * The points, with the quiet tail marked.
+   *
+   * Only the *trailing* run of filled buckets is faded. An interior gap sits between two
+   * real trades and is anchored by both, so a reader can see what it is; the tail is the
+   * part that could mislead, because a line running confidently to the right edge looks
+   * like a market doing something when in fact nothing has happened since the last trade.
+   *
+   * Fading every filled bucket instead was the other option and is worse: on a market that
+   * trades a few times an hour, almost the whole line would be faded and the treatment
+   * would stop meaning anything. The `Last trade` figure in the readout carries the precise
+   * claim; this is only the visual cue that the right-hand end is not news.
+   */
+  const points = useMemo(() => {
+    const candles = series ?? [];
+
+    // Where the quiet tail begins: one past the newest observed bucket.
+    let tailFrom = candles.length;
+    while (tailFrom > 0 && !candles[tailFrom - 1]!.traded) tailFrom -= 1;
+
+    return candles.map((candle, at) => ({
+      time: candle.start as UTCTimestamp,
+      value: asFloat(candle.close),
+      traded: candle.traded,
+      // The first faded point has to keep the live colour, because a segment is drawn in
+      // the colour of the point it ends at — fading it would fade the last real move.
+      ...(at > tailFrom ? { lineColor: fade.line, topColor: fade.top } : {}),
+    }));
+  }, [series, fade.line, fade.top]);
 
   /** The integer prices, so a readout shows the price rather than a rounded float. */
   const byTime = useMemo(() => {
@@ -633,6 +741,20 @@ export function Chart({
   /** The one empty state that is ordinary rather than a fault, and is set as such. */
   const waiting = empty === "Waiting for first trade";
 
+  /**
+   * How long the line has been coasting, where that is worth saying.
+   *
+   * Only when the newest bucket is a filled one: while trades are landing in the bucket on
+   * screen, "last trade 0m ago" is noise. This is the precise claim behind the faded tail —
+   * the fade says the right-hand end is not news, and this says how long it has not been.
+   */
+  const quietFor =
+    at !== null && activity.lastAt !== null && series !== null && series.length > 0
+      ? series[series.length - 1]!.traded
+        ? null
+        : age(activity.lastAt, at)
+      : null;
+
   return (
     <section className="ax-tk-chart">
       <header className="ax-tk-top">
@@ -692,6 +814,10 @@ export function Chart({
               low {label(summary.low)} · high {label(summary.high)} · {String(summary.trades)}{" "}
               {summary.trades === 1 ? "trade" : "trades"}
             </span>
+          )}
+
+          {quietFor === null ? null : (
+            <span className="ax-tk-quiet">Last trade {quietFor} ago</span>
           )}
         </div>
       </div>

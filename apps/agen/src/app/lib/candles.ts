@@ -64,6 +64,15 @@ export function serializeSeries(series: CandleSeries): SerializedSeries {
 export interface ChartPoint {
   readonly time: number;
   readonly value: number;
+  /**
+   * Whether anything actually traded in this bucket.
+   *
+   * Carried through to the canvas because the two are not the same claim. An observed
+   * bucket is a price somebody paid; a filled one is the price the pool is still holding
+   * because nobody has moved it. `fill` in the SDK already distinguishes them and sets zero
+   * volume on the second, and this is how that distinction survives into what is drawn.
+   */
+  readonly traded?: boolean;
 }
 
 /**
@@ -104,9 +113,12 @@ export function seriesDelta(
     // A bucket has rolled off the front, so every index has shifted.
     if (now === undefined || now.time !== old.time) return { kind: "redraw" };
 
-    // Completed buckets must agree. The last one held is the live bucket and may move.
+    // Completed buckets must agree, in value and in whether they were observed: a bucket
+    // that has flipped from filled to traded is drawn differently even at the same price.
     const completed = at < held.length - 1;
-    if (completed && now.value !== old.value) return { kind: "redraw" };
+    if (completed && (now.value !== old.value || now.traded !== old.traded)) {
+      return { kind: "redraw" };
+    }
   }
 
   return { kind: "tail", from: held.length - 1 };

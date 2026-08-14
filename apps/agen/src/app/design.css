@@ -4391,6 +4391,23 @@ span.ax-pager-arrow {
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * How long the line has been coasting.
+ *
+ * A pill rather than another word in the row, because it is a different kind of statement
+ * from the figures beside it: those describe the window, this describes how much of the
+ * window is real. Grey, matching the faded tail it explains.
+ */
+.ax-tk-quiet {
+  padding: 2px 9px;
+  font-size: 0.72rem;
+  letter-spacing: -0.006em;
+  color: var(--ax-faint);
+  background: var(--ax-fill);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
 .ax-tk-move .up {
   color: var(--ax-up);
 }

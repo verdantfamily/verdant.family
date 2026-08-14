@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 import { Bloom } from "../bloom";
-import { buildStoreSource } from "../lib/markets";
+import { marketSource } from "../lib/markets";
 import { Claims } from "./claims";
 import { Portfolio } from "./portfolio";
 
@@ -19,7 +19,15 @@ export const metadata: Metadata = {
  * is looking is something only the browser knows — see the note in `Portfolio`.
  */
 export default async function Profile() {
-  const markets = await buildStoreSource().list();
+  /*
+   * Both products, which is what "the tokens you have created" means.
+   *
+   * This read the build store alone, which was the whole catalogue back when a build was
+   * the only way to make a market. It stopped being true the day Instant opened, and the
+   * failure was a quiet one: a creator whose Instant fees were accruing in the panel
+   * directly above was told by this page that they had never launched anything.
+   */
+  const markets = await marketSource().list();
   const now = Math.floor(Date.now() / 1000);
 
   return (

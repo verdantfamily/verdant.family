@@ -28,7 +28,7 @@ import { useAccount, usePublicClient, useSendTransaction, useSwitchChain, useWai
 import { abi, instant as instantSdk, launch as launchSdk } from "@verdant/sdk";
 
 import { CHAIN_ID, EXPLORER_URL, INSTANT_ADDRESSES, chain, shortAddress } from "../../lib/chain";
-import { INSTANT_FEE_PERCENTS, instantParams, type Derived } from "../../lib/instant";
+import { INSTANT_FEE_PERCENTS, absoluteUrl, instantParams, type Derived } from "../../lib/instant";
 
 interface Prepared {
   readonly salt: Hex;
@@ -115,7 +115,17 @@ export function Preview({
           return;
         }
 
-        const metadataURI = new URL(body.url, window.location.origin).toString();
+        // Against the configured origin, not the one this tab happens to be on. The same
+        // app answers on more than one hostname — `agen.space` and `www.agen.space` both
+        // reach it — and this string is written into the token with `metadataMutable`
+        // false, so whichever host the creator arrived through is the host every wallet
+        // and explorer will ask forever. `siteOriginProblem` has already refused the
+        // launch if that origin is missing or local, so this cannot be null here.
+        const metadataURI = absoluteUrl(body.url);
+        if (metadataURI === null) {
+          if (live) setError("This build has no public address, so the token details cannot be recorded.");
+          return;
+        }
 
         const identity = {
           name: derived.name,

@@ -91,21 +91,37 @@ describe("the address a token records forever", () => {
   });
 });
 
-describe("the hold on launching", () => {
-  it("refuses every draft while the fee cannot be paid in ether", () => {
-    // The live hook charges Uniswap's LP fee, which is taken from whatever goes into the
-    // pool — ether on a buy, the launched token on a sell. Instant says the creator earns
-    // ether, so until a hook exists that can take the fee from the ether leg of both
-    // directions, no Instant market may be created. Deleting this test is not how the
-    // hold lifts; deploying that hook is.
-    expect(INSTANT_LAUNCHABLE).toBe(false);
-    expect(validateAll(draft(), CREATOR)).toContain(INSTANT_HELD);
+/**
+ * The hold, lifted.
+ *
+ * It was never about an unfinished screen. Instant promises the creator earns in ether,
+ * and `VerdantHook` charges Uniswap's LP fee, taken from whatever goes *into* the pool —
+ * ether on a buy, the launched token on a sell. So the hold stood until a hook existed
+ * that takes from the ether leg in both directions, and the note where it was asserted
+ * said plainly that deleting the test was not how it would lift; deploying that hook was.
+ *
+ * That is what happened. `InstantHook` and `InstantFactory` are live on 4663 and recorded
+ * in `@verdant/config`, the fork lifecycle passed, and `scripts/preflight-instant.ts`
+ * reads the deployment's wiring back off the chain and simulates an encoded launch against
+ * it. These tests now hold the switch in the open position, so turning it back is a
+ * deliberate act with a failing test attached rather than a quiet edit.
+ */
+describe("the hold on launching, lifted", () => {
+  it("lets a complete draft through", () => {
+    expect(INSTANT_LAUNCHABLE).toBe(true);
+    expect(validateAll(draft(), CREATOR)).toEqual([]);
+  });
+
+  it("no longer says the fee cannot be paid in ether, because it can", () => {
+    expect(validateAll(draft(), CREATOR)).not.toContain(INSTANT_HELD);
   });
 
   it("still says what else is wrong, so the form stays usable", () => {
+    // The point this has always made, and the reason it outlived the hold: a draft with a
+    // real problem is told about that problem, in the place the creator is about to press.
     const problems = validateAll(draft({ name: "" }), CREATOR);
-    expect(problems).toContain(INSTANT_HELD);
     expect(problems).toContain("Your token needs a name.");
+    expect(problems).not.toContain(INSTANT_HELD);
   });
 });
 

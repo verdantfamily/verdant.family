@@ -51,29 +51,36 @@ import type { instant as instantTypes } from "@verdant/sdk";
 import { getAddress, isAddress, type Address, type Hex } from "viem";
 
 /**
- * Whether an Instant market can actually be created yet. It cannot.
+ * Whether an Instant market can actually be created. It can.
  *
- * Not a feature flag for an unfinished screen — the screen is finished. It is a hold on
- * an economic promise, and the promise is that the creator earns their share in ether.
+ * Never a feature flag for an unfinished screen — the screen was finished long before
+ * this was turned over. It was a hold on an economic promise, and the promise is that the
+ * creator earns their share in ether.
  *
- * `VerdantHook` cannot keep it. Uniswap takes an ordinary LP fee from whichever token is
- * going *into* the pool — ether on a buy, the launched token on a sell — so a creator on
- * that deployment would earn roughly half of their fee in a token they never asked to
+ * `VerdantHook` could not keep it. Uniswap takes an ordinary LP fee from whichever token
+ * is going *into* the pool — ether on a buy, the launched token on a sell — so a creator
+ * on that deployment would earn roughly half of their fee in a token they never asked to
  * hold, and the interface would either have to say so, contradicting the product, or not
  * say so, which is worse. Keeping the promise needs a hook that takes from the ether leg
  * in both directions, which needs `beforeSwapReturnDelta` and `afterSwapReturnDelta`, and
  * a hook's permissions are its address — so it is a new hook, and because a factory and
  * its hook name each other in immutables, a new factory with it.
  *
- * **Both now exist**, as `InstantHook` and `InstantFactory`, and are tested against real
- * v4 contracts. What is not done is the deployment: this stays false until the full
- * lifecycle has been run on a 4663 fork — launch, first buy, external buy and sell, both
- * ether accruals, both claims, and the position still locked at the end of it — and the
- * addresses those contracts land on are configured. See ADR-014.
+ * Both now exist as `InstantHook` and `InstantFactory`, are deployed to 4663, and are
+ * recorded in `@verdant/config` — which is where `lib/chain.ts` reads them from, so the
+ * addresses travel with the code that was verified against them. What was waited for was
+ * the evidence: the full lifecycle on a fork (launch, first buy, external buy and sell,
+ * both ether accruals, both claims, position still locked), then the live deployment's own
+ * wiring, which `scripts/preflight-instant.ts` reads back off the chain and finishes by
+ * simulating an encoded launch against the deployed factory. See ADR-014.
+ *
+ * Annotated `boolean` rather than inferred as `true`, so the interface's own handling of
+ * the closed case stays type-checked code instead of becoming unreachable the moment this
+ * flipped. It is a switch, and a switch that cannot be turned back is not one.
  */
-export const INSTANT_LAUNCHABLE = false;
+export const INSTANT_LAUNCHABLE: boolean = true;
 
-/** Why the button is off, in the words the interface uses. */
+/** Why the button is off, in the words the interface uses, when it is off. */
 export const INSTANT_HELD =
   "Instant opens once creator fees are paid fully in ether. On the contracts live today " +
   "a creator would earn part of their fee in their own token, which is not what Instant " +

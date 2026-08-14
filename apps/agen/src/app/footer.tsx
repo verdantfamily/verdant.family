@@ -48,7 +48,7 @@ export function SiteFooter({ reveal = true }: { readonly reveal?: boolean }) {
         <a href="https://canopyfinance.io" target="_blank" rel="noreferrer">
           Canopy Website
         </a>
-        <a href="https://t.me" target="_blank" rel="noreferrer">
+        <a href="https://t.me/canopytg" target="_blank" rel="noreferrer">
           Telegram
         </a>
       </div>

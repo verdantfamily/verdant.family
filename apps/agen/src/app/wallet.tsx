@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Connector } from "wagmi";
 import { useAccount, useConnect, useConnectors, useDisconnect, useSwitchChain } from "wagmi";
 
@@ -27,6 +28,13 @@ import { CHAIN_ID, chain, shortAddress } from "./lib/chain";
  * viewport or shrinks the wallet list to something nobody can tap. A centred dialog over
  * a dimmed page is the same on both, and connecting a wallet deserves the whole screen's
  * attention anyway — it is the step everything else depends on.
+ *
+ * Portalled to `document.body`. The button lives in the nav, the nav lives in the bloom,
+ * and the bloom is `isolation: isolate` so its photograph can sit behind the type. A
+ * `position: fixed` dialog that stays in that tree is painted as part of the bloom, which
+ * means the launch cards — later in the document, and transformed on hover — sit on top
+ * of it. The stylesheet already said this dialog was outside `.ax-page`; the portal is
+ * what makes that true.
  */
 export function Wallet() {
   const [open, setOpen] = useState(false);
@@ -85,8 +93,10 @@ export function Wallet() {
         {face}
       </button>
 
-      {!open ? null : (
-        <div className="axw" role="presentation">
+      {!open
+        ? null
+        : createPortal(
+            <div className="axw" role="presentation">
           <div
             className="axw-scrim"
             aria-hidden="true"
@@ -170,8 +180,9 @@ export function Wallet() {
               />
             )}
           </div>
-        </div>
-      )}
+        </div>,
+            document.body,
+          )}
     </div>
   );
 }

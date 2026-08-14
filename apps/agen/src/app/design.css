@@ -3057,7 +3057,8 @@ body:has(.ax-page) {
     font-size: 1.35rem;
   }
 
-  .ax-explore-head h2 {
+  .ax-explore-head h2,
+  .ax-lede {
     font-size: 1.5rem;
   }
 
@@ -3804,12 +3805,19 @@ body:has(.ax-page) {
   max-width: 1020px;
 }
 
+/*
+ * The same size as "Explore" on the front page, on purpose.
+ *
+ * This is the heading of the choice, not a caption under it. It used to be 0.85rem —
+ * smaller than the card titles below it — which made "You can choose between 3 launch
+ * models" read as a footnote to a heading that was not there.
+ */
 .ax-lede {
   margin: 44px 0 30px;
   text-align: center;
-  font-size: 0.85rem;
+  font-size: clamp(1.6rem, 1.2rem + 1.4vw, 2.1rem);
   font-weight: 500;
-  letter-spacing: -0.012em;
+  letter-spacing: -0.034em;
   color: var(--ax-ink);
 }
 

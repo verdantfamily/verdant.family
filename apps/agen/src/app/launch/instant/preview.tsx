@@ -230,6 +230,21 @@ export function Preview({
 
   const waiting = send.isPending || receipt.isLoading;
 
+  /**
+   * A wallet that cannot reach this chain at all, told apart from one that merely has not
+   * switched yet.
+   *
+   * Some wallets carry a fixed list of networks and will not take a new one — Phantom is the
+   * common case, whose EVM support is Ethereum, Base, Polygon, Monad and HyperEVM with no
+   * way to add anything else. Asked to switch to 4663 they refuse, and asked to sign anyway
+   * they fail with a message of their own that reads like the site is broken.
+   *
+   * There is nothing to fix on this side, so the only useful thing is to say which of the
+   * two situations this is. Detected from the switch failing rather than from the wallet's
+   * name: a list of wallet names here would be wrong the moment one of them adds the chain.
+   */
+  const cannotReachChain = switchChain.error !== null;
+
   const label = wrongNetwork
     ? switchChain.isPending
       ? "waiting for your wallet…"
@@ -365,6 +380,18 @@ export function Preview({
             {label}
           </button>
         )}
+
+        {/*
+          Said here rather than left to the wallet, which says "Transaction Error" and
+          invites the creator to try again at something that cannot work.
+        */}
+        {cannotReachChain ? (
+          <p className="ax-preview-note">
+            This wallet cannot add {chain.name}. Phantom and some others only support the
+            networks they ship with. Connect with MetaMask, Rabby, or any wallet that allows
+            a custom network, and the launch will work.
+          </p>
+        ) : null}
 
         {error === null ? null : <p className="ax-preview-note">{error}</p>}
         {send.error !== null && !isRejection(send.error) ? (

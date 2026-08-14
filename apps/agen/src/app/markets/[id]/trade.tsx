@@ -540,6 +540,21 @@ export function TradePanel({ market }: { readonly market: TradeMarket }) {
         <p className="ax-tk-note good">Done. Your balance has updated.</p>
       ) : null}
 
+      {/*
+        A wallet that will not take this chain, said here rather than left to the wallet.
+        
+        Some carry a fixed list of networks and refuse a new one — Phantom is the common
+        case. Asked to sign anyway they fail with a message of their own that reads like the
+        site is broken. Detected from the switch failing rather than from the wallet's name,
+        which would be wrong the moment one of them adds the chain.
+      */}
+      {switchChain.error !== null ? (
+        <p className="ax-tk-note bad">
+          This wallet cannot add {chain.name}. Connect with MetaMask, Rabby, or another wallet
+          that allows a custom network.
+        </p>
+      ) : null}
+
       {send.error !== null && !isRejection(send.error) ? (
         <p className="ax-tk-note bad">{shorten(send.error.message)}</p>
       ) : null}

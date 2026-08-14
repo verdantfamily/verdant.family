@@ -22,6 +22,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Bloom } from "../bloom";
 import { SiteFooter } from "../footer";
 import type { PublicJob } from "../lib/builds";
+import { PROGRAMMABLE_HELD, PROGRAMMABLE_LAUNCHABLE } from "../lib/programmable";
 import { Info } from "./info";
 import { Progress } from "./progress";
 import { ImageField } from "./image-field";
@@ -314,7 +315,10 @@ export function Flow() {
 
   const described = description.trim().length >= 12;
   const named = name.trim().length > 0 && symbol.trim().length > 0;
-  const canBuild = described && named && !starting && ready !== false;
+  // The hold first, because it is a fact about the product rather than about what was
+  // typed: no amount of filling this in makes the button work while Programmable is closed.
+  const canBuild =
+    PROGRAMMABLE_LAUNCHABLE && described && named && !starting && ready !== false;
 
   /**
    * Why the button is off, in words, next to the button.
@@ -323,8 +327,9 @@ export function Flow() {
    * somebody's afternoon — particularly this one, where the two requirements are in
    * different halves of the screen.
    */
-  const blocked =
-    ready === false
+  const blocked = !PROGRAMMABLE_LAUNCHABLE
+    ? PROGRAMMABLE_HELD
+    : ready === false
       ? "Agen cannot build anything right now — the server has no model connected to it."
       : !described && !named
         ? "Say what your token should do, and give it a name and a ticker."
@@ -356,6 +361,20 @@ export function Flow() {
       </Bloom>
 
       <main className="ax-wrap ax-create">
+      {/*
+        Stated once, at the top, in the page's own voice rather than in red.
+        
+        The same shape Instant used while it was held: the screen stays reachable and
+        explains itself, because a model that exists and is not open yet is a different
+        thing from one that does not exist, and hiding it would make the shelf a lie about
+        how many there are.
+      */}
+      {PROGRAMMABLE_LAUNCHABLE ? null : (
+        <p className="ax-held">
+          <strong>Not open yet.</strong> {PROGRAMMABLE_HELD}
+        </p>
+      )}
+
       {phase === "describe" ? (
         <section>
           <div className="ax-block">

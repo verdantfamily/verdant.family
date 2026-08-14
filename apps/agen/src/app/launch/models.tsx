@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Bloom } from "../bloom";
 import { SiteFooter } from "../footer";
 import { INSTANT_LAUNCHABLE } from "../lib/instant";
+import { PROGRAMMABLE_LAUNCHABLE } from "../lib/programmable";
 
 /**
  * The three ways to open a market, as a shelf.
@@ -63,8 +64,11 @@ const MODELS: readonly Model[] = [
     name: "Programmable v4",
     copy: "Describe the behaviour you want in plain English. Agen builds the custom onchain v4 logic.",
     art: "/programmable.png",
-    action: "Launch Programmable",
+    action: PROGRAMMABLE_LAUNCHABLE ? "Launch Programmable" : "See Programmable",
     href: "/launch/programmable",
+    // Reachable and not creatable, the same shape Instant had while it was held: the screen
+    // explains itself rather than being hidden behind a dead button. See lib/programmable.ts.
+    soon: !PROGRAMMABLE_LAUNCHABLE,
   },
   {
     id: "evergreen",

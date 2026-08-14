@@ -47,6 +47,44 @@ export function eth(value: number | null | undefined): string {
   return `${value.toLocaleString("en-US", { maximumFractionDigits: 4 })} ETH`;
 }
 
+/**
+ * A market capitalisation in dollars: `$14.7k`, `$591.4k`, `$1.92M`.
+ *
+ * The one figure on this site that is always money, because it is the one figure that
+ * exists to be compared — against other tokens and against what somebody is about to
+ * spend, neither of which most readers hold an intuition for in ether.
+ *
+ * A lowercase `k` and an uppercase `M`, which is what a trading interface uses and not
+ * what `Intl` produces. More precision above a million than below it: the step between
+ * `$1.9M` and `$2.0M` is a hundred thousand dollars, and hiding it to save one character
+ * makes the largest markets the least legible.
+ *
+ * Takes the rate rather than reading one, so a component cannot render a dollar figure
+ * without a caller having obtained a rate — and `null` falls back to ether at the call
+ * site rather than to a guess here.
+ */
+export function marketCapUsd(
+  ethValue: number | null | undefined,
+  usdPerEth: number | null,
+): string | null {
+  if (absent(ethValue) || usdPerEth === null) return null;
+
+  const value = ethValue * usdPerEth;
+  if (value === 0) return "$0";
+
+  // Below a dollar the compact notation has nothing to shorten and rounding flattens
+  // every young market to the same string.
+  if (value < 1) return `$${value.toPrecision(2)}`;
+  if (value < 1_000) return `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+
+  const compact = new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: value < 1_000_000 ? 1 : 2,
+  }).format(value);
+
+  return `$${compact.replace("K", "k")}`;
+}
+
 /** Compact money, as a trader reads it: `$18.4K`, `$1.2M`. */
 export function usdCompact(value: number | null | undefined): string {
   if (absent(value)) return DASH;

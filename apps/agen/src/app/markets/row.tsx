@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import type { MarketSummary } from "../lib/markets";
-import { age, eth, percent } from "../lib/format";
+import { age, eth, marketCapUsd, percent } from "../lib/format";
 import { TokenArt } from "./art";
 
 /**
@@ -15,11 +15,14 @@ export function TokenRow({
   market,
   now,
   index,
+  usdPerEth = null,
 }: {
   readonly market: MarketSummary;
   readonly now: number;
   /** Staggers the entrance so the list assembles rather than appearing. */
   readonly index: number;
+  /** Null where no rate could be fetched, which shows the cap in ether instead. */
+  readonly usdPerEth?: number | null;
 }) {
   const trading = market.trading;
   const change = trading?.change24hPercent ?? null;
@@ -61,7 +64,9 @@ export function TokenRow({
       <span className="ax-row-rule">{market.headline}</span>
 
       <span className="ax-row-fig">
-        <span className="ax-row-val ax-num">{eth(trading?.marketCap)}</span>
+        <span className="ax-row-val ax-num">
+          {marketCapUsd(trading?.marketCap, usdPerEth) ?? eth(trading?.marketCap)}
+        </span>
         {change === null ? (
           <span className="ax-row-sub">{live ? "market cap" : "not launched"}</span>
         ) : (

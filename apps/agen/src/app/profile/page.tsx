@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { Bloom } from "../bloom";
+import { ethUsd } from "../lib/eth-price";
 import { marketSource } from "../lib/markets";
 import { Claims } from "./claims";
 import { Portfolio } from "./portfolio";
@@ -27,7 +28,7 @@ export default async function Profile() {
    * failure was a quiet one: a creator whose Instant fees were accruing in the panel
    * directly above was told by this page that they had never launched anything.
    */
-  const markets = await marketSource().list();
+  const [markets, usdPerEth] = await Promise.all([marketSource().list(), ethUsd()]);
   const now = Math.floor(Date.now() / 1000);
 
   return (
@@ -38,7 +39,7 @@ export default async function Profile() {
 
       <main className="ax-wrap">
         <Claims />
-        <Portfolio markets={markets} now={now} />
+        <Portfolio markets={markets} now={now} usdPerEth={usdPerEth} />
 
         <footer className="ax-footpanel ax-reveal">
           <div>

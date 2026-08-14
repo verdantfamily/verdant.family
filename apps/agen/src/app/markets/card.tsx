@@ -2,9 +2,21 @@ import Link from "next/link";
 
 import { INSTANT_FEE_PERCENTS } from "../lib/instant";
 import type { MarketSummary } from "../lib/markets";
-import { eth } from "../lib/format";
+import { eth, marketCapUsd } from "../lib/format";
 import { TokenArt } from "./art";
 import { Spark } from "./spark";
+
+/**
+ * A market capitalisation, in dollars where a rate was obtained and in ether where it
+ * was not.
+ *
+ * The fallback is the point: a dollar sign anywhere on this site means a live rate was
+ * actually fetched, so a source being down produces a figure in the unit the market is
+ * really quoted in rather than a stale or invented one.
+ */
+function cap(ethValue: number | null | undefined, usdPerEth: number | null): string {
+  return marketCapUsd(ethValue, usdPerEth) ?? eth(ethValue);
+}
 
 /**
  * A token, as a card on the shelf.
@@ -13,7 +25,13 @@ import { Spark } from "./spark";
  * launched through Instant. See `TokenArt` for why those are different things rather than
  * two styles of the same thing.
  */
-export function TokenCard({ market }: { readonly market: MarketSummary }) {
+export function TokenCard({
+  market,
+  usdPerEth = null,
+}: {
+  readonly market: MarketSummary;
+  readonly usdPerEth?: number | null;
+}) {
   return (
     <Link className="ax-tcard" href={`/markets/${market.id}`}>
       <span className="ax-art">
@@ -22,7 +40,7 @@ export function TokenCard({ market }: { readonly market: MarketSummary }) {
 
       <span className="ax-tcard-line">
         <span className="ax-tcard-tic">${market.symbol}</span>
-        <span className="ax-tcard-val ax-num">{eth(market.trading?.marketCap)}</span>
+        <span className="ax-tcard-val ax-num">{cap(market.trading?.marketCap, usdPerEth)}</span>
       </span>
 
       <span className="ax-tcard-name">{market.name}</span>
@@ -33,7 +51,13 @@ export function TokenCard({ market }: { readonly market: MarketSummary }) {
 }
 
 /** The same token, given the top of the page. */
-export function FeatureCard({ market }: { readonly market: MarketSummary }) {
+export function FeatureCard({
+  market,
+  usdPerEth = null,
+}: {
+  readonly market: MarketSummary;
+  readonly usdPerEth?: number | null;
+}) {
   const trading = market.trading;
 
   return (
@@ -47,7 +71,7 @@ export function FeatureCard({ market }: { readonly market: MarketSummary }) {
         <span className="ax-feature-name">{market.name}</span>
 
         <span className="ax-figs">
-          <span className="ax-fig ax-num">{eth(trading?.marketCap)}</span>
+          <span className="ax-fig ax-num">{cap(trading?.marketCap, usdPerEth)}</span>
           <span className="ax-fig ax-num">
             {trading?.volume24h === undefined || trading.volume24h === null
               ? "no volume yet"

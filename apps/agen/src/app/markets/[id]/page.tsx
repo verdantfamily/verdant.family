@@ -9,7 +9,8 @@ import { DEFAULT_RANGE, serializeSeries } from "../../lib/candles";
 import { EXPLORER_URL } from "../../lib/chain";
 import { feedConfigured, fetchCandles } from "../../lib/feed";
 import { fetchInstantCandles, instantFeedConfigured } from "../../lib/instant-feed";
-import { eth } from "../../lib/format";
+import { ethUsd } from "../../lib/eth-price";
+import { eth, marketCapUsd } from "../../lib/format";
 import { INSTANT_FEE_PPM } from "../../lib/instant";
 import { marketSource } from "../../lib/markets";
 import { TopBar } from "../../topbar";
@@ -74,7 +75,7 @@ export default async function Token({ params }: { params: Promise<{ id: string }
   const market = await source.read(id);
   if (market === null) notFound();
 
-  const [trades, state, history] = await Promise.all([
+  const [trades, state, history, usdPerEth] = await Promise.all([
     source.trades(id),
     source.state(id),
     // Only for a market that has a pool, and never fatal. A chart is worth a request on
@@ -88,6 +89,9 @@ export default async function Token({ params }: { params: Promise<{ id: string }
       : market.kind === "instant"
         ? fetchInstantCandles(market.poolId, DEFAULT_RANGE.interval, DEFAULT_RANGE.buckets)
         : fetchCandles(market.poolId, DEFAULT_RANGE.interval, DEFAULT_RANGE.buckets),
+    // What the capitalisation is written in. Null where no rate could be fetched, which
+    // shows the figure in ether rather than in a stale dollar.
+    ethUsd(),
   ]);
 
   const now = Math.floor(Date.now() / 1000);
@@ -163,11 +167,17 @@ export default async function Token({ params }: { params: Promise<{ id: string }
               // "no indexer" on the right pages rather than on all of them or none.
               feedConfigured={market.kind === "instant" ? instantFeedConfigured : feedConfigured}
               valueScale={valueScale}
+              usdPerEth={usdPerEth}
               at={history?.at ?? now}
               createdAt={market.createdAt}
               // A market with no pool has no capitalisation to fall back to, and a dash
               // at headline size is a black bar. It says what is true instead.
-              fallbackHeadline={live ? eth(market.trading?.marketCap) : "Not launched yet"}
+              fallbackHeadline={
+                live
+                  ? (marketCapUsd(market.trading?.marketCap, usdPerEth) ??
+                    eth(market.trading?.marketCap))
+                  : "Not launched yet"
+              }
               identity={
                 <div className="ax-tk-who">
                   <TokenArt market={market} size={44} />

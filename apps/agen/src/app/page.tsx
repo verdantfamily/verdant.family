@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { ethUsd } from "./lib/eth-price";
 import { marketSource, noveltyOf, type MarketSummary } from "./lib/markets";
 import { FeatureCard, TokenCard } from "./markets/card";
 import { Search } from "./search";
@@ -49,7 +50,9 @@ export default async function Home({
   const sort = SORTS.find((entry) => entry.key === first("sort")) ?? SORTS[0]!;
   const next = SORTS[(SORTS.indexOf(sort) + 1) % SORTS.length]!;
 
-  const all = await marketSource().list();
+  // Both at once: the rate is a cached module read most of the time, and on the two
+  // minutes an hour it is not, there is no reason for the catalogue to wait behind it.
+  const [all, usdPerEth] = await Promise.all([marketSource().list(), ethUsd()]);
 
   const needle = query.toLowerCase();
   const found =
@@ -150,13 +153,14 @@ export default async function Home({
                   <h3>{feature.phase === "live" ? "Trending" : "Latest"}</h3>
                 </div>
 
-                <FeatureCard market={feature} />
+                <FeatureCard market={feature} usdPerEth={usdPerEth} />
               </section>
             )}
 
             <Shelf
               title="Explore Instant v4"
               markets={instant}
+              usdPerEth={usdPerEth}
               empty={
                 searching
                   ? `No Instant token matches “${query}”.`
@@ -167,6 +171,7 @@ export default async function Home({
             <Shelf
               title="Explore Programmable v4"
               markets={programmable}
+              usdPerEth={usdPerEth}
               empty={
                 searching
                   ? `No Programmable token matches “${query}”.`
@@ -213,10 +218,12 @@ function Shelf({
   title,
   markets,
   empty,
+  usdPerEth,
 }: {
   readonly title: string;
   readonly markets: readonly MarketSummary[];
   readonly empty: string;
+  readonly usdPerEth: number | null;
 }) {
   return (
     <section className="ax-shelf ax-reveal">
@@ -229,7 +236,7 @@ function Shelf({
       ) : (
         <div className="ax-cards">
           {markets.slice(0, 24).map((market) => (
-            <TokenCard market={market} key={market.id} />
+            <TokenCard market={market} usdPerEth={usdPerEth} key={market.id} />
           ))}
         </div>
       )}

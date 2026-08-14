@@ -20,6 +20,7 @@ import {
   type ChartPoint,
   type SerializedSeries,
 } from "../../lib/candles";
+import { marketCapUsd } from "../../lib/format";
 
 /**
  * A market's value over the span a reader chooses.
@@ -75,6 +76,15 @@ export interface ChartProps {
    * Null falls back to drawing the price itself.
    */
   readonly valueScale: number | null;
+  /**
+   * Dollars per ether, or null where no rate could be fetched.
+   *
+   * The market is quoted in ether and drawn in dollars, because a capitalisation exists
+   * to be compared and almost nobody holds that comparison in ether. Null falls back to
+   * the ether figure rather than to a stale rate, so a dollar sign on this axis always
+   * means a rate was actually obtained.
+   */
+  readonly usdPerEth: number | null;
   /** Chain time and the market's birthday, for the range that means "everything". */
   readonly at: number;
   readonly createdAt: number;
@@ -160,6 +170,7 @@ export function Chart({
   initial,
   feedConfigured,
   valueScale,
+  usdPerEth,
   at,
   createdAt,
   fallbackHeadline,
@@ -212,13 +223,26 @@ export function Chart({
    */
   const scale = useRef<AxisScale>({ significant: 3, minMove: 1e-12 });
   const scaleValue = useRef<number | null>(valueScale);
+  const rate = useRef<number | null>(usdPerEth);
   useEffect(() => {
     scaleValue.current = valueScale;
-  }, [valueScale]);
+    rate.current = usdPerEth;
+  }, [valueScale, usdPerEth]);
 
-  const labelPrice = useRef((value: number): string =>
-    compactEth(scaleValue.current === null ? value : value * scaleValue.current),
-  ).current;
+  /**
+   * A raw series value, as the reader should see it.
+   *
+   * Two conversions in one place: a price per token becomes a capitalisation, and a
+   * capitalisation in ether becomes one in dollars. Written unsuffixed because it labels
+   * an axis, where `$14.7k` says which unit it is in and ` ETH` on every gridline does
+   * not earn its ink — the headline below carries the unit for the ether case.
+   */
+  const write = useRef((value: number): string => {
+    const inEth = scaleValue.current === null ? value : value * scaleValue.current;
+    return marketCapUsd(inEth, rate.current) ?? compactEth(inEth);
+  }).current;
+
+  const labelPrice = write;
 
   // The server rendered one span and the rest are fetched. `initialData` is given only
   // for that one, so choosing another shows a load rather than the previous series
@@ -465,7 +489,8 @@ export function Chart({
      * actually printed.
      */
     const raw = points.map((point) => point.value);
-    const shownValues = valueScale === null ? raw : raw.map((value) => value * valueScale);
+    const capped = valueScale === null ? raw : raw.map((value) => value * valueScale);
+    const shownValues = usdPerEth === null ? capped : capped.map((value) => value * usdPerEth);
     scale.current = {
       significant: axisScaleFor(shownValues).significant,
       minMove: axisScaleFor(raw).minMove,
@@ -508,14 +533,18 @@ export function Chart({
     }
 
     applied.current = { key, points };
-  }, [points, rising, ready, labelPrice, valueScale, marketId, range.id]);
+  }, [points, rising, ready, labelPrice, valueScale, usdPerEth, marketId, range.id]);
 
   const shown = hovered?.price ?? summary?.price;
 
+  // The headline carries the unit where the axis cannot: `14.7 ETH` needs saying, and
+  // `$14.7k` already says it.
   const headline =
     shown === undefined
       ? fallbackHeadline
-      : `${compactEth(valueScale === null ? asFloat(shown) : asFloat(shown) * valueScale)} ETH`;
+      : usdPerEth === null
+        ? `${write(asFloat(shown))} ETH`
+        : write(asFloat(shown));
 
   /*
    * Whether the headline is a number at all.
@@ -529,8 +558,7 @@ export function Chart({
   const hasFigure = /[0-9]/.test(headline);
 
   /** A stored price in whatever unit the chart is currently drawing. */
-  const label = (price: bigint): string =>
-    compactEth(valueScale === null ? asFloat(price) : asFloat(price) * valueScale);
+  const label = (price: bigint): string => write(asFloat(price));
 
   const empty =
     !live

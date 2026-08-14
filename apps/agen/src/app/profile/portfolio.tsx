@@ -21,9 +21,11 @@ import { Wallet } from "../wallet";
 export function Portfolio({
   markets,
   now,
+  usdPerEth = null,
 }: {
   readonly markets: readonly MarketSummary[];
   readonly now: number;
+  readonly usdPerEth?: number | null;
 }) {
   const { address, status } = useAccount();
 
@@ -74,7 +76,13 @@ export function Portfolio({
 
       <div className="ax-index" style={{ marginTop: "8px" }}>
         {mine.map((market, position) => (
-          <TokenRow market={market} now={now} index={position} key={market.id} />
+          <TokenRow
+            market={market}
+            now={now}
+            index={position}
+            usdPerEth={usdPerEth}
+            key={market.id}
+          />
         ))}
       </div>
     </section>

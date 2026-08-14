@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { Bloom } from "../bloom";
+import { ethUsd } from "../lib/eth-price";
 import { marketSource } from "../lib/markets";
 import { TokenRow } from "./row";
 
@@ -31,7 +32,7 @@ export default async function Markets({
   const raw = parameters["q"];
   const query = (Array.isArray(raw) ? raw[0] : raw)?.trim() ?? "";
 
-  const all = await marketSource().list();
+  const [all, usdPerEth] = await Promise.all([marketSource().list(), ethUsd()]);
   const now = Math.floor(Date.now() / 1000);
 
   const needle = query.toLowerCase();
@@ -77,7 +78,13 @@ export default async function Markets({
           ) : (
             <div className="ax-index" style={{ marginTop: "8px" }}>
               {newest.map((market, position) => (
-                <TokenRow market={market} now={now} index={position} key={market.id} />
+                <TokenRow
+                  market={market}
+                  now={now}
+                  index={position}
+                  usdPerEth={usdPerEth}
+                  key={market.id}
+                />
               ))}
             </div>
           )}

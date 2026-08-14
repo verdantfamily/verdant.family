@@ -300,7 +300,14 @@ export function Preview({
               </div>
             </dl>
 
-            <a className="ax-launch" href={`/markets/${created.poolId}`}>
+            {/*
+              The token, not the pool. `/markets/[id]` tells the two products apart by the
+              shape of the id — forty hex digits is an Instant token, a uuid is a build —
+              so a sixty-four-digit pool id matches neither and the page a creator lands on
+              one second after paying for their launch is a 404. The pool id is still worth
+              showing above; it is just not an address this route answers to.
+            */}
+            <a className="ax-launch" href={`/markets/${created.token}`}>
               Trade ${derived.symbol}
             </a>
 

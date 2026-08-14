@@ -60,6 +60,58 @@ export function serializeSeries(series: CandleSeries): SerializedSeries {
   };
 }
 
+/** One point as the chart library takes it: a second, and a value in series units. */
+export interface ChartPoint {
+  readonly time: number;
+  readonly value: number;
+}
+
+/**
+ * How a poll differs from what the chart already holds.
+ *
+ * The chart is refetched every second and the answer is nearly always the same buckets
+ * with one number changed — the close of the bucket in progress, which every swap moves.
+ * Telling that case apart from a genuine change of window is what lets the common one be
+ * applied with the library's `update`, which moves the tip of the line and disturbs
+ * nothing else. Handing it all to `setData` instead is not wrong about the data and is
+ * visibly wrong to look at: the series is replaced, so the crosshair's marker blinks and
+ * the framing has to be re-established a second after the reader chose their own.
+ *
+ * `from` is the index the tail starts at, so a caller updates `points.slice(from)`. It
+ * includes the last point the chart already had, because that point is the live bucket and
+ * its value is exactly what usually moved.
+ *
+ * A redraw is called for when a bucket has fallen off the front, when the series is a
+ * different one, or when any completed bucket's value disagrees — the last of which should
+ * not happen and is not quietly tolerated, since a bucket that has closed and then changed
+ * means the history was revised and the whole line should be replaced rather than patched.
+ */
+export type SeriesDelta =
+  | { readonly kind: "tail"; readonly from: number }
+  | { readonly kind: "redraw" };
+
+export function seriesDelta(
+  held: readonly ChartPoint[] | null,
+  next: readonly ChartPoint[],
+): SeriesDelta {
+  // Nothing drawn yet, or a series that has shrunk: neither can be reached by appending.
+  if (held === null || held.length === 0 || next.length < held.length) return { kind: "redraw" };
+
+  for (let at = 0; at < held.length; at += 1) {
+    const old = held[at]!;
+    const now = next[at];
+
+    // A bucket has rolled off the front, so every index has shifted.
+    if (now === undefined || now.time !== old.time) return { kind: "redraw" };
+
+    // Completed buckets must agree. The last one held is the live bucket and may move.
+    const completed = at < held.length - 1;
+    if (completed && now.value !== old.value) return { kind: "redraw" };
+  }
+
+  return { kind: "tail", from: held.length - 1 };
+}
+
 export function parseSeries(raw: SerializedSeries): CandleSeries {
   return {
     interval: raw.interval,

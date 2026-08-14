@@ -12,10 +12,12 @@ import {
   compactEth,
   formatInstant,
   parseSeries,
+  seriesDelta,
   CHART_RANGES,
   DEFAULT_RANGE,
   POLL_MILLISECONDS,
   type AxisScale,
+  type ChartPoint,
   type SerializedSeries,
 } from "../../lib/candles";
 
@@ -178,6 +180,30 @@ export function Chart({
   const container = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
   const area = useRef<ISeriesApi<"Area"> | null>(null);
+
+  /**
+   * What the series currently holds, and which series it is.
+   *
+   * The chart is polled every second, and almost every poll brings back the same buckets
+   * with one number changed: the close of the bucket in progress. Handing all of that to
+   * `setData` would be correct and would look wrong — it replaces the series wholesale, so
+   * the marker under the crosshair blinks and any viewport work has to be redone. Keeping
+   * the applied points here is what lets the common case become a single `update`.
+   */
+  const applied = useRef<{ key: string; points: readonly ChartPoint[] } | null>(null);
+
+  /**
+   * Whether the chart should keep framing the whole series, which stops the moment the
+   * reader frames it themselves.
+   *
+   * A live chart wants to follow the data; a reader who has just zoomed into an hour wants
+   * it to stay there. Those are only in conflict if following is unconditional, which is
+   * what it was: `fitContent` ran on every poll, so a zoom lasted until the next second and
+   * the chart was effectively impossible to examine. Following is the default because most
+   * readers never touch it, and it yields to the first pan or zoom because that is an
+   * unambiguous statement about which window they want.
+   */
+  const following = useRef(true);
 
   /*
    * The axis formatter is handed to a chart that outlives every series it draws, so it
@@ -357,16 +383,69 @@ export function Chart({
       setReady(true);
     })();
 
+    /*
+     * A pan or a zoom, told apart from a click.
+     *
+     * The library's own range subscription cannot be used for this: it fires for our
+     * `fitContent` too, so following would switch itself off on the first poll. Watching
+     * the input instead is unambiguous — a wheel is always a zoom, and a drag is a pan
+     * once it has actually moved. The threshold is what keeps a click, which is how the
+     * crosshair is read, from being mistaken for one.
+     */
+    const stopFollowing = (): void => {
+      following.current = false;
+    };
+
+    let from: { x: number; y: number } | null = null;
+
+    const onDown = (event: PointerEvent): void => {
+      from = { x: event.clientX, y: event.clientY };
+    };
+    const onMove = (event: PointerEvent): void => {
+      if (from === null) return;
+      if (Math.abs(event.clientX - from.x) > 3 || Math.abs(event.clientY - from.y) > 3) {
+        stopFollowing();
+        from = null;
+      }
+    };
+    const onUp = (): void => {
+      from = null;
+    };
+
+    element.addEventListener("wheel", stopFollowing, { passive: true });
+    element.addEventListener("pointerdown", onDown);
+    element.addEventListener("pointermove", onMove);
+    element.addEventListener("pointerup", onUp);
+    element.addEventListener("pointercancel", onUp);
+
     return () => {
       disposed = true;
+      element.removeEventListener("wheel", stopFollowing);
+      element.removeEventListener("pointerdown", onDown);
+      element.removeEventListener("pointermove", onMove);
+      element.removeEventListener("pointerup", onUp);
+      element.removeEventListener("pointercancel", onUp);
       chart.current?.remove();
       chart.current = null;
       area.current = null;
+      applied.current = null;
       setReady(false);
     };
     // `labelPrice` is held in a ref and never changes, so this still builds one chart for
     // the life of the component. It is listed because it is used, not because it varies.
   }, [labelPrice]);
+
+  /*
+   * A new timeframe is a new question, so the chart frames the answer to it.
+   *
+   * Declared before the effect that applies data, and that is load-bearing rather than
+   * stylistic: effects run in declaration order, so putting it after would mean the first
+   * render of a new timeframe tried to restore the window a reader had framed on the
+   * previous one — onto a series whose times may not overlap it at all.
+   */
+  useEffect(() => {
+    following.current = true;
+  }, [marketId, range.id]);
 
   // The data, and the two colours that depend on which way it went.
   useEffect(() => {
@@ -398,9 +477,38 @@ export function Chart({
       priceFormat: { type: "custom", formatter: labelPrice, minMove: scale.current.minMove },
     });
 
-    line.setData(points);
-    chart.current?.timeScale().fitContent();
-  }, [points, rising, ready, labelPrice, valueScale]);
+    /*
+     * A tail, or a redraw. `seriesDelta` decides and is tested on its own; the timeframe is
+     * folded in here because a different one is a different series whatever its points say.
+     */
+    const key = `${marketId}:${range.id}`;
+    const was = applied.current;
+    const delta = was === null || was.key !== key ? { kind: "redraw" as const } : seriesDelta(was.points, points);
+
+    if (delta.kind === "tail") {
+      for (const point of points.slice(delta.from)) line.update(point);
+    } else {
+      // A reader who has framed their own window keeps it across the shift, which is the
+      // whole point of not refitting: restoring the times rather than the logical indices,
+      // because the indices have moved under them.
+      const held = following.current ? null : (chart.current?.timeScale().getVisibleRange() ?? null);
+
+      line.setData(points);
+
+      if (held === null) chart.current?.timeScale().fitContent();
+      else {
+        try {
+          chart.current?.timeScale().setVisibleRange(held);
+        } catch {
+          // A window that no longer overlaps the data cannot be restored. Framing what
+          // there is beats leaving the reader looking at nothing.
+          chart.current?.timeScale().fitContent();
+        }
+      }
+    }
+
+    applied.current = { key, points };
+  }, [points, rising, ready, labelPrice, valueScale, marketId, range.id]);
 
   const shown = hovered?.price ?? summary?.price;
 

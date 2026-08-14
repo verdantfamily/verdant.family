@@ -2,11 +2,19 @@ import Link from "next/link";
 
 import { ethUsd } from "./lib/eth-price";
 import { marketSource, noveltyOf, type MarketSummary } from "./lib/markets";
-import { FeatureCard, TokenCard } from "./markets/card";
+import { TokenCard } from "./markets/card";
 import { Search } from "./search";
 import { TopBar } from "./topbar";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * How many tokens a page of the shelf holds.
+ *
+ * Four rows of the four-column grid, so a full page is a rectangle rather than a grid
+ * with a ragged last row.
+ */
+const PER_PAGE = 16;
 
 /** How the shelf can be ordered, and what each ordering means. */
 const SORTS: readonly {
@@ -66,14 +74,6 @@ export default async function Home({
         );
 
   const ordered = [...found].sort(sort.by);
-
-  // The feature is whatever is trading, and the newest build only when nothing is. A
-  // front page that leads with an unlaunched token when a live one exists is burying the
-  // only market anybody can actually trade.
-  const feature =
-    ordered.find((market) => market.phase === "live") ?? (query.length === 0 ? ordered[0] : undefined);
-
-  const shelf = ordered.filter((market) => market.id !== feature?.id);
   const searching = query.length > 0;
 
   /*
@@ -85,12 +85,24 @@ export default async function Home({
    * across a single mixed grid is comparing two different kinds of thing without being
    * told, and a reader looking for one kind has to know the artwork to tell them apart.
    *
-   * Instant leads because it is the shorter promise and the one somebody can act on
-   * immediately. Both sections are always rendered, including empty, so the shelf does not
-   * silently become a page about one product on a day nobody launched the other.
+   * There is no feature above them any more. A single card given the top of the page was
+   * the right shape for a catalogue with one product in it; with two named sections it put
+   * a third heading above them and duplicated whichever market it chose.
    */
-  const instant = shelf.filter((market) => market.kind === "instant");
-  const programmable = shelf.filter((market) => market.kind === "programmable");
+  const instant = ordered.filter((market) => market.kind === "instant");
+
+  /*
+   * Which page of the Instant shelf, and how the pager is built.
+   *
+   * A page is sixteen because that is four rows of the four-column grid, so a full page is
+   * a rectangle rather than a grid with a ragged last row. Out-of-range pages are clamped
+   * rather than 404ed: a stale link to page nine of a shelf that has shrunk to two should
+   * show the last page, not an error about a number the reader never typed.
+   */
+  const pages = Math.max(1, Math.ceil(instant.length / PER_PAGE));
+  const requested = Number.parseInt(first("page"), 10);
+  const page = Math.min(Math.max(Number.isNaN(requested) ? 1 : requested, 1), pages);
+  const shown = instant.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
   return (
     <div className="ax-page">
@@ -130,56 +142,53 @@ export default async function Home({
 
           <div className="ax-findbar">
             <Search initial={query} />
-            <Link className="ax-sort" href={sortHref(next.key, query)}>
-              <Sliders />
-              {sort.label}
-            </Link>
+
+            <div className="ax-findbar-acts">
+              <Link className="ax-sort" href={sortHref(next.key, query)}>
+                <Sliders />
+                {sort.label}
+              </Link>
+
+              <Pager page={page} pages={pages} sort={sort.key} query={query} />
+            </div>
           </div>
         </div>
 
-        {found.length === 0 ? (
-          <section className="ax-shelf">
+        <section className="ax-shelf ax-reveal">
+          <div className="ax-shelf-head">
+            <h3>Explore Instant v4</h3>
+          </div>
+
+          {shown.length === 0 ? (
             <p className="ax-empty">
               {searching
-                ? `Nothing matches “${query}”.`
-                : "No token has been built yet. The first one through the launch flow appears here, with the rules its creator described."}
+                ? `No Instant token matches “${query}”.`
+                : "No Instant token yet. The first one launched through Instant appears here."}
             </p>
-          </section>
-        ) : (
-          <>
-            {feature === undefined ? null : (
-              <section className="ax-shelf ax-reveal">
-                <div className="ax-shelf-head">
-                  <h3>{feature.phase === "live" ? "Trending" : "Latest"}</h3>
-                </div>
+          ) : (
+            <div className="ax-cards">
+              {shown.map((market) => (
+                <TokenCard market={market} usdPerEth={usdPerEth} key={market.id} />
+              ))}
+            </div>
+          )}
+        </section>
 
-                <FeatureCard market={feature} usdPerEth={usdPerEth} />
-              </section>
-            )}
+        {/*
+          Named, and empty on purpose.
 
-            <Shelf
-              title="Explore Instant v4"
-              markets={instant}
-              usdPerEth={usdPerEth}
-              empty={
-                searching
-                  ? `No Instant token matches “${query}”.`
-                  : "No Instant token yet. The first one launched through Instant appears here."
-              }
-            />
+          Programmable is real and not open, which is a different thing from absent — the
+          same reason the launch shelf keeps a card for it. What was here instead was three
+          test tokens from before Instant existed, which made the section look like the
+          product rather than like a placeholder for it.
+        */}
+        <section className="ax-shelf ax-reveal">
+          <div className="ax-shelf-head">
+            <h3>Explore Programmable v4</h3>
+          </div>
 
-            <Shelf
-              title="Explore Programmable v4"
-              markets={programmable}
-              usdPerEth={usdPerEth}
-              empty={
-                searching
-                  ? `No Programmable token matches “${query}”.`
-                  : "No Programmable token yet. The first one through the build flow appears here, with the rules its creator described."
-              }
-            />
-          </>
-        )}
+          <p className="ax-empty">Programmable v4 launches coming soon</p>
+        </section>
 
         <footer className="ax-footpanel ax-reveal">
           <div>
@@ -208,50 +217,114 @@ export default async function Home({
 }
 
 /**
- * One product's shelf.
+ * Which page of the shelf, beside the control that orders it.
  *
- * The ordering control is not repeated here. It is in the find bar above, it applies to
- * both shelves at once, and two identical copies of it stacked down the page would look
- * like two independent controls that happen to agree.
+ * Links rather than buttons, and the page is in the URL rather than in state: a shelf
+ * position is a thing people send each other and come back to, and the page is rendered
+ * on the server anyway. Every link carries the search and the ordering, so paging does
+ * not quietly reset either.
+ *
+ * Absent entirely at one page, because a pager that can only point at where you already
+ * are is furniture. The arrows stay in place at the ends rather than disappearing, so the
+ * control does not change width as it is used; they are rendered as spans when there is
+ * nowhere to go, which is also how they stop being tab stops.
  */
-function Shelf({
-  title,
-  markets,
-  empty,
-  usdPerEth,
+function Pager({
+  page,
+  pages,
+  sort,
+  query,
 }: {
-  readonly title: string;
-  readonly markets: readonly MarketSummary[];
-  readonly empty: string;
-  readonly usdPerEth: number | null;
+  readonly page: number;
+  readonly pages: number;
+  readonly sort: string;
+  readonly query: string;
 }) {
-  return (
-    <section className="ax-shelf ax-reveal">
-      <div className="ax-shelf-head">
-        <h3>{title}</h3>
-      </div>
+  if (pages <= 1) return null;
 
-      {markets.length === 0 ? (
-        <p className="ax-empty">{empty}</p>
+  const numbers = Array.from({ length: pages }, (_, index) => index + 1);
+
+  return (
+    <nav className="ax-pager" aria-label="pages">
+      {page === 1 ? (
+        <span className="ax-pager-arrow" aria-hidden="true">
+          <Caret />
+        </span>
       ) : (
-        <div className="ax-cards">
-          {markets.slice(0, 24).map((market) => (
-            <TokenCard market={market} usdPerEth={usdPerEth} key={market.id} />
-          ))}
-        </div>
+        <Link
+          className="ax-pager-arrow"
+          href={pageHref(page - 1, sort, query)}
+          aria-label="previous page"
+        >
+          <Caret />
+        </Link>
       )}
-    </section>
+
+      {numbers.map((number) =>
+        number === page ? (
+          <span className="ax-pager-n on" key={number} aria-current="page">
+            {number}
+          </span>
+        ) : (
+          <Link className="ax-pager-n" key={number} href={pageHref(number, sort, query)}>
+            {number}
+          </Link>
+        ),
+      )}
+
+      {page === pages ? (
+        <span className="ax-pager-arrow next" aria-hidden="true">
+          <Caret />
+        </span>
+      ) : (
+        <Link
+          className="ax-pager-arrow next"
+          href={pageHref(page + 1, sort, query)}
+          aria-label="next page"
+        >
+          <Caret />
+        </Link>
+      )}
+    </nav>
   );
+}
+
+/** The query string, with every default left out of it. */
+function href(parts: readonly string[]): string {
+  const kept = parts.filter((part) => part.length > 0);
+  return kept.length === 0 ? "/" : `/?${kept.join("&")}`;
 }
 
 /** Keeps the search term when the ordering changes, and drops the default from the URL. */
 function sortHref(key: string, query: string): string {
-  const parts = [
+  return href([
     key === "new" ? "" : `sort=${key}`,
     query.length === 0 ? "" : `q=${encodeURIComponent(query)}`,
-  ].filter((part) => part.length > 0);
+  ]);
+}
 
-  return parts.length === 0 ? "/" : `/?${parts.join("&")}`;
+/** Keeps the ordering and the search when the page changes. */
+function pageHref(page: number, sort: string, query: string): string {
+  return href([
+    sort === "new" ? "" : `sort=${sort}`,
+    query.length === 0 ? "" : `q=${encodeURIComponent(query)}`,
+    page === 1 ? "" : `page=${String(page)}`,
+  ]);
+}
+
+/** One chevron, rotated by the stylesheet for the side it is on. */
+function Caret() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M9.75 3.5 5.5 8l4.25 4.5"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 function Compass() {

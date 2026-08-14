@@ -34,8 +34,8 @@ import type { Address } from "viem";
 
 import { jobStore, publicView } from "./builds";
 import { INSTANT_ADDRESSES } from "./chain";
-import { fetchMarketStats, type MarketStats } from "./feed";
-import { fetchInstantStats, fetchInstantTrades } from "./instant-feed";
+import { fetchMarketStats, type CandleSeries, type MarketStats } from "./feed";
+import { fetchInstantCandles, fetchInstantStats, fetchInstantTrades } from "./instant-feed";
 import { readInstantMarket, readInstantMarkets, type InstantMarket } from "./instant-markets";
 import { readLaunch, readLaunches, type LaunchRecord } from "./launched";
 import { readLiveMarket, type LiveMarket } from "./onchain";
@@ -140,6 +140,17 @@ export interface MarketCommon {
   readonly supplyTokens: number;
   /** Absent for anything not trading. See the note at the top of this file. */
   readonly trading?: TradingData;
+  /**
+   * Recent closes, oldest first, for the sparkline on a card.
+   *
+   * Absent where there is no history to draw, and a card says so rather than drawing a
+   * shape — an invented sparkline is indistinguishable from a real one, and a launchpad
+   * that fakes one cannot be believed about any of them.
+   *
+   * Raw prices rather than capitalisations, because the line is normalised to its own
+   * range and a fixed supply makes the two curves identical anyway.
+   */
+  readonly spark?: readonly number[];
 }
 
 /** A market that was described in language and compiled into a hook. */
@@ -442,8 +453,35 @@ export function buildStoreSource(): MarketSource {
  * `phase`: an Instant market is created and its pool is opened in the same transaction,
  * so unlike a build it cannot exist and not be trading.
  */
-function instantSummaryFrom(market: InstantMarket, stats: MarketStats | null): InstantSummary {
+/** How much history a card's line shows: two hours at five minutes a bucket. */
+const SPARK_BUCKETS = 24;
+
+/**
+ * The closes behind a card's sparkline.
+ *
+ * Undefined rather than an empty array where there is nothing to draw, because `Spark`
+ * distinguishes "no history" from "a flat line" and only one of those is true of a market
+ * nobody has traded.
+ *
+ * A single point is dropped for the same reason: two are the minimum that make a line, and
+ * one drawn as a line would be a shape asserted from a single observation.
+ */
+function sparkFrom(series: CandleSeries | null): readonly number[] | undefined {
+  if (series === null) return undefined;
+
+  const closes = series.candles.map((candle) => Number(candle.close) / 1e36);
+  return closes.length < 2 ? undefined : closes;
+}
+
+function instantSummaryFrom(
+  market: InstantMarket,
+  stats: MarketStats | null,
+  history: CandleSeries | null = null,
+): InstantSummary {
+  const spark = sparkFrom(history);
+
   return {
+    ...(spark === undefined ? {} : { spark }),
     id: market.token.toLowerCase(),
     kind: "instant",
     name: market.name,
@@ -500,10 +538,25 @@ export function instantSource(): MarketSource {
     list: async () => {
       const found = await readInstantMarkets();
 
+      /*
+       * Two feed reads per market, in parallel: the day's figures and enough closes to
+       * draw the line on its card.
+       *
+       * A card that says "no price history yet" about a market with five trades in it is
+       * worse than a card with no line at all, and the only way to be right about that is
+       * to ask. Two requests per market is honest about the cost and fine at this size;
+       * the fix when a shelf is hundreds of markets is a batch route on the feed, and this
+       * note is here so whoever hits that knows the shape of it.
+       */
       return Promise.all(
-        found.map(async (market) =>
-          instantSummaryFrom(market, await fetchInstantStats(market.poolId)),
-        ),
+        found.map(async (market) => {
+          const [stats, history] = await Promise.all([
+            fetchInstantStats(market.poolId),
+            fetchInstantCandles(market.poolId, "5m", SPARK_BUCKETS),
+          ]);
+
+          return instantSummaryFrom(market, stats, history);
+        }),
       );
     },
 

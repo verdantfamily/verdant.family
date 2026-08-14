@@ -1097,6 +1097,74 @@ body:has(.ax-page) {
   color: var(--ax-faint);
 }
 
+/* The ordering control and the pager travel together, beside the search field. */
+.ax-findbar-acts {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/*
+ * The pager.
+ *
+ * Built from the same parts as the control beside it — 40px tall, a hairline, a full
+ * radius — so the two read as one row of controls rather than as a filter and then some
+ * page links. The numbers sit inside one pill instead of each being their own, which at
+ * ten pages is the difference between a control and a row of buttons.
+ */
+.ax-pager {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 40px;
+  padding: 0 5px;
+  background: var(--ax-paper);
+  border: 1px solid var(--ax-line);
+  border-radius: 999px;
+}
+
+.ax-pager-n,
+.ax-pager-arrow {
+  display: grid;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  font-size: 0.8rem;
+  font-weight: 450;
+  letter-spacing: -0.01em;
+  color: var(--ax-muted);
+  text-decoration: none;
+  border-radius: 999px;
+  transition: color 0.16s var(--ax-ease), background 0.16s var(--ax-ease);
+}
+
+a.ax-pager-n:hover,
+a.ax-pager-arrow:hover {
+  color: var(--ax-ink);
+  background: var(--ax-fill);
+}
+
+.ax-pager-n.on {
+  color: #fff;
+  background: var(--ax-ink);
+}
+
+.ax-pager-arrow svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* One chevron drawn once, turned around for the other end. */
+.ax-pager-arrow.next svg {
+  transform: rotate(180deg);
+}
+
+/* An end of the range: still there, so the control does not resize as it is used. */
+span.ax-pager-arrow {
+  color: var(--ax-line);
+}
+
 /* ---------------------------------------------------------------- shelves */
 
 .ax-shelf {
@@ -1144,6 +1212,39 @@ body:has(.ax-page) {
   border-radius: 18px;
   overflow: hidden;
   background: linear-gradient(160deg, #16171b 0%, #0a0a0c 100%);
+}
+
+/*
+ * A photograph fills its frame; a machine sits inside one.
+ *
+ * `TokenArt` is handed a pixel size and draws at exactly that size, which is right for a
+ * generated machine — it is a drawing with its own margins, on the dark plate this frame
+ * provides. An uploaded picture is not: the size the card passed (172 on the feature, 132
+ * on a shelf card) has nothing to do with the box the stylesheet gives the frame (128, or
+ * whatever a fluid column works out to), so the image was laid out larger than the frame
+ * and `overflow: hidden` cropped it — which is the corner-cut logo on the shelf.
+ *
+ * So a picture is told to fill instead, and the frame stops painting a dark plate behind
+ * something opaque that covers it. The radius goes too: the frame already clips to its
+ * own, and a second one inside it shows the plate through four corners.
+ */
+.ax-art:has(.ax-shot-art),
+.ax-art:has(.ax-initials) {
+  background: var(--ax-panel);
+}
+
+.ax-art .ax-shot-art,
+.ax-art .ax-initials {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
+
+/* The index row's frame has no radius of its own, so the picture keeps its own. */
+.ax-row-art .ax-shot-art,
+.ax-row-art .ax-initials {
+  width: 100%;
+  height: 100%;
 }
 
 .ax-feature .ax-art {
@@ -2970,6 +3071,13 @@ body:has(.ax-page) {
     max-width: none;
   }
 
+  /* Stacked under the field, the two controls share the line rather than centring as a
+     pair and leaving a gap on each side. */
+  .ax-findbar-acts {
+    width: 100%;
+    justify-content: space-between;
+  }
+
   .ax-footpanel {
     grid-template-columns: 1fr;
     gap: 22px;
@@ -3023,9 +3131,40 @@ body:has(.ax-page) {
     padding-inline: 4px;
   }
 
-  /* One column, and the feature stops being wider than the cards under it. */
+  /*
+   * Two columns, not one.
+   *
+   * A single column gives each card the full width of the screen, which makes the artwork
+   * enormous and fits barely one token per scroll — a shelf you cannot see is not a shelf.
+   * Two puts four tokens in view at once, which is what the page is for, and the card has
+   * little enough in it — a picture, a ticker, a cap, a line — to stay legible at half a
+   * phone's width.
+   */
   .ax-cards {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .ax-tcard {
+    padding: 8px;
+  }
+
+  .ax-tcard-tic {
+    font-size: 0.86rem;
+  }
+
+  .ax-tcard-val {
+    font-size: 0.78rem;
+  }
+
+  /* The line under a half-width card, shorter so the card stays mostly picture. */
+  .ax-spark,
+  .ax-spark-flat {
+    height: 34px;
+  }
+
+  .ax-spark-flat {
+    font-size: 0.64rem;
   }
 
   .ax-feature {

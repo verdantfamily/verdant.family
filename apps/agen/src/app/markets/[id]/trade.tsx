@@ -37,6 +37,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatEther, parseEther, type Address } from "viem";
 import {
   useAccount,
+  useBalance,
   usePublicClient,
   useReadContract,
   useSendTransaction,
@@ -189,9 +190,16 @@ export function TradePanel({ market }: { readonly market: TradeMarket }) {
     let live_ = true;
     setQuoting(true);
 
-    // Debounced, because this fires on every keystroke and each one is an eth_call that
-    // executes the hook. A quote for a number the trader has already stopped typing is
-    // wasted work and, worse, can land after the quote for the number they meant.
+    /*
+     * Debounced, because this fires on every keystroke and each one is an `eth_call` that
+     * executes the hook. A quote for a number the trader has already stopped typing is
+     * wasted work and, worse, can land after the quote for the number they meant.
+     *
+     * Short, because this is the only thing between typing an amount and knowing what it
+     * buys. The previous quote is left on screen while the next one is fetched rather than
+     * being blanked to dashes: it is one keystroke stale for a moment, which is far less
+     * misleading than the figures disappearing every time somebody types a digit.
+     */
     const timer = setTimeout(() => {
       void agen
         .quoteAgenSwap(client, {
@@ -243,10 +251,17 @@ export function TradePanel({ market }: { readonly market: TradeMarket }) {
               : "This market's rules refuse this trade right now.",
           );
         })
+        .catch(() => {
+          // The quote itself failed rather than the market declining. Saying so beats
+          // attributing an unreachable node to the pool.
+          if (!live_) return;
+          setQuote(null);
+          setQuoteError("Could not reach the network for a quote.");
+        })
         .finally(() => {
           if (live_) setQuoting(false);
         });
-    }, 250);
+    }, 120);
 
     return () => {
       live_ = false;
@@ -318,6 +333,21 @@ export function TradePanel({ market }: { readonly market: TradeMarket }) {
   const busy = send.isPending || receipt.isLoading;
 
   /**
+   * Whether the wallet can cover a buy at all.
+   *
+   * Only the value, not the gas beside it: what gas will cost is not known until the
+   * wallet estimates it, and refusing a trade over an amount this component guessed at
+   * would be worse than letting the wallet say so.
+   */
+  const ether = useBalance({
+    address,
+    query: { enabled: buying && address !== undefined },
+  });
+
+  const short =
+    buying && amountIn > 0n && ether.data !== undefined && ether.data.value < amountIn;
+
+  /**
    * What the button says, in the order the conditions actually bite.
    *
    * Not trading comes first because it is a fact about the market rather than about the
@@ -337,13 +367,23 @@ export function TradePanel({ market }: { readonly market: TradeMarket }) {
               ? { label: "Enter an amount", disabled: true }
               : busy
                 ? { label: "Confirm in your wallet…", disabled: true }
-                : needsErc20Approval
-                  ? { label: `Approve $${symbol}`, disabled: false }
-                  : quoting
-                    ? { label: "Quoting…", disabled: true }
-                    : quote === null
-                      ? { label: quoteError ?? "No quote", disabled: true }
-                      : { label: `${buying ? "Buy" : "Sell"} $${symbol}`, disabled: false };
+                : /*
+                   * Affordability, checked here and nowhere near the quote.
+                   *
+                   * The quote is a question about the market and is asked with the
+                   * trader's balance overridden, so it answers what this pool would fill.
+                   * Whether the wallet can pay for it is this line — which can say so,
+                   * where a failed quote could only say "no route" and blame the pool.
+                   */
+                  short
+                  ? { label: `Not enough ${quoteSymbol}`, disabled: true }
+                  : needsErc20Approval
+                    ? { label: `Approve $${symbol}`, disabled: false }
+                    : quote === null && quoting
+                      ? { label: "Quoting…", disabled: true }
+                      : quote === null
+                        ? { label: quoteError ?? "No quote", disabled: true }
+                        : { label: `${buying ? "Buy" : "Sell"} $${symbol}`, disabled: false };
 
   const held = (balance.data as bigint | undefined) ?? 0n;
 

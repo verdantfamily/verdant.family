@@ -137,6 +137,25 @@ export function buildAgenSell({
  * error: a hook may refuse a trade for reasons of its own — a cooldown, a phase, a wallet
  * it will not serve — and an interface should say the trade is unavailable rather than
  * that something broke.
+ *
+ * ## Why the trader is funded for the simulation
+ *
+ * A buy carries its ether as `value`, and a node checks that the sender can cover it
+ * *before* running anything — so quoting a buy larger than the connected wallet's balance
+ * came back as a JSON-RPC error with no revert data to read, indistinguishable here from a
+ * market that refused. The interface then reported "no route for that size" about a pool
+ * that would have filled it perfectly, and the size it suggested trying was smaller for
+ * the wrong reason: the wallet, not the market.
+ *
+ * The balance is overridden for the call instead. Nothing else about the trader is
+ * changed, so a hook that answers differently per address still sees the real one, and a
+ * sell still needs the real allowance. A quote is a question about the market, and the
+ * only honest way to ask it is with the asker's ability to pay taken out of the answer —
+ * whether they can afford it is a separate question, asked against their real balance
+ * where the answer can say so.
+ *
+ * `stateOverride` is not universal. A node that rejects it is retried without one, which
+ * restores exactly the previous behaviour rather than failing the quote outright.
  */
 export async function quoteAgenSwap(
   client: PublicClient,
@@ -158,20 +177,46 @@ export async function quoteAgenSwap(
     readonly sqrtPriceX96?: bigint;
   },
 ): Promise<AgenTradeQuote | null> {
+  const call = {
+    account: trader,
+    to: router,
+    data: encodeFunctionData({
+      abi: agenRouterAbi,
+      functionName: "quote",
+      args: [poolKey, zeroForOne, amountIn, extra],
+    }),
+    // Ether only travels on a buy.
+    value: zeroForOne ? amountIn : 0n,
+  } as const;
+
+  /**
+   * Enough to cover the value and leave room for gas at any price the node assumes.
+   *
+   * Only for a buy: a sell sends no value, so its quote never depended on the seller's
+   * ether and overriding it would change a condition the trade does not have.
+   */
+  const funded = zeroForOne
+    ? [{ address: trader, balance: amountIn + 10n ** 18n }]
+    : undefined;
+
+  let error: unknown;
   try {
-    await client.call({
-      account: trader,
-      to: router,
-      data: encodeFunctionData({
-        abi: agenRouterAbi,
-        functionName: "quote",
-        args: [poolKey, zeroForOne, amountIn, extra],
-      }),
-      // Ether only travels on a buy. `eth_call` does not require the account to hold it,
-      // which is what lets a quote be shown before a wallet is funded.
-      value: zeroForOne ? amountIn : 0n,
-    });
-  } catch (error) {
+    await client.call(funded === undefined ? call : { ...call, stateOverride: funded });
+  } catch (thrown) {
+    error = thrown;
+
+    // A node that will not take an override says so before running anything, so there is
+    // no revert to read. Ask again the old way rather than reporting a refusal.
+    if (funded !== undefined && readQuoteResult(thrown) === null && rejectedOverride(thrown)) {
+      try {
+        await client.call(call);
+      } catch (retried) {
+        error = retried;
+      }
+    }
+  }
+
+  if (error !== undefined) {
     const result = readQuoteResult(error);
     if (result === null) return null;
 
@@ -195,6 +240,20 @@ export async function quoteAgenSwap(
   // address which is not an AgenRouter, and treating the absence of a revert as a
   // successful quote of zero would put a zero in front of a trader.
   return null;
+}
+
+/**
+ * Whether a node refused the override itself, rather than the contract refusing the
+ * trade.
+ *
+ * Matched on the message because there is no code for it: an unsupported third parameter
+ * comes back as an invalid-params error or as a plain complaint about the field, and both
+ * are distinguishable from a revert by the absence of any revert data — which the caller
+ * has already checked before asking this.
+ */
+function rejectedOverride(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /state ?override|invalid params|-32602|not supported|unsupported/i.test(message);
 }
 
 /** What ether would buy. See `quoteAgenSwap`. */

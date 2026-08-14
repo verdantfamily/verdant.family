@@ -168,8 +168,6 @@ export default async function Token({ params }: { params: Promise<{ id: string }
               feedConfigured={market.kind === "instant" ? instantFeedConfigured : feedConfigured}
               valueScale={valueScale}
               usdPerEth={usdPerEth}
-              at={history?.at ?? now}
-              createdAt={market.createdAt}
               // A market with no pool has no capitalisation to fall back to, and a dash
               // at headline size is a black bar. It says what is true instead.
               fallbackHeadline={

@@ -1,20 +1,18 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { candles as candleLib } from "@verdant/sdk";
 import type { IChartApi, ISeriesApi, UTCTimestamp } from "lightweight-charts";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
-  allRangeFor,
   asFloat,
   axisScaleFor,
   compactEth,
   formatInstant,
   parseSeries,
   seriesDelta,
-  CHART_RANGES,
-  DEFAULT_RANGE,
+  CHART_FRAMES,
+  DEFAULT_FRAME,
   POLL_MILLISECONDS,
   type AxisScale,
   type ChartPoint,
@@ -85,9 +83,6 @@ export interface ChartProps {
    * means a rate was actually obtained.
    */
   readonly usdPerEth: number | null;
-  /** Chain time and the market's birthday, for the range that means "everything". */
-  readonly at: number;
-  readonly createdAt: number;
   /** Shown as the headline when there is no series to take one from. */
   readonly fallbackHeadline: string;
 }
@@ -102,6 +97,8 @@ interface Palette {
   readonly faint: string;
   readonly line: string;
   readonly grid: string;
+  /** The surface behind the chart, so the crosshair's marker can be cut out of it. */
+  readonly paper: string;
 }
 
 /**
@@ -147,20 +144,48 @@ function readPalette(element: HTMLElement): Palette {
   const token = (name: string, fallback: string): string =>
     toRgba(style.getPropertyValue(name).trim()) ?? fallback;
 
+  const rise = token("--up", "rgba(22, 163, 74, 1)");
+  const fall = token("--down", "rgba(220, 38, 38, 1)");
+
   return {
-    rise: token("--up", "rgba(22, 163, 74, 1)"),
-    riseSoft: "rgba(22, 163, 74, 0.14)",
-    fall: token("--down", "rgba(220, 38, 38, 1)"),
-    fallSoft: "rgba(220, 38, 38, 0.12)",
+    rise,
+    fall,
+    /*
+     * The fill, taken from the line's own colour rather than written out beside it.
+     *
+     * Two hand-maintained alphas of the same hue is how a recoloured line ends up over a
+     * fill of the colour it used to be. `alphaOf` rewrites the alpha channel of the colour
+     * the stylesheet gave us, so the fill is always the line at lower opacity.
+     *
+     * Richer than it was — 0.22 against 0.14 — because the gradient is now relative to the
+     * visible data rather than to the pane, so the strong end sits just under the line
+     * instead of at the top of an empty chart. It fades to nothing well before the axis.
+     */
+    riseSoft: alphaOf(rise, 0.22),
+    fallSoft: alphaOf(fall, 0.2),
     text: token("--text", "rgba(10, 10, 10, 1)"),
     faint: token("--text-faint", "rgba(154, 154, 160, 1)"),
     line: token("--line", "rgba(230, 230, 232, 1)"),
-    // Fainter than a border, but not so faint it is absent: at 0.045 on white the
-    // dashes did not survive the canvas and the chart had no horizontals at all, which
-    // is the one thing they exist for — reading a point on the line against the axis
-    // without tracking across the gap.
-    grid: "rgba(0, 0, 0, 0.085)",
+    /*
+     * A horizontal you can read a value against and would not describe as a gridline.
+     *
+     * It was 0.085 and dashed, which is a trading terminal's answer: legible from across
+     * the room and the first thing the eye finds. At 0.04 and solid the line is there when
+     * looked for and absent otherwise, which is the whole job — reading a point on the
+     * curve against a figure on the axis without tracking across the gap.
+     */
+    grid: "rgba(0, 0, 0, 0.04)",
+    paper: token("--ax-paper", "rgba(255, 255, 255, 1)"),
   };
+}
+
+/** The same colour at a different opacity. See `riseSoft`. */
+function alphaOf(rgba: string, alpha: number): string {
+  const parts = /rgba?\(([^)]+)\)/.exec(rgba);
+  if (parts === null) return rgba;
+
+  const [red = "0", green = "0", blue = "0"] = parts[1]!.split(",").map((part) => part.trim());
+  return `rgba(${red}, ${green}, ${blue}, ${alpha.toFixed(3)})`;
 }
 
 export function Chart({
@@ -171,18 +196,10 @@ export function Chart({
   feedConfigured,
   valueScale,
   usdPerEth,
-  at,
-  createdAt,
   fallbackHeadline,
 }: ChartProps) {
-  /** Every span on offer, with "everything" sized from how old this market is. */
-  const ranges = useMemo(
-    () => [...CHART_RANGES, allRangeFor(at - createdAt, candleLib.CANDLE_INTERVALS)],
-    [at, createdAt],
-  );
-
-  const [rangeId, chooseRange] = useState(DEFAULT_RANGE.id);
-  const range = ranges.find((entry) => entry.id === rangeId) ?? DEFAULT_RANGE;
+  const [frameId, chooseFrame] = useState(DEFAULT_FRAME.id);
+  const range = CHART_FRAMES.find((entry) => entry.id === frameId) ?? DEFAULT_FRAME;
 
   const [ready, setReady] = useState(false);
   /** What the crosshair is over, or null when the cursor is elsewhere. */
@@ -251,13 +268,13 @@ export function Chart({
     queryKey: ["agen-candles", marketId, range.id],
     queryFn: async (): Promise<SerializedSeries | null> => {
       const response = await fetch(
-        `/api/markets/${marketId}/candles?interval=${range.interval}&limit=${String(range.buckets)}`,
+        `/api/markets/${marketId}/candles?interval=${range.id}&limit=${String(range.buckets)}`,
         { cache: "no-store" },
       );
       if (!response.ok) throw new Error(`the feed answered ${String(response.status)}`);
       return ((await response.json()) as { series: SerializedSeries | null }).series;
     },
-    ...(range.id === DEFAULT_RANGE.id && initial !== null ? { initialData: initial } : {}),
+    ...(range.id === DEFAULT_FRAME.id && initial !== null ? { initialData: initial } : {}),
     refetchInterval: POLL_MILLISECONDS,
     // A token page is often left open in a background tab, and a chart that resumed
     // hours behind is worse than one that reloads when looked at.
@@ -348,22 +365,47 @@ export function Chart({
           fontFamily: getComputedStyle(element).fontFamily,
           attributionLogo: false,
         },
-        // Horizontals only. They are what let somebody put a point on the line against a
-        // figure on the axis without tracking across the gap, which is most of what this
-        // chart is read for; verticals add nothing but ink.
+        // Horizontals only, and barely. They are what let somebody put a point on the line
+        // against a figure on the axis without tracking across the gap; verticals add
+        // nothing but ink, and a dash pattern announces itself where a solid hairline does
+        // the same work quietly.
         grid: {
           vertLines: { visible: false },
-          horzLines: { color: palette.grid, style: LineStyle.Dashed },
+          horzLines: { color: palette.grid, style: LineStyle.Solid },
         },
-        rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.15, bottom: 0.08 } },
+        /*
+         * Room on both sides of the curve, and width reserved for the axis.
+         *
+         * The margins keep the line off the top and bottom edges, so a market at its high
+         * does not draw along the container's border. `minimumWidth` is the gap the user
+         * asked for between the plot and the scale: there is no padding option, and a
+         * reserved width is the same thing — the labels sit at the right of it and the
+         * curve stops at its left.
+         */
+        rightPriceScale: {
+          borderVisible: false,
+          ticksVisible: false,
+          minimumWidth: 68,
+          scaleMargins: { top: 0.2, bottom: 0.14 },
+        },
         timeScale: {
           borderVisible: false,
+          ticksVisible: false,
           timeVisible: true,
           secondsVisible: false,
           // The line reaches the right edge, because its last point is now.
           rightOffset: 0,
           fixLeftEdge: true,
         },
+        /*
+         * A vertical touch drag scrolls the page, not the chart.
+         *
+         * The default is the opposite, which on a phone turns the plot into a band the
+         * reader has to swipe around to get past. Horizontal drag still pans, so nothing
+         * is lost: the gesture that means "scroll the page" and the gesture that means
+         * "move the chart" stop being the same gesture.
+         */
+        handleScroll: { vertTouchDrag: false },
         crosshair: {
           mode: CrosshairMode.Magnet,
           vertLine: {
@@ -389,9 +431,20 @@ export function Chart({
         lineColor: palette.rise,
         topColor: palette.riseSoft,
         bottomColor: "rgba(0, 0, 0, 0)",
+        /*
+         * The gradient is measured against the data, not the pane.
+         *
+         * Without this the fill runs from the top of the chart to the bottom whatever the
+         * curve is doing, so a market sitting low in its range gets a wash of colour above
+         * the line and almost none under it. Relative to the visible range the strong end
+         * is always just beneath the curve, which is the shape that reads as a chart rather
+         * than as a tinted box.
+         */
+        relativeGradient: true,
         priceLineVisible: false,
         lastValueVisible: false,
-        crosshairMarkerBorderWidth: 0,
+        crosshairMarkerBorderWidth: 2,
+        crosshairMarkerBorderColor: palette.paper,
         crosshairMarkerRadius: 4,
         priceFormat: { type: "custom", formatter: labelPrice, minMove: scale.current.minMove },
       });
@@ -560,24 +613,42 @@ export function Chart({
   /** A stored price in whatever unit the chart is currently drawing. */
   const label = (price: bigint): string => write(asFloat(price));
 
-  const empty =
-    !live
-      ? "This token has not launched, so it has no price history."
-      : !feedConfigured
-        ? "The price history is unavailable: this deployment has no indexer configured. The market is unaffected — it lives in contracts and trades through any interface."
-        : isPending
-          ? "Loading the price history."
-          : isError || data === null
-            ? "The price history is unavailable: the feed did not answer. The market is unaffected."
-            : "Nothing has traded yet, so there is no price to draw.";
+  /*
+   * Why there is nothing to draw, in the words each case deserves.
+   *
+   * `loading` is separated from the rest because it is the only one that is not a
+   * statement about the market: a skeleton belongs there and a sentence does not, and a
+   * sentence that says "loading" is a spinner with extra steps.
+   */
+  const loading = live && feedConfigured && isPending;
+
+  const empty = !live
+    ? "This token has not launched, so it has no price history."
+    : !feedConfigured
+      ? "The price history is unavailable: this deployment has no indexer configured. The market is unaffected — it lives in contracts and trades through any interface."
+      : isError || data === null
+        ? "The price history is unavailable: the feed did not answer. The market is unaffected."
+        : "Waiting for first trade";
+
+  /** The one empty state that is ordinary rather than a fault, and is set as such. */
+  const waiting = empty === "Waiting for first trade";
 
   return (
-    <section>
+    <section className="ax-tk-chart">
       <header className="ax-tk-top">
         {identity}
 
-        <div className="ax-tk-ranges" role="tablist" aria-label="timeframe">
-          {ranges.map((entry) => (
+        {/*
+          A segmented control, not a row of words.
+          
+          Six labels floating above a chart read as six links to somewhere; inside one
+          track with the chosen one filled, they read as one control with a position — and
+          the position is legible without reading any of the labels. Every width here is
+          one `@verdant/sdk` defines and the feed will answer for, so nothing on the strip
+          is a timeframe that turns out not to exist.
+        */}
+        <div className="ax-tk-frames" role="tablist" aria-label="candle width">
+          {CHART_FRAMES.map((entry) => (
             <button
               type="button"
               role="tab"
@@ -585,7 +656,7 @@ export function Chart({
               aria-selected={range.id === entry.id}
               className={range.id === entry.id ? "on" : ""}
               onClick={() => {
-                chooseRange(entry.id);
+                chooseFrame(entry.id);
               }}
             >
               {entry.label}
@@ -606,7 +677,16 @@ export function Chart({
               {Math.abs(summary.change).toFixed(2)}%
             </span>
           )}
-          <span>{hovered === null ? range.label : formatInstant(hovered.at)}</span>
+
+          {/*
+            What the figure above refers to: the width when nothing is hovered, and the
+            moment under the crosshair when something is. One slot rather than two, so the
+            readout does not change width as the pointer crosses the plot.
+          */}
+          <span className="ax-tk-when">
+            {hovered === null ? `${range.label} candles` : formatInstant(hovered.at)}
+          </span>
+
           {summary === null || summary.trades === 0 ? null : (
             <span>
               low {label(summary.low)} · high {label(summary.high)} · {String(summary.trades)}{" "}
@@ -619,7 +699,23 @@ export function Chart({
       <div className="ax-tk-plot">
         <div ref={container} className="ax-tk-canvas" />
 
-        {points.length === 0 ? <p className="ax-tk-empty">{empty}</p> : null}
+        {points.length > 0 ? null : loading ? (
+          /*
+           * A skeleton, not a spinner.
+           *
+           * A spinner in the middle of an empty frame says "something is happening here"
+           * and nothing about what. Three bars where the axis will be, and a soft sweep
+           * across them, say the shape of what is arriving — and when it does, the frame
+           * is already the right size so nothing jumps.
+           */
+          <div className="ax-tk-skeleton" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+        ) : (
+          <p className={waiting ? "ax-tk-empty ax-tk-waiting" : "ax-tk-empty"}>{empty}</p>
+        )}
       </div>
     </section>
   );

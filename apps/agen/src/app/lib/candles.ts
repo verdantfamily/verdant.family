@@ -145,61 +145,62 @@ export function parseSeries(raw: SerializedSeries): CandleSeries {
 export const POLL_MILLISECONDS = 1_000;
 
 /**
- * How much history a reader is asking for, and what to bucket it into.
+ * A timeframe the reader can choose, and what it asks the feed for.
  *
- * The control picks a *span* — "the last hour" — because that is what a person means and
- * what every exchange offers. The indexer's parameters are the other pair, a width and a
- * count, so each range names the two that produce it. The widths leave enough points to
- * look like a line and few enough that the series is small.
+ * The candle width, not a span. This used to offer spans — "the last hour", "the last
+ * day" — which is what a person means in conversation and turned out to be the wrong
+ * control here: it produced labels like `5M` and `1H` that look exactly like candle
+ * widths, so a strip reading `5M 1H 6H 1D` was four windows dressed as four intervals and
+ * nobody could tell which. Every exchange's chart offers the width, so this does too.
+ *
+ * `id` is the interval itself, which is why there is no separate field for it: the
+ * timeframe *is* the interval, and giving it a second identity is how the two drifted
+ * apart before.
+ *
+ * Only widths `@verdant/sdk` defines and the feed will answer for. A week is left out
+ * rather than shown empty — no market on this chain is old enough for one weekly candle
+ * to be a line — and nothing here offers a width the feed would refuse.
  */
-export interface ChartRange {
-  readonly id: string;
+export interface ChartFrame {
+  readonly id: candles.CandleInterval;
   readonly label: string;
-  readonly interval: candles.CandleInterval;
+  /**
+   * How many buckets to ask for.
+   *
+   * Enough to draw a line at any width rather than tuned per width, because the point of
+   * choosing a width is to see the same number of them at a different resolution. A young
+   * market simply has fewer, which is the truth about it and looks like it.
+   */
   readonly buckets: number;
 }
 
-export const CHART_RANGES: readonly ChartRange[] = [
-  { id: "5m", label: "5M", interval: "1m", buckets: 5 },
-  { id: "1h", label: "1H", interval: "1m", buckets: 60 },
-  { id: "6h", label: "6H", interval: "5m", buckets: 72 },
-  { id: "1d", label: "1D", interval: "5m", buckets: 288 },
+export const CHART_FRAMES: readonly ChartFrame[] = [
+  { id: "1m", label: "1m", buckets: 120 },
+  { id: "5m", label: "5m", buckets: 120 },
+  { id: "15m", label: "15m", buckets: 120 },
+  { id: "1h", label: "1h", buckets: 120 },
+  { id: "4h", label: "4h", buckets: 120 },
+  { id: "1d", label: "1d", buckets: 90 },
 ];
 
-/** The range the chart opens on, and the one the server renders. */
-export const DEFAULT_RANGE: ChartRange = CHART_RANGES[2]!;
+/**
+ * The width the chart opens on, and the one the server renders.
+ *
+ * Five minutes: fine enough that a market trading today has a shape, coarse enough that
+ * a market trading for a week still fits in one screen of buckets.
+ */
+export const DEFAULT_FRAME: ChartFrame = CHART_FRAMES[1]!;
 
 /**
- * The range covering a market's whole life.
+ * What the token page asks for before the browser has chosen anything.
  *
- * Computed rather than fixed, because "everything" is an hour for a market launched this
- * morning and a year for one launched last year, and no single interval serves both:
- * one-minute buckets over a year is half a million points, and daily buckets over a
- * morning is one. This walks from the finest interval up and takes the first that covers
- * the age within the ceiling.
+ * Kept under the old name because the page reads `.interval` and `.buckets` from it, and
+ * a frame's interval is its id.
  */
-export function allRangeFor(
-  ageSeconds: number,
-  intervals: readonly candles.IntervalDescriptor[],
-  most = 600,
-): ChartRange {
-  const age = Math.max(ageSeconds, 60);
-
-  for (const entry of intervals) {
-    const needed = Math.ceil(age / entry.seconds);
-    if (needed <= most) {
-      return {
-        id: "all",
-        label: "ALL",
-        interval: entry.id,
-        // At least a handful, so a market minutes old draws a line rather than a dot.
-        buckets: Math.max(needed, 5),
-      };
-    }
-  }
-
-  return { id: "all", label: "ALL", interval: "1w", buckets: most };
-}
+export const DEFAULT_RANGE: {
+  readonly interval: candles.CandleInterval;
+  readonly buckets: number;
+} = { interval: DEFAULT_FRAME.id, buckets: DEFAULT_FRAME.buckets };
 
 /** 10^36, the scale the indexer's prices arrive at. */
 const PRICE_SCALE = 10 ** 36;

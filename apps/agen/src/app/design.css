@@ -4223,13 +4223,79 @@ span.ax-pager-arrow {
   min-width: 0;
 }
 
+/* --- the chart, as one object -------------------------------------------- */
+
+/*
+ * A container, because the chart is the centrepiece and was dressed as an embed.
+ *
+ * It sat directly on the page: a canvas with an axis, no edge, nothing holding the
+ * headline and the control to the thing they describe. Three of them — a readout, a
+ * segmented control and a plot — were three loose elements that happened to be stacked.
+ *
+ * A hairline and a barely-tinted surface rather than a shadow. A shadow lifts a panel off
+ * the page, which is right for something temporary like a dialog and wrong for the one
+ * region the page exists to show; this sits *in* the page at a slightly different
+ * elevation. The radius is the same `--ax-plate` the banners and the footer use, so the
+ * chart is recognisably the same family of surface rather than a card from somewhere else.
+ */
+.ax-tk-chart {
+  padding: 20px 22px 14px;
+  background: linear-gradient(180deg, rgb(250 250 251 / 90%) 0%, rgb(255 255 255 / 0%) 62%);
+  border: 1px solid var(--ax-line);
+  border-radius: var(--ax-plate);
+}
+
 /* --- the identity and the timeframe -------------------------------------- */
 
 .ax-tk-top {
   display: flex;
   align-items: center;
   gap: 24px;
-  margin-bottom: 30px;
+  margin-bottom: 22px;
+}
+
+/*
+ * The candle width, as one control with a position.
+ *
+ * Six words in a row read as six links. Inside a track, with the chosen one filled and
+ * the rest transparent, they read as a switch — and which one is in force is legible
+ * without reading any of them. Sized down from the buttons it replaced: this is the
+ * smallest decision on the page and was taking the most horizontal room.
+ */
+.ax-tk-frames {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: auto;
+  padding: 3px;
+  background: var(--ax-fill);
+  border-radius: 999px;
+}
+
+.ax-tk-frames button {
+  min-width: 34px;
+  height: 26px;
+  padding: 0 9px;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 450;
+  letter-spacing: -0.008em;
+  color: var(--ax-muted);
+  background: none;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.16s var(--ax-ease), background 0.16s var(--ax-ease);
+}
+
+.ax-tk-frames button:hover:not(.on) {
+  color: var(--ax-ink);
+}
+
+.ax-tk-frames button.on {
+  color: var(--ax-ink);
+  background: var(--ax-paper);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 6%);
 }
 
 .ax-tk-who {
@@ -4264,40 +4330,14 @@ span.ax-pager-arrow {
 }
 
 /*
- * The timeframe strip: text, not pills.
+ * There was an `.ax-tk-ranges` here: four labels as bare text, no container.
  *
- * It is the only control on this half of the page, so it needs no container to be found;
- * giving it one would make four buttons compete with the market cap underneath, which is
- * the thing the eye is supposed to land on first.
+ * The reasoning was that the only control on this half of the page needs no container to
+ * be found, and that a container would compete with the market cap under it. Both were
+ * true of four; at six it stopped being a strip and started being a row of links, and the
+ * labels — `5M`, `1H` — looked like candle widths while naming windows. `.ax-tk-frames`
+ * above is the replacement: smaller, in a track, and naming the thing it actually sets.
  */
-.ax-tk-ranges {
-  display: flex;
-  align-items: center;
-  gap: 22px;
-  margin-left: auto;
-}
-
-.ax-tk-ranges button {
-  padding: 0;
-  font: inherit;
-  font-size: 0.78rem;
-  font-weight: 450;
-  letter-spacing: -0.01em;
-  color: var(--ax-faint);
-  background: none;
-  border: 0;
-  cursor: pointer;
-  transition: color 0.16s var(--ax-ease);
-}
-
-.ax-tk-ranges button:hover {
-  color: var(--ax-body);
-}
-
-.ax-tk-ranges button.on {
-  font-weight: 600;
-  color: var(--ax-ink);
-}
 
 /* --- the headline -------------------------------------------------------- */
 
@@ -4338,6 +4378,19 @@ span.ax-pager-arrow {
   color: var(--ax-muted);
 }
 
+/*
+ * The slot that says what the figure above refers to.
+ *
+ * Tabular and minimum-width, because it alternates between a candle width and a timestamp
+ * as the pointer crosses the plot. Left to size itself, the readout would resize under the
+ * cursor and shove the figures beside it sideways — the one thing a live readout must not
+ * do while somebody is reading it.
+ */
+.ax-tk-when {
+  min-width: 15ch;
+  font-variant-numeric: tabular-nums;
+}
+
 .ax-tk-move .up {
   color: var(--ax-up);
 }
@@ -4348,9 +4401,17 @@ span.ax-pager-arrow {
 
 /* --- the chart ----------------------------------------------------------- */
 
+/*
+ * Fluid, within bounds.
+ *
+ * A fixed 320px is right on one screen and wrong on the two either side of it: on a laptop
+ * the chart is short beside a trade panel taller than it, and on a phone it is a wall. The
+ * viewport term does the work and the bounds stop it: never so short that the shape is
+ * unreadable, never so tall that the trade card falls below the fold.
+ */
 .ax-tk-plot {
   position: relative;
-  min-height: 320px;
+  height: clamp(248px, 38vh, 420px);
 }
 
 /*
@@ -4363,7 +4424,7 @@ span.ax-pager-arrow {
 .ax-tk-canvas {
   --up: #17c06b;
   --down: #e0483f;
-  height: 320px;
+  height: 100%;
 }
 
 .ax-tk-plot .ax-tk-empty {
@@ -4377,6 +4438,65 @@ span.ax-pager-arrow {
   font-size: 0.83rem;
   line-height: 1.6;
   color: var(--ax-muted);
+}
+
+/*
+ * A market with no trades yet, which is not a failure and should not read as one.
+ *
+ * Every other empty state here is an explanation of something that went wrong. This one is
+ * the ordinary condition of a token seconds old, so it is set as a quiet label rather than
+ * a paragraph — the page around it already shows the opening market cap, the supply and the
+ * fee, and none of that is missing.
+ */
+.ax-tk-plot .ax-tk-waiting {
+  font-size: 0.8rem;
+  letter-spacing: -0.008em;
+  color: var(--ax-faint);
+}
+
+/*
+ * The skeleton, in the shape of what is coming.
+ *
+ * Three rules where the gridlines will be, sweeping once every 1.6 seconds. A spinner in
+ * the middle of the frame would say that something is happening and nothing about what;
+ * this says "a chart, here, shortly" and holds the exact height the chart will take, so
+ * nothing moves when it arrives.
+ */
+.ax-tk-skeleton {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-evenly;
+  padding: 18% 68px 18% 0;
+  pointer-events: none;
+}
+
+.ax-tk-skeleton span {
+  height: 1px;
+  background: var(--ax-line);
+}
+
+.ax-tk-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    rgb(255 255 255 / 0%) 30%,
+    rgb(0 0 0 / 3.5%) 50%,
+    rgb(255 255 255 / 0%) 70%
+  );
+  animation: ax-tk-sweep 1.6s var(--ax-ease) infinite;
+}
+
+@keyframes ax-tk-sweep {
+  from {
+    transform: translateX(-60%);
+  }
+  to {
+    transform: translateX(60%);
+  }
 }
 
 /* --- recent trades ------------------------------------------------------- */
@@ -4941,51 +5061,51 @@ span.ax-pager-arrow {
     margin: 18px 0;
   }
 
+  /* Tighter than the desktop container, which can afford its margins. */
+  .ax-tk-chart {
+    padding: 14px 12px 8px;
+  }
+
   .ax-tk-top {
     flex-wrap: wrap;
     gap: 14px;
-    margin-bottom: 22px;
+    margin-bottom: 18px;
   }
 
   /*
-   * Wrapped under the identity rather than stretched across it — five labels spread edge
-   * to edge stop reading as one control — and then spread within that line, with height.
+   * The control takes the whole line under the identity and spreads within it.
    *
-   * On a pointer these are small words that only have to be clicked accurately. On a phone
-   * they are the chart's only control and they are being hit with a thumb, so they get a
-   * 40-pixel target, which `gap` cannot provide: the gap is between the labels rather than
-   * part of them.
+   * Six widths crowded into the corner of a 390px screen are six targets too small for a
+   * thumb. Full width with the labels distributed gives each one room, and the track still
+   * reads as one control because the track is what is full width — not the labels floating
+   * in it.
    */
-  .ax-tk-ranges {
-    gap: 4px;
+  .ax-tk-frames {
     width: 100%;
     margin-left: 0;
     justify-content: space-between;
   }
 
-  .ax-tk-ranges button {
-    min-width: 44px;
-    min-height: 40px;
-    font-size: 0.82rem;
+  .ax-tk-frames button {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 32px;
+    padding: 0;
+    font-size: 0.76rem;
   }
 
   /*
-   * Shorter, because the headline and the timeframe strip above it are not.
+   * Shorter, because the headline and the control above it are not.
    *
-   * A 320-pixel plot under a wrapped header and a two-line readout leaves a phone showing
-   * almost nothing else, and the shape of a line is legible in less height than the number
-   * above it needs to be legible in.
+   * The clamp already scales with the viewport; this lowers its floor, since a phone's 38vh
+   * lands near the bottom of the desktop range and the readout above needs its own room.
    */
   .ax-tk-plot {
-    min-height: 260px;
-  }
-
-  .ax-tk-canvas {
-    height: 260px;
+    height: clamp(210px, 34vh, 300px);
   }
 
   .ax-tk-cap {
-    margin-bottom: 18px;
+    margin-bottom: 14px;
   }
 
   /* Wraps rather than overflows: the low/high/trades line is three facts, not one string. */

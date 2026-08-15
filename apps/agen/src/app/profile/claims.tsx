@@ -48,7 +48,8 @@ import { useAccount, usePublicClient, useSendTransaction, useWaitForTransactionR
 import { fees, instant as instantFees, markets as marketReads } from "@verdant/sdk";
 import type { PublicClient } from "viem";
 
-import { INSTANT_ADDRESSES, VERDANT_ADDRESSES, chain } from "../lib/chain";
+import { BOOST_ADDRESSES, INSTANT_ADDRESSES, VERDANT_ADDRESSES, chain } from "../lib/chain";
+import { boostCapabilityOf } from "../lib/boost";
 
 /** What both kinds of market have in common, which is less than it looks. */
 interface Earned {
@@ -74,6 +75,22 @@ interface VerdantEarning extends Earned {
 interface InstantEarning extends Earned {
   readonly source: "instant";
   readonly vault: Address;
+  /**
+   * The market's Boost escrow, or null for a market that has none.
+   *
+   * Null is the normal case, and always will be for every market launched before Boost
+   * existed: `InstantFeeVault.creator` is immutable, so a market that named a wallet is paid
+   * directly forever and its row here behaves exactly as it did before this field was added.
+   */
+  readonly escrow: Address | null;
+  /**
+   * Committed to buybacks, and deliberately not part of `ether`.
+   *
+   * A separate field rather than a subtraction, so that fees earned while Boost was on cannot
+   * be folded into the claimable figure by a later edit. They are not the creator's income.
+   */
+  readonly boostCommitted: bigint;
+  readonly boostEnabled: boolean;
 }
 
 type Earning = VerdantEarning | InstantEarning;
@@ -149,13 +166,59 @@ async function loadInstant(client: PublicClient, viewer: Address): Promise<reado
     records.map(async (record): Promise<InstantEarning> => {
       const vault = record.splitter;
 
-      const [info, owed, recipient] = await Promise.all([
+      const [info, recipient] = await Promise.all([
         marketReads.readToken(client, record.token),
-        // No simulation: the fee never entered the position, so this is already what a
-        // claim would pay rather than what has happened to be swept so far.
-        instantFees.readInstantClaimable(client, { vault, recipient: viewer }),
         instantFees.readInstantFeeRecipient(client, { vault }),
       ]);
+
+      /*
+       * Is this market's fee recipient a Boost escrow belonging to this wallet?
+       *
+       * Asked of the vault, which is the authority on who gets paid, and answered by a CREATE2
+       * derivation rather than by a list — so a contract of somebody's own writing cannot pass
+       * itself off as an escrow. Null for every market that named a wallet, which is every
+       * market that predates Boost, and those take the first branch below unchanged.
+       */
+      const boost =
+        BOOST_ADDRESSES === null ? null : await boostCapabilityOf(client, { vault, creator: viewer });
+
+      if (boost === null) {
+        // Exactly what this function did before Boost existed. No simulation: the fee never
+        // entered the position, so this is already what a claim would pay rather than what
+        // has happened to be swept so far.
+        const owed = await instantFees.readInstantClaimable(client, { vault, recipient: viewer });
+
+        return {
+          source: "instant",
+          poolId: record.poolId,
+          token: record.token,
+          symbol: info.symbol,
+          vault,
+          escrow: null,
+          boostCommitted: 0n,
+          boostEnabled: false,
+          recipientIsYou: recipient.toLowerCase() === viewer.toLowerCase(),
+          ether: owed,
+        };
+      }
+
+      const state = await instantFees.readBoostState(client, {
+        escrow: boost.escrow,
+        token: record.token,
+      });
+
+      /*
+       * What a claim would actually put in this wallet.
+       *
+       * With Boost off, the escrow's balance plus whatever the vault still holds — `pull`
+       * claims and pays in one transaction, so both arrive. With Boost on, the escrow's balance
+       * alone: the vault's outstanding amount is already committed, and settling it moves it to
+       * Boost rather than to the creator. Including it would be the exact mistake the
+       * specification forbids.
+       */
+      const claimable = state.enabled
+        ? state.creatorPending
+        : state.creatorPending + state.vaultClaimable;
 
       return {
         source: "instant",
@@ -163,8 +226,13 @@ async function loadInstant(client: PublicClient, viewer: Address): Promise<reado
         token: record.token,
         symbol: info.symbol,
         vault,
-        recipientIsYou: recipient.toLowerCase() === viewer.toLowerCase(),
-        ether: owed,
+        escrow: boost.escrow,
+        boostCommitted: state.pending + (state.enabled ? state.vaultClaimable : 0n),
+        boostEnabled: state.enabled || state.locked,
+        // The escrow pays its immutable owner and nothing else, and this wallet is that owner —
+        // that is what made `boostCapabilityOf` answer at all.
+        recipientIsYou: true,
+        ether: claimable,
       };
     }),
   );
@@ -264,13 +332,19 @@ function ClaimRow({
   const [step, setStep] = useState<"idle" | "collecting" | "claiming" | "done">("idle");
 
   const tokens = earning.source === "verdant" ? earning.tokens : 0n;
+  const boosted = earning.source === "instant" ? earning.boostCommitted : 0n;
   const nothing = earning.ether === 0n && tokens === 0n;
 
   const claim = useCallback(() => {
     const call =
-      earning.source === "instant"
-        ? instantFees.buildInstantClaimCreator({ vault: earning.vault })
-        : fees.buildClaim({ splitter: earning.splitter });
+      earning.source !== "instant"
+        ? fees.buildClaim({ splitter: earning.splitter })
+        : earning.escrow === null
+          ? instantFees.buildInstantClaimCreator({ vault: earning.vault })
+          : // A Boost-capable market claims through its escrow, which settles the vault and
+            // pays the creator's share in one transaction. With Boost on there is nothing to
+            // pay, which is why the button is already disabled at zero.
+            instantFees.buildBoostPull({ escrow: earning.escrow, token: earning.token });
 
     setStep("claiming");
     send.sendTransaction({ to: call.to, data: call.data, value: call.value });
@@ -319,6 +393,18 @@ function ClaimRow({
             + {ether(tokens)} ${earning.symbol}
           </em>
         ) : null}
+        {/*
+          Boost's share, said rather than silently absent.
+
+          Without this line a creator with Boost on sees a claimable figure of zero on a market
+          that has been earning all day, which reads as a bug. It is deliberately outside the
+          bold figure: this money is committed to buybacks and is not theirs to claim.
+        */}
+        {boosted > 0n ? (
+          <em className="ax-claim-boost">
+            {ether(boosted)} {chain.nativeCurrency.symbol} in Boost
+          </em>
+        ) : null}
       </span>
 
       <button
@@ -334,7 +420,9 @@ function ClaimRow({
             : step === "done"
               ? "Claimed"
               : nothing
-                ? "Nothing yet"
+                ? boosted > 0n
+                  ? "All in Boost"
+                  : "Nothing yet"
                 : "Claim"}
       </button>
     </div>

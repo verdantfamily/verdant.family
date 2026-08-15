@@ -27,7 +27,7 @@
  */
 
 import { db } from "ponder:api";
-import { instantMarket, instantSwap } from "ponder:schema";
+import { boostBuyback, instantMarket, instantSwap } from "ponder:schema";
 import { candles as candleLib } from "@verdant/sdk";
 import { quotePerToken } from "@verdant/ui";
 import { Hono } from "hono";
@@ -109,10 +109,57 @@ function present(row: MarketRow) {
     tick: row.tick,
     liquidity: row.liquidity.toString(),
 
+    /**
+     * Total volume, and the two parts it divides into.
+     *
+     * `volumeQuote` is every swap in the pool, which is what the chain says and what this feed
+     * has always reported. `boostVolumeQuote` is the part of it that was a Boost buyback, and
+     * `organicVolumeQuote` is the subtraction — served rather than left to the caller so that
+     * every consumer subtracts the same way.
+     *
+     * The distinction is not pedantry. A Boosted market's buybacks are its own creator's fees
+     * being spent in its own pool, so counting them as volume would present a market as busier
+     * than the interest in it warrants — which is the same thing a launchpad must not do with a
+     * wash trade, arrived at by a legitimate route.
+     */
     swapCount: row.swapCount,
     volumeQuote: row.volumeQuote.toString(),
     volumeToken: row.volumeToken.toString(),
+    organicVolumeQuote: (row.volumeQuote - row.boostVolumeQuote).toString(),
+    organicVolumeToken: (row.volumeToken - row.boostVolumeToken).toString(),
+    boostVolumeQuote: row.boostVolumeQuote.toString(),
+    boostVolumeToken: row.boostVolumeToken.toString(),
     lastSwapAt: row.lastSwapAt,
+
+    /**
+     * Agen Boost, as of the last event this feed saw.
+     *
+     * `boostEscrow` is null for every market that cannot be Boosted, which is every market
+     * launched before Boost existed — the vault's recipient is immutable, so that null is
+     * permanent rather than pending.
+     *
+     * `boostSunkToken` is **not** a reduction in `totalSupply` above. Instant tokens have no
+     * `burn`, so the total never moves and a circulating supply is the difference between the
+     * two. `circulatingSupply` is served for the same reason `organicVolumeQuote` is: so no
+     * consumer has to know that and get it wrong.
+     */
+    boost: {
+      escrow: row.boostEscrow,
+      capable: row.boostEscrow !== null,
+      enabled: row.boostEnabled,
+      locked: row.boostLocked,
+      spentQuote: row.boostSpentQuote.toString(),
+      /** Whether this market's platform 0.50% is captured, which decides 1.50% or 1.00%. */
+      platformCaptured: row.boostPlatformCaptured,
+      /** Agen's 0.50%, routed by the fee architecture. A guarantee, not a gift. */
+      agenRoutedQuote: row.boostAgenRoutedQuote.toString(),
+      /** Ether contributed from outside either fee stream. A gift, not a guarantee. */
+      agenDonatedQuote: row.boostAgenDonatedQuote.toString(),
+      sunkToken: row.boostSunkToken.toString(),
+      count: row.boostCount,
+      lastBoostAt: row.lastBoostAt,
+    },
+    circulatingSupply: (row.totalSupply - row.boostSunkToken).toString(),
   };
 }
 
@@ -221,7 +268,7 @@ export function instantRoutes({
     const at = await chainNow();
     const since = at - DAY_SECONDS;
 
-    const [day, extremes, entering] = await Promise.all([
+    const [day, extremes, entering, boostDay] = await Promise.all([
       db
         .select({
           volumeQuote: sum(instantSwap.quoteAmount),
@@ -253,6 +300,23 @@ export function instantRoutes({
         )
         .orderBy(desc(instantSwap.blockNumber), desc(instantSwap.logIndex))
         .limit(1),
+
+      /*
+       * The Boost buybacks inside the same window.
+       *
+       * Summed from `boost_buyback` rather than by filtering `instant_swap`, because the two
+       * cannot be told apart there: a buyback reaches the pool through `AgenRouter` exactly as
+       * a trader's buy does, so the swap row's `sender` is the router in both cases. The escrow's
+       * own event is the only place the distinction exists.
+       */
+      db
+        .select({
+          volumeQuote: sum(boostBuyback.etherSpent),
+          volumeToken: sum(boostBuyback.tokensBought),
+          count: count(),
+        })
+        .from(boostBuyback)
+        .where(and(eq(boostBuyback.token, row.token), gte(boostBuyback.timestamp, since))),
     ]);
 
     // A market younger than the window has no "24 hours ago" to compare against, so its
@@ -279,8 +343,25 @@ export function instantRoutes({
       window: DAY_SECONDS,
       day: {
         since,
+        /*
+         * Three figures, because a Boosted market's volume is not all demand.
+         *
+         * `volumeQuote` is every swap, which is what the chain says. `boostVolumeQuote` is the
+         * part that was the creator's own fees being spent in their own pool. `organic` is the
+         * subtraction, and it is the one a "most active" ranking should use — otherwise a market
+         * that Boosts hard outranks one people are actually buying.
+         *
+         * Clamped at zero rather than allowed negative. The two sources are different tables and
+         * a backfill can have one ahead of the other for a few blocks; a negative volume is
+         * never a truer answer than zero.
+         */
         volumeQuote: (day[0]?.volumeQuote ?? 0).toString(),
         volumeToken: (day[0]?.volumeToken ?? 0).toString(),
+        boostVolumeQuote: (boostDay[0]?.volumeQuote ?? 0).toString(),
+        boostVolumeToken: (boostDay[0]?.volumeToken ?? 0).toString(),
+        organicVolumeQuote: notBelowZero(day[0]?.volumeQuote, boostDay[0]?.volumeQuote),
+        organicVolumeToken: notBelowZero(day[0]?.volumeToken, boostDay[0]?.volumeToken),
+        boostBuybacks: Number(boostDay[0]?.count ?? 0),
         trades: Number(day[0]?.trades ?? 0),
         /** Percent, or null when the market has never traded and there is nothing to compare. */
         changePercent:
@@ -352,6 +433,23 @@ export function instantRoutes({
         )
         .orderBy(desc(instantSwap.blockNumber), desc(instantSwap.logIndex))
         .limit(1),
+
+      /*
+       * The Boost buybacks inside the same window.
+       *
+       * Summed from `boost_buyback` rather than by filtering `instant_swap`, because the two
+       * cannot be told apart there: a buyback reaches the pool through `AgenRouter` exactly as
+       * a trader's buy does, so the swap row's `sender` is the router in both cases. The escrow's
+       * own event is the only place the distinction exists.
+       */
+      db
+        .select({
+          volumeQuote: sum(boostBuyback.etherSpent),
+          volumeToken: sum(boostBuyback.tokensBought),
+          count: count(),
+        })
+        .from(boostBuyback)
+        .where(and(eq(boostBuyback.token, row.token), gte(boostBuyback.timestamp, since))),
     ]);
 
     const entering = before[0];
@@ -385,4 +483,17 @@ export function instantRoutes({
   });
 
   return instant;
+}
+
+/**
+ * A difference that cannot be negative.
+ *
+ * The total and the Boost figure come from two tables, and during a backfill one can be ahead of
+ * the other by a few blocks — which would otherwise produce a negative organic volume. Zero is
+ * wrong by less.
+ */
+function notBelowZero(total: unknown, part: unknown): string {
+  const whole = BigInt(String(total ?? 0));
+  const taken = BigInt(String(part ?? 0));
+  return (whole > taken ? whole - taken : 0n).toString();
 }

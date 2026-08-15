@@ -22,6 +22,7 @@ import { BOUNDS } from "@verdant/config";
 import { Bloom } from "../../bloom";
 import { SiteFooter } from "../../footer";
 import { chain } from "../../lib/chain";
+import { BOOST_AVAILABLE } from "../../lib/boost";
 import {
   INSTANT_HELD,
   INSTANT_LAUNCHABLE,
@@ -145,6 +146,42 @@ export function Instant() {
             </label>
           </div>
         </div>
+
+        {/*
+          Boost, as a property of the launch rather than a setting to find later.
+
+          It is here and not on the market page because of what is irreversible: naming a
+          wallet at launch means this market can never be Boosted, because the vault makes the
+          recipient immutable. Naming the escrow costs nothing — Boost starts off, and with it
+          off the fees reach the same wallet — so the box is ticked and the consequence of
+          clearing it is stated rather than implied.
+        */}
+        {BOOST_AVAILABLE ? (
+          <div className="ax-in">
+            <span>Agen Boost</span>
+
+            <label className="ax-check ax-check-lead" htmlFor="boost">
+              <input
+                id="boost"
+                type="checkbox"
+                checked={draft.boostCapable}
+                onChange={(event) => {
+                  set("boostCapable", event.currentTarget.checked);
+                }}
+              />
+              Allow Boost on this market
+            </label>
+
+            <p className="ax-in-note">
+              {draft.boostCapable
+                ? "Boost starts off — your fees come to you as normal. You can switch it on " +
+                  "later from the token's page to use them for automatic buybacks instead. " +
+                  "The first Boost-capable launch needs one extra transaction."
+                : "This market will never be able to use Boost. The fee address is fixed when " +
+                  "the market is created and cannot be changed afterwards by anyone."}
+            </p>
+          </div>
+        ) : null}
 
         <div className="ax-in">
           <span>Initial buy</span>

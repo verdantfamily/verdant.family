@@ -27,13 +27,24 @@ import { useAccount, usePublicClient, useSendTransaction, useSwitchChain, useWai
 
 import { abi, instant as instantSdk, launch as launchSdk } from "@verdant/sdk";
 
-import { CHAIN_ID, EXPLORER_URL, INSTANT_ADDRESSES, chain, shortAddress } from "../../lib/chain";
+import { BOOST_ADDRESSES, CHAIN_ID, EXPLORER_URL, INSTANT_ADDRESSES, chain, shortAddress } from "../../lib/chain";
 import { INSTANT_FEE_PERCENTS, absoluteUrl, instantParams, type Derived } from "../../lib/instant";
 
 interface Prepared {
   readonly salt: Hex;
   readonly token: Address;
   readonly metadataURI: string;
+  /**
+   * The address to submit as `feeRecipient`, and whether it needs deploying first.
+   *
+   * For a Boost-capable launch this is the creator's escrow, whose address is a pure function
+   * of their payout address — so it can be named before it exists. It must exist by the time
+   * the launch lands, though, because `InstantFeeVault` rejects nothing about a recipient
+   * without code and would happily fix an immutable pointing at an empty address. Hence
+   * `escrowNeeded`: one extra transaction, once per creator, ever.
+   */
+  readonly feeRecipient: Address;
+  readonly escrowNeeded: boolean;
 }
 
 interface Created {
@@ -61,6 +72,13 @@ export function Preview({
   const [prepared, setPrepared] = useState<Prepared | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<Created | null>(null);
+  /**
+   * Which transaction is in flight.
+   *
+   * `escrow` only ever occurs for a creator's first Boost-capable launch. Everything else goes
+   * straight from `idle` to `launching`, which is the whole of what this screen did before.
+   */
+  const [step, setStep] = useState<"idle" | "escrow" | "launching">("idle");
 
   const connected = status === "connected" && address !== undefined;
   const wrongNetwork = connected && chainId !== CHAIN_ID;
@@ -149,8 +167,28 @@ export function Preview({
           above: "0x0000000000000000000000000000000000000000",
         });
 
+        /*
+         * Where the fees will be sent, resolved before anything is signed.
+         *
+         * A Boost-capable launch names the creator's escrow. Its address is derived from their
+         * payout address, so it is known here whether or not it has been deployed — and
+         * `escrowNeeded` is what turns the button into two steps for the one launch in a
+         * creator's life that needs them.
+         */
+        let feeRecipient = derived.feeRecipient!;
+        let escrowNeeded = false;
+
+        if (derived.boostCapable && BOOST_ADDRESSES !== null) {
+          const escrow = await instantSdk.readEscrowAddress(client, {
+            escrowFactory: BOOST_ADDRESSES.escrowFactory,
+            owner: derived.feeRecipient!,
+          });
+          feeRecipient = escrow.escrow;
+          escrowNeeded = !escrow.deployed;
+        }
+
         if (!live) return;
-        setPrepared({ salt: mined.salt, token: mined.token, metadataURI });
+        setPrepared({ salt: mined.salt, token: mined.token, metadataURI, feeRecipient, escrowNeeded });
       } catch {
         if (live) setError("The chain did not answer, so this launch could not be prepared.");
       }
@@ -164,7 +202,7 @@ export function Preview({
   /** Read the receipt rather than trusting the request that produced it. */
   useEffect(() => {
     if (!receipt.isSuccess || receipt.data === undefined || send.data === undefined) return;
-    if (address === undefined) return;
+    if (address === undefined || step !== "launching") return;
 
     const [event] = parseEventLogs({
       abi: abi.instantFactoryAbi,
@@ -189,6 +227,7 @@ export function Preview({
       .reduce((total, log) => total + log.args.value, 0n);
 
     setCreated({ poolId: event.args.poolId, token: event.args.token, bought, hash: send.data });
+    setStep("idle");
 
     /*
      * Ask for the token to be source-verified, and do not wait for the answer.
@@ -209,17 +248,23 @@ export function Preview({
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ token: event.args.token }),
     }).catch(() => undefined);
-  }, [receipt.isSuccess, receipt.data, send.data, address]);
+  }, [receipt.isSuccess, receipt.data, send.data, address, step]);
 
-  const go = useCallback(() => {
+  const launch = useCallback(() => {
     if (prepared === null || INSTANT_ADDRESSES === null) return;
 
     setError(null);
+    setStep("launching");
 
     try {
       const call = instantSdk.buildInstantCreate({
         factory: INSTANT_ADDRESSES.factory,
-        params: instantParams({ derived, metadataURI: prepared.metadataURI, salt: prepared.salt }),
+        params: instantParams({
+          derived,
+          metadataURI: prepared.metadataURI,
+          salt: prepared.salt,
+          feeRecipient: prepared.feeRecipient,
+        }),
       });
 
       send.sendTransaction({ to: call.to, data: call.data, value: call.value, chainId: CHAIN_ID });
@@ -227,6 +272,46 @@ export function Preview({
       setError("This launch could not be encoded. Go back and check the details.");
     }
   }, [derived, prepared, send]);
+
+  /**
+   * The escrow first, where one is needed, and the launch after it lands.
+   *
+   * Two transactions rather than one, and only ever for a creator's first Boost-capable launch:
+   * the escrow's address is derived from their payout address, so every later launch finds it
+   * already there. It has to be a separate transaction because the launch names the address and
+   * `InstantFeeVault` makes it immutable — naming an address with no code would produce a market
+   * whose fees are permanently unreachable.
+   */
+  const go = useCallback(() => {
+    if (prepared === null) return;
+
+    if (!prepared.escrowNeeded || BOOST_ADDRESSES === null) {
+      launch();
+      return;
+    }
+
+    setError(null);
+    setStep("escrow");
+
+    const call = instantSdk.buildDeployEscrow({
+      escrowFactory: BOOST_ADDRESSES.escrowFactory,
+      owner: derived.feeRecipient!,
+    });
+
+    send.sendTransaction({ to: call.to, data: call.data, value: call.value, chainId: CHAIN_ID });
+  }, [derived, launch, prepared, send]);
+
+  /**
+   * The escrow landed, so the launch that names it can follow.
+   *
+   * Separate from the receipt handler below because the two transactions produce different
+   * events and only the second creates a market. Reading a `MarketCreated` out of an escrow
+   * deployment would find none and report a failure for a step that succeeded.
+   */
+  useEffect(() => {
+    if (!receipt.isSuccess || step !== "escrow") return;
+    launch();
+  }, [receipt.isSuccess, step, launch]);
 
   const waiting = send.isPending || receipt.isLoading;
 
@@ -254,10 +339,14 @@ export function Preview({
       : send.isPending
         ? "confirm in your wallet…"
         : receipt.isLoading
-          ? "creating the market…"
+          ? step === "escrow"
+            ? "setting up Boost…"
+            : "creating the market…"
           : prepared === null
             ? "preparing…"
-            : "Launch";
+            : prepared.escrowNeeded
+              ? "Set up Boost & Launch"
+              : "Launch";
 
   return (
     <div

@@ -102,7 +102,10 @@ contract DeployInstant is Script {
         address treasury;
     }
 
-    function run() external returns (Deployment memory out) {
+    /// @dev `virtual` so `DeployInstantBoost` can replace the phases with a superset of them.
+    /// `public` rather than `external` for the same reason: a widening is the only visibility change
+    /// an override is allowed to make. Nothing about this deployment changes.
+    function run() public virtual returns (Deployment memory out) {
         Inputs memory input = _inputs();
 
         vm.startBroadcast(input.sender);

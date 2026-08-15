@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ethUsd } from "./lib/eth-price";
 import { marketSource, noveltyOf, type MarketSummary } from "./lib/markets";
 import { TokenCard } from "./markets/card";
+import { Spotlight, spotlightOf } from "./markets/spotlight";
 import { Search } from "./search";
 import { SiteFooter } from "./footer";
 import { TopBar } from "./topbar";
@@ -89,11 +90,13 @@ export default async function Home({
    * across a single mixed grid is comparing two different kinds of thing without being
    * told, and a reader looking for one kind has to know the artwork to tell them apart.
    *
-   * There is no feature above them any more. A single card given the top of the page was
-   * the right shape for a catalogue with one product in it; with two named sections it put
-   * a third heading above them and duplicated whichever market it chose.
+   * Spotlight sits above Instant and is chosen by market cap, not by sort or page. It is
+   * a featured reading of the same shelf, not a third product.
    */
   const instant = ordered.filter((market) => market.kind === "instant");
+  // Chosen from the whole Instant shelf, not the current page or the current sort: a
+  // Spotlight that followed "newest" would just be the first card again.
+  const spotlight = spotlightOf(all);
 
   /*
    * Which page of the Instant shelf, and how the pager is built.
@@ -157,6 +160,8 @@ export default async function Home({
             </div>
           </div>
         </div>
+
+        {spotlight === null ? null : <Spotlight market={spotlight} usdPerEth={usdPerEth} />}
 
         <section className="ax-shelf ax-reveal">
           <div className="ax-shelf-head">

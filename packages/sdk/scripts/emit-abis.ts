@@ -99,6 +99,18 @@ const OWN: readonly { readonly contract: string; readonly binding: string }[] = 
   { contract: "InstantDeployer", binding: "instantDeployerAbi" },
   { contract: "InstantHook", binding: "instantHookAbi" },
   { contract: "InstantFeeVault", binding: "instantFeeVaultAbi" },
+
+  // Agen Boost, which is an addition to Instant rather than a change to it: the escrow is
+  // named as a market's `feeRecipient` at launch and nothing already deployed is touched.
+  // Both are generated rather than hand-written because `boostStateOf` returns a fifteen
+  // field struct that an interface renders directly, which is the case where a
+  // hand-maintained ABI silently starts decoding the wrong field.
+  { contract: "BoostEscrow", binding: "boostEscrowAbi" },
+  { contract: "BoostEscrowFactory", binding: "boostEscrowFactoryAbi" },
+  // The contract an Instant deployment names as its `TREASURY`, which is the only way the
+  // platform 0.50% can be routed by code rather than by promise. Generated because
+  // `platformStateOf` returns a seven-field struct an interface renders directly.
+  { contract: "BoostTreasury", binding: "boostTreasuryAbi" },
 ];
 
 /**

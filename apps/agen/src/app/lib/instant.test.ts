@@ -299,7 +299,7 @@ describe("a URL the chain can find", () => {
 
 describe("the parameters the factory is actually given", () => {
   const derived = derive(draft({ initialBuy: "0.25" }), CREATOR)!;
-  const params = instantParams({ derived, metadataURI: URI, salt: SALT });
+  const params = instantParams({ feeRecipient: derived.feeRecipient!, derived, metadataURI: URI, salt: SALT });
 
   it("is exactly the seven fields the factory takes", () => {
     // The count is the assertion. `InstantFactory.CreateParams` is ABI-encoded
@@ -352,18 +352,80 @@ describe("the parameters the factory is actually given", () => {
   });
 
   it("upper-cases the ticker and strips a dollar sign the creator typed", () => {
+    const withDollar = derive(draft({ symbol: "$king" }), CREATOR)!;
     const p = instantParams({
-      derived: derive(draft({ symbol: "$king" }), CREATOR)!,
+      derived: withDollar,
       metadataURI: URI,
       salt: SALT,
+      feeRecipient: withDollar.feeRecipient!,
     });
     expect(p.symbol).toBe("KING");
   });
 
-  it("refuses to build a launch with nowhere to pay the fees", () => {
+  /**
+   * The recipient is submitted rather than derived, and this is what stands in for the throw
+   * that used to be here.
+   *
+   * `instantParams` used to read `derived.feeRecipient` and refuse a null. It now takes the
+   * address explicitly, because a Boost-capable launch submits the creator's *escrow* while
+   * `derived.feeRecipient` stays their payout address — and the vault makes whichever is
+   * submitted immutable. So the guard moved to where it can still be wrong: a draft with no
+   * recipient cannot pass validation, and the type makes the argument impossible to omit.
+   */
+  it("cannot be built for a draft with nowhere to pay the fees", () => {
     const noReceiver = derive(draft(), undefined)!;
-    expect(() => instantParams({ derived: noReceiver, metadataURI: URI, salt: SALT })).toThrow(
-      /fee recipient/,
+    expect(noReceiver.feeRecipient).toBeNull();
+    expect(validate(draft(), undefined)).not.toEqual([]);
+  });
+
+  it("submits whatever address it was given, not the creator's own", () => {
+    // The Boost case: the launch names the escrow, and the escrow pays the creator. Getting
+    // this backwards would produce a market that can never be Boosted, permanently.
+    const escrow = "0xB005700000000000000000000000000000000001" as const;
+    const p = instantParams({ derived, metadataURI: URI, salt: SALT, feeRecipient: escrow });
+
+    expect(p.feeRecipient).toBe(escrow);
+    expect(p.feeRecipient).not.toBe(derived.feeRecipient);
+  });
+});
+
+/**
+ * Boost, at the point where it is decided.
+ *
+ * The launch is the only moment this can be chosen, because `InstantFeeVault.creator` is
+ * immutable — so these assertions are about a decision that cannot be revisited, which is why
+ * the default is the one that keeps the option open.
+ */
+describe("whether a launch can ever be Boosted", () => {
+  it("defaults to keeping the option open", () => {
+    expect(emptyDraft().boostCapable).toBe(true);
+    expect(derive(draft(), CREATOR)?.boostCapable).toBe(true);
+  });
+
+  it("carries a creator's refusal through", () => {
+    expect(derive(draft({ boostCapable: false }), CREATOR)?.boostCapable).toBe(false);
+  });
+
+  /**
+   * The flag decides where fees are *routed*, never who they belong to.
+   *
+   * A Boost-capable launch submits the escrow as `feeRecipient` and the escrow pays this
+   * address, so `derive` must keep reporting the creator's own answer either way. If it started
+   * reporting the escrow instead, the profile would attribute the market to the wrong wallet
+   * and the launch form would show a creator an address they never typed.
+   */
+  it("does not change who the fees belong to", () => {
+    const on = derive(draft({ boostCapable: true }), CREATOR);
+    const off = derive(draft({ boostCapable: false }), CREATOR);
+
+    expect(on?.feeRecipient).toBe(CREATOR);
+    expect(off?.feeRecipient).toBe(CREATOR);
+  });
+
+  it("does not affect whether a draft is launchable", () => {
+    // Boost is never a reason a launch is refused. A build without it simply hides the control.
+    expect(validate(draft({ boostCapable: false }), CREATOR)).toEqual(
+      validate(draft({ boostCapable: true }), CREATOR),
     );
   });
 });

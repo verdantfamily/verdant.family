@@ -124,6 +124,20 @@ export interface InstantDraft {
   readonly useConnectedWallet: boolean;
   /** Empty means no first buy. */
   readonly initialBuy: string;
+  /**
+   * Whether this launch names a Boost escrow as its fee recipient instead of the wallet.
+   *
+   * On by default, and the reason is that the decision is irreversible in one direction only.
+   * `InstantFeeVault.creator` is immutable, so a market launched naming a wallet can **never**
+   * be Boosted — not later, not by Agen, not by anyone. A market launched naming an escrow can
+   * have Boost on or off at any time, and with it off the creator's fees reach them exactly as
+   * they would have. So the default costs a creator nothing and the alternative costs them the
+   * option permanently.
+   *
+   * What it does cost is one extra transaction the first time a creator launches, to deploy the
+   * escrow. Subsequent launches reuse it, because its address is derived from the creator.
+   */
+  readonly boostCapable: boolean;
   readonly linkX: string;
   readonly website: string;
   readonly telegram: string;
@@ -137,6 +151,7 @@ export function emptyDraft(): InstantDraft {
     description: "",
     feeReceiver: "",
     useConnectedWallet: true,
+    boostCapable: true,
     initialBuy: "",
     linkX: "",
     website: "",
@@ -274,7 +289,18 @@ export interface Derived {
   /** The same, for the opening price. Shown as a valuation, not submitted. */
   readonly initialTick: number;
   readonly image: string | null;
+  /**
+   * Where the creator wants their fees to end up.
+   *
+   * **Not** necessarily what is submitted. When `boostCapable` is set the launch names that
+   * address's Boost escrow instead, and the escrow pays this address — so this stays the
+   * creator's answer to "who gets the money" either way, and `Preview` resolves the escrow it
+   * has to be routed through. `instantParams` takes the submitted address explicitly for that
+   * reason rather than reading this field.
+   */
   readonly feeRecipient: Address | null;
+  /** Whether to route this market's fees through a Boost escrow. See `InstantDraft`. */
+  readonly boostCapable: boolean;
   readonly initialBuyWei: bigint;
   readonly links: {
     readonly x?: string;
@@ -322,6 +348,7 @@ export function derive(draft: InstantDraft, connected: Address | undefined): Der
     initialTick,
     image: draft.imageUrl === null ? null : absoluteUrl(draft.imageUrl),
     feeRecipient: receiver ?? null,
+    boostCapable: draft.boostCapable,
     initialBuyWei: initialBuyWei ?? 0n,
     links: {
       ...(x === null ? {} : { x }),
@@ -421,20 +448,28 @@ export function instantParams({
   derived,
   metadataURI,
   salt,
+  feeRecipient,
 }: {
   readonly derived: Derived;
   readonly metadataURI: string;
   readonly salt: Hex;
+  /**
+   * The address the vault will be built with, which is the escrow for a Boost-capable launch
+   * and the creator's own answer otherwise.
+   *
+   * Passed rather than read off `derived`, because the two differ for exactly the launches
+   * where getting it wrong is unrecoverable: the vault makes this immutable, so a launch that
+   * submitted the wallet when it meant the escrow can never be Boosted, and one that submitted
+   * the escrow when the creator wanted their wallet still pays them — through a withdrawal.
+   * An explicit argument is what makes the caller state which it is.
+   */
+  readonly feeRecipient: Address;
 }): instantTypes.InstantLaunchParams {
-  if (derived.feeRecipient === null) {
-    throw new Error("instantParams was given a draft with no fee recipient");
-  }
-
   return {
     name: derived.name,
     symbol: derived.symbol,
     metadataURI,
-    feeRecipient: derived.feeRecipient,
+    feeRecipient,
     salt,
     initialBuyAmount: derived.initialBuyWei,
     // No floor, and the reason is the one the factory's own ADR-009 gives: the pool does

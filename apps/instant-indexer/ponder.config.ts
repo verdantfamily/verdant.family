@@ -17,9 +17,10 @@
  */
 
 import { abi } from "@verdant/sdk";
-import { createConfig } from "ponder";
+import { createConfig, factory } from "ponder";
+import { getAbiItem } from "viem";
 
-import { CHAIN_ID, INSTANT, POOL_MANAGER, RPC_URL } from "./src/addresses";
+import { BOOST, CHAIN_ID, INSTANT, POOL_MANAGER, RPC_URL } from "./src/addresses";
 
 export default createConfig({
   chains: {
@@ -62,6 +63,48 @@ export default createConfig({
       address: POOL_MANAGER,
       startBlock: INSTANT.startBlock,
       filter: [{ event: "Initialize", args: {} }, { event: "Swap", args: {} }],
+    },
+
+    /**
+     * Agen Boost's escrow factory. One event, and it exists to find the escrows.
+     */
+    BoostEscrowFactory: {
+      abi: abi.boostEscrowFactoryAbi,
+      chain: "robinhood",
+      address: BOOST.escrowFactory,
+      startBlock: BOOST.startBlock,
+    },
+
+    /**
+     * Every Boost escrow, discovered rather than configured.
+     *
+     * An escrow's address is a CREATE2 derivation over its owner, so the set is not knowable
+     * when this file is read — it grows as creators launch. Ponder's factory pattern follows
+     * `EscrowDeployed` and subscribes to each address it names, which is the only way to index
+     * a contract set that the deployment does not enumerate.
+     *
+     * This is also the only way Boost volume becomes separable. A buyback reaches the pool
+     * through `AgenRouter` exactly as a trader's buy does, so the PoolManager reports the router
+     * as the sender for both and `Swap` alone cannot tell them apart. The escrow's own
+     * `BoostExecuted` can, and it carries the amounts as the escrow accounted for them.
+     */
+    BoostEscrow: {
+      abi: abi.boostEscrowAbi,
+      chain: "robinhood",
+      address: factory({
+        address: BOOST.escrowFactory,
+        event: getAbiItem({ abi: abi.boostEscrowFactoryAbi, name: "EscrowDeployed" }),
+        parameter: "escrow",
+      }),
+      startBlock: BOOST.startBlock,
+      filter: [
+        { event: "BoostExecuted", args: {} },
+        { event: "BoostSet", args: {} },
+        { event: "BoostLocked", args: {} },
+        { event: "MarketEnrolled", args: {} },
+        { event: "BoostFunded", args: {} },
+        { event: "PlatformFeeRouted", args: {} },
+      ],
     },
   },
 });

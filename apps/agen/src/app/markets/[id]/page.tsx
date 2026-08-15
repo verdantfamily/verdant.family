@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
+import type { Address } from "viem";
 
 import { howThisMarketWorks, liveStateDescriptors } from "@verdant/market-compiler";
 
@@ -13,9 +14,11 @@ import { ethUsd } from "../../lib/eth-price";
 import { eth, marketCapUsd } from "../../lib/format";
 import { INSTANT_FEE_PPM } from "../../lib/instant";
 import { marketSource } from "../../lib/markets";
+import { shareDescription, shareTitle } from "../../lib/og-card";
 import { SiteFooter } from "../../footer";
 import { TopBar } from "../../topbar";
 import { TokenArt } from "../art";
+import { BoostCard } from "./boost";
 import { Chart } from "./chart";
 import { CopyAddress } from "./copy";
 import { Mechanics } from "./mechanics";
@@ -30,13 +33,35 @@ export async function generateMetadata({
   params: Promise<{ id: string }>;
 }): Promise<Metadata> {
   const { id } = await params;
-  const market = await marketSource().read(id);
+  const [market, usdPerEth] = await Promise.all([marketSource().read(id), ethUsd()]);
 
   if (market === null) return { title: "token — agen.space" };
 
+  const cap = marketCapUsd(market.trading?.marketCap, usdPerEth) ?? eth(market.trading?.marketCap);
+  const title = shareTitle(market.symbol, market.name);
+  const description = shareDescription({
+    headline: market.headline,
+    name: market.name,
+    symbol: market.symbol,
+    marketCap: cap === "—" ? null : cap,
+  });
+
   return {
-    title: `$${market.symbol} — agen.space`,
-    description: market.headline,
+    title,
+    description,
+    alternates: { canonical: `/markets/${id}` },
+    openGraph: {
+      title,
+      description,
+      siteName: "agen.space",
+      url: `/markets/${id}`,
+      type: "website",
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+    },
   };
 }
 
@@ -218,6 +243,24 @@ export default async function Token({ params }: { params: Promise<{ id: string }
               <p className="ax-tk-label">Token CA</p>
               <CopyAddress address={market.tokenAddress} />
             </section>
+
+            {/*
+              Boost, for Instant markets that can have it.
+
+              The card decides for itself and renders nothing when it cannot: a market is
+              Boost-capable only if it named a `BoostEscrow` as its fee recipient at launch, and
+              `InstantFeeVault.creator` is immutable — so every market launched before Boost
+              existed is permanently ineligible and a disabled switch would say the opposite of
+              the truth. Programmable markets have no vault and never reach this at all.
+            */}
+            {market.kind === "instant" ? (
+              <BoostCard
+                token={market.tokenAddress as Address | null}
+                symbol={market.symbol}
+                vault={market.vault as Address | null}
+                creator={market.creator as Address | null}
+              />
+            ) : null}
 
             <section>
               <p className="ax-tk-label">About</p>

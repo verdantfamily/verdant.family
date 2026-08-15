@@ -21,12 +21,21 @@
  * blocks later.
  */
 
-import { EXTERNAL_ADDRESSES, ROBINHOOD_MAINNET_ID, instantFor, robinhoodMainnet } from "@verdant/config";
+import {
+  EXTERNAL_ADDRESSES,
+  ROBINHOOD_MAINNET_ID,
+  boostFor,
+  instantFor,
+  robinhoodMainnet,
+} from "@verdant/config";
 import type { Address } from "viem";
 
 const instantLayer = instantFor(ROBINHOOD_MAINNET_ID);
 
 const NOT_DEPLOYED = "0x0000000000000000000000000000000000000000" as Address;
+
+/** The canonical sink. A constant in the escrow's bytecode, restated here as a fallback. */
+const DEAD = "0x000000000000000000000000000000000000dEaD" as Address;
 
 export const CHAIN_ID = ROBINHOOD_MAINNET_ID;
 
@@ -105,3 +114,50 @@ function resolveInstantLayer(): InstantLayer {
 }
 
 export const INSTANT = resolveInstantLayer();
+
+/**
+ * Agen Boost's escrow factory, which is how Boost buybacks become identifiable.
+ *
+ * Boost escrows are per creator and their addresses are not knowable at configuration time, so
+ * this factory is watched and the escrows it announces are followed from there — Ponder's
+ * factory pattern. Without it a buyback is indistinguishable from any other trade, because both
+ * reach the pool through `AgenRouter` and the PoolManager reports the router as the sender.
+ *
+ * Registered at the zero address when Boost is not deployed, for the same reason the Instant
+ * addresses are: `ponder codegen` derives valid event names from the configuration, so a
+ * conditionally-registered contract would make its handler a type error on a build predating
+ * the deployment. A contract at the zero address emits nothing.
+ */
+interface BoostLayer {
+  readonly deployed: boolean;
+  readonly escrowFactory: Address;
+  /** Where sunk tokens go, so a supply figure can subtract them. */
+  readonly deadAddress: Address;
+  readonly startBlock: number;
+}
+
+function resolveBoostLayer(): BoostLayer {
+  const fromEnv = process.env.BOOST_ESCROW_FACTORY;
+  const record = boostFor(ROBINHOOD_MAINNET_ID);
+
+  const escrowFactory = fromEnv ?? record?.escrowFactory;
+  if (escrowFactory === undefined) {
+    return {
+      deployed: false,
+      escrowFactory: NOT_DEPLOYED,
+      deadAddress: DEAD,
+      startBlock: INSTANT.startBlock,
+    };
+  }
+
+  return {
+    deployed: true,
+    escrowFactory: escrowFactory as Address,
+    deadAddress: (record?.deadAddress ?? DEAD) as Address,
+    startBlock: Number(
+      process.env.BOOST_START_BLOCK ?? record?.deployedAtBlock ?? INSTANT.startBlock,
+    ),
+  };
+}
+
+export const BOOST = resolveBoostLayer();

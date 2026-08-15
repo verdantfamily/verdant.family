@@ -108,6 +108,18 @@ export interface MarketStats {
   readonly day: {
     /** Wei, like every other amount here. */
     readonly volumeQuote: bigint;
+    /**
+     * The part of that volume which was not a Boost buyback, and the part which was.
+     *
+     * Optional, and only ever populated for Instant markets. Boost is an Instant feature and
+     * this type is shared with the Programmable feed, whose indexer has no such concept and is
+     * deliberately untouched — so undefined here reads as "this feed cannot distinguish", and a
+     * consumer falls back to `volumeQuote`. That fallback is correct rather than merely safe: a
+     * market with no Boost has no buybacks, so all of its volume is organic.
+     */
+    readonly organicVolumeQuote?: bigint;
+    readonly boostVolumeQuote?: bigint;
+    readonly boostBuybacks?: number;
     readonly trades: number;
     readonly changePercent: number | null;
   };

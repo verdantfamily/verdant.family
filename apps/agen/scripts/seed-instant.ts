@@ -27,9 +27,11 @@
  *
  * ## Usage
  *
- *   SEED_PRIVATE_KEY=0x… \
- *   SEED_RPC_URL=https://… \
- *   node apps/agen/scripts/seed-instant.ts --count 5 --every 900 --buy 0.002
+ *   # one wallet
+ *   SEED_PRIVATE_KEY=0x… pnpm --filter @verdant/agen seed:instant -- --count 20
+ *
+ *   # many wallets, one key per line in a file that is gitignored
+ *   SEED_KEYS_FILE=scripts/seed-keys.local pnpm --filter @verdant/agen seed:instant -- --forever
  *
  * Every option has an environment equivalent; see `settings` below.
  */
@@ -64,10 +66,21 @@ const settings = {
   /** Where the site is. Uploads go here, and so does the verification trigger. */
   site: (flag("site") ?? process.env["SEED_SITE"] ?? "https://agen.space").replace(/\/+$/, ""),
   rpc: process.env["SEED_RPC_URL"] ?? robinhoodMainnet.rpcUrls.default.http[0]!,
-  /** How many to launch before stopping. A run always terminates. */
-  count: Number(flag("count") ?? process.env["SEED_COUNT"] ?? 3),
-  /** Seconds between launches, before jitter. */
-  every: Number(flag("every") ?? process.env["SEED_EVERY"] ?? 900),
+  /**
+   * How many to launch before stopping. `0` or `--forever` means keep going until every
+   * wallet hits the floor — a run that is meant to seed a shelf, not a rehearsal of three.
+   */
+  count: process.argv.includes("--forever")
+    ? 0
+    : Number(flag("count") ?? process.env["SEED_COUNT"] ?? 20),
+  /**
+   * Seconds between launches, before jitter.
+   *
+   * Six and a half minutes. Jitter of ±12% lands each gap in roughly 6–7 minutes, which
+   * is frequent enough to fill a shelf and sparse enough that two tokens do not appear
+   * to have been minted by the same hand in the same minute.
+   */
+  every: Number(flag("every") ?? process.env["SEED_EVERY"] ?? 390),
   /** The creator's own first buy, in ether. Zero opens the pool without buying. */
   buy: flag("buy") ?? process.env["SEED_BUY"] ?? "0",
   /** Never spend below this. Checked before every launch, not just at the start. */
@@ -76,12 +89,6 @@ const settings = {
   images: flag("images") ?? process.env["SEED_IMAGES"],
   dryRun: process.argv.includes("--dry-run"),
 } as const;
-
-const key = process.env["SEED_PRIVATE_KEY"];
-if (key === undefined || !/^0x[0-9a-fA-F]{64}$/.test(key)) {
-  console.error("Set SEED_PRIVATE_KEY to a 32-byte hex key. It is never printed or sent.");
-  process.exit(1);
-}
 
 /**
  * The deployment, or an exit.
@@ -100,10 +107,78 @@ function deployment(): NonNullable<ReturnType<typeof instantFor>> {
 
 const record = deployment();
 
-const account = privateKeyToAccount(key as Hex);
+const KEY_SHAPE = /^0x[0-9a-fA-F]{64}$/;
+
+/**
+ * Every key this run may spend, from the three places a person actually puts them.
+ *
+ * A file of one key per line is the ordinary case once there is more than one wallet —
+ * a comma-separated environment variable is how a process manager passes the same list
+ * without writing it to disk. A single `SEED_PRIVATE_KEY` still works. Comments and
+ * blank lines in the file are ignored. The keys themselves are never printed.
+ */
+async function loadKeys(): Promise<readonly Hex[]> {
+  const fromFile = process.env["SEED_KEYS_FILE"];
+  const listed = process.env["SEED_PRIVATE_KEYS"];
+  const single = process.env["SEED_PRIVATE_KEY"];
+
+  const raw: string[] = [];
+
+  if (fromFile !== undefined && fromFile !== "") {
+    const body = await readFile(resolve(fromFile), "utf8").catch(() => {
+      console.error(`Could not read SEED_KEYS_FILE at ${fromFile}.`);
+      process.exit(1);
+    });
+    raw.push(...body.split(/\r?\n/));
+  }
+
+  if (listed !== undefined && listed !== "") {
+    raw.push(...listed.split(/[\s,]+/));
+  }
+
+  if (single !== undefined && single !== "") raw.push(single);
+
+  const keys = [
+    ...new Set(
+      raw
+        .map((line) => line.trim())
+        .filter((line) => line !== "" && !line.startsWith("#"))
+        .map((line) => (line.startsWith("0x") ? line : `0x${line}`)),
+    ),
+  ];
+
+  const bad = keys.filter((line) => !KEY_SHAPE.test(line));
+  if (bad.length > 0) {
+    console.error(`${String(bad.length)} key(s) are not 32-byte hex. Nothing was printed.`);
+    process.exit(1);
+  }
+
+  if (keys.length === 0) {
+    console.error(
+      "Set SEED_PRIVATE_KEY, SEED_PRIVATE_KEYS, or SEED_KEYS_FILE. Keys are never printed.",
+    );
+    process.exit(1);
+  }
+
+  return keys as Hex[];
+}
+
+const keys = await loadKeys();
 const chain = { ...robinhoodMainnet, rpcUrls: { default: { http: [settings.rpc] } } };
 const publicClient = createPublicClient({ chain, transport: http(settings.rpc) });
-const wallet = createWalletClient({ account, chain, transport: http(settings.rpc) });
+
+interface Wallet {
+  readonly account: ReturnType<typeof privateKeyToAccount>;
+  readonly client: ReturnType<typeof createWalletClient>;
+}
+
+const wallets: readonly Wallet[] = keys.map((secret) => {
+  const account = privateKeyToAccount(secret);
+  return {
+    account,
+    client: createWalletClient({ account, chain, transport: http(settings.rpc) }),
+  };
+});
 
 // --- what to call them ------------------------------------------------------------
 
@@ -117,11 +192,21 @@ const wallet = createWalletClient({ account, chain, transport: http(settings.rpc
 const FIRST = [
   "Solar", "Ember", "Tidal", "Nova", "Quartz", "Vector", "Cobalt", "Lumen", "Onyx", "Zephyr",
   "Prism", "Halcyon", "Vertex", "Basalt", "Aurora", "Cinder", "Drift", "Flux", "Grove", "Helix",
+  "Ivory", "Marble", "Nimbus", "Orbit", "Pebble", "Quill", "Ridge", "Sable", "Thorn", "Umbra",
 ];
 
 const SECOND = [
   "Fox", "Wolf", "Crane", "Otter", "Falcon", "Bear", "Lynx", "Heron", "Stag", "Raven",
-  "Koi", "Moth", "Ibis", "Hare", "Seal",
+  "Koi", "Moth", "Ibis", "Hare", "Seal", "Wren", "Pike", "Asp", "Dace", "Jay",
+];
+
+const BLURBS = [
+  (name: string) =>
+    `${name} is a standard Instant token: one billion supply, all of it in a locked Uniswap v4 position, 1.00% of every trade to its creator in ETH.`,
+  (name: string) =>
+    `${name} launched on agen.space Instant — fixed supply, locked liquidity, creator fees in ETH.`,
+  (name: string) =>
+    `Trade ${name} from the first block. Instant v4, one billion tokens, liquidity locked for the life of the market.`,
 ];
 
 function pick<T>(list: readonly T[]): T {
@@ -139,7 +224,7 @@ function identity(): { name: string; symbol: string; blurb: string } {
   return {
     name,
     symbol,
-    blurb: `${name} is a standard Instant token: one billion supply, all of it in a locked Uniswap v4 position, 1.00% of every trade to its creator in ETH.`,
+    blurb: pick(BLURBS)(name),
   };
 }
 
@@ -272,23 +357,10 @@ async function store(name: string, symbol: string, blurb: string): Promise<strin
   return `${settings.site}${metadataPath}`;
 }
 
-async function launchOne(index: number): Promise<void> {
+async function launchOne(index: number, wallet: Wallet, of: string): Promise<void> {
   const { name, symbol, blurb } = identity();
   const buyWei = parseEther(settings.buy);
-
-  // Not checked on a dry run: the point of one is to exercise uploads, salt mining and
-  // encoding, none of which spend anything, and requiring a funded key to rehearse would
-  // make the rehearsal need the thing it exists to avoid.
-  if (!settings.dryRun) {
-    const balance = await publicClient.getBalance({ address: account.address });
-    const floorWei = parseEther(settings.floor);
-
-    if (balance <= floorWei + buyWei) {
-      throw new Error(
-        `balance ${formatEther(balance)} is at the floor of ${settings.floor} (plus a ${settings.buy} buy)`,
-      );
-    }
-  }
+  const creator = wallet.account.address;
 
   const metadataURI = await store(name, symbol, blurb);
 
@@ -302,12 +374,12 @@ async function launchOne(index: number): Promise<void> {
     supplyTokens,
     metadataURI,
     metadataMutable: false,
-    creator: account.address,
+    creator,
   });
 
   const mined = launchSdk.mineTokenSalt({
     deployer: record.deployer as Address,
-    creator: account.address,
+    creator,
     initCodeHash,
     // Ether sorts below every token, so the first candidate always clears.
     above: "0x0000000000000000000000000000000000000000",
@@ -321,14 +393,15 @@ async function launchOne(index: number): Promise<void> {
       name,
       symbol,
       metadataURI,
-      feeRecipient: account.address,
+      feeRecipient: creator,
       salt: mined.salt,
       initialBuyAmount: buyWei,
       initialBuyMinTokens: 0n,
     },
   });
 
-  console.log(`\n[${String(index + 1)}/${String(settings.count)}] ${name} ($${symbol})`);
+  console.log(`\n[${String(index + 1)}/${of}] ${name} ($${symbol})`);
+  console.log(`   from          ${creator}`);
   console.log(`   token will be ${mined.token}`);
   console.log(`   metadata      ${metadataURI}`);
 
@@ -337,7 +410,13 @@ async function launchOne(index: number): Promise<void> {
     return;
   }
 
-  const hash = await wallet.sendTransaction({ to: call.to, data: call.data, value: call.value });
+  const hash = await wallet.client.sendTransaction({
+    account: wallet.account,
+    chain,
+    to: call.to,
+    data: call.data,
+    value: call.value,
+  });
   console.log(`   sent          ${hash}`);
 
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
@@ -368,33 +447,65 @@ function sleep(ms: number): Promise<void> {
   return new Promise((done) => setTimeout(done, ms));
 }
 
+async function funded(wallet: Wallet): Promise<boolean> {
+  if (settings.dryRun) return true;
+
+  const balance = await publicClient.getBalance({ address: wallet.account.address });
+  const need = parseEther(settings.floor) + parseEther(settings.buy);
+  return balance > need;
+}
+
+async function nextWallet(from: number): Promise<Wallet | null> {
+  for (let step = 0; step < wallets.length; step += 1) {
+    const wallet = wallets[(from + step) % wallets.length]!;
+    if (await funded(wallet)) return wallet;
+  }
+  return null;
+}
+
 async function main(): Promise<void> {
-  console.log(`Seeding Instant on ${String(chain.id)} as ${account.address}`);
+  const unlimited = settings.count === 0;
+  const of = unlimited ? "∞" : String(settings.count);
+
+  console.log(`Seeding Instant on ${String(chain.id)}`);
   console.log(`  site      ${settings.site}`);
-  console.log(`  launches  ${String(settings.count)}, every ~${String(settings.every)}s`);
+  console.log(`  wallets   ${String(wallets.length)}`);
+  console.log(
+    `  launches  ${unlimited ? "until the wallets hit the floor" : of}, every ~${String(settings.every)}s`,
+  );
   console.log(`  first buy ${settings.buy} ETH · floor ${settings.floor} ETH`);
   if (settings.dryRun) console.log("  DRY RUN — nothing will be sent");
 
-  const balance = await publicClient.getBalance({ address: account.address });
-  console.log(`  balance   ${formatEther(balance)} ETH`);
+  for (const [index, wallet] of wallets.entries()) {
+    const balance = await publicClient.getBalance({ address: wallet.account.address });
+    console.log(`  ${String(index + 1)}. ${wallet.account.address}  ${formatEther(balance)} ETH`);
+  }
 
-  for (let index = 0; index < settings.count; index += 1) {
+  let cursor = 0;
+
+  for (let index = 0; unlimited || index < settings.count; index += 1) {
+    const wallet = await nextWallet(cursor);
+    if (wallet === null) {
+      console.error("\nEvery wallet is at the floor. Stopping.");
+      break;
+    }
+
+    cursor = wallets.findIndex((entry) => entry.account.address === wallet.account.address) + 1;
+
     try {
-      await launchOne(index);
+      await launchOne(index, wallet, of);
     } catch (error) {
-      // One failure does not end the run — an upload can time out, a nonce can clash — but
-      // a balance floor is a stop condition rather than a hiccup.
+      // One failure does not end the run — an upload can time out, a nonce can clash.
       const message = error instanceof Error ? error.message : String(error);
       console.error(`   failed: ${message}`);
-      if (message.includes("floor")) break;
     }
 
-    if (index < settings.count - 1) {
-      // Jittered by ±25%, so launches do not arrive on a metronome.
-      const wait = settings.every * (0.75 + Math.random() * 0.5);
-      console.log(`   next in ${String(Math.round(wait))}s`);
-      await sleep(wait * 1_000);
-    }
+    if (!unlimited && index >= settings.count - 1) break;
+
+    // ±12% around the interval, so a 390s setting lands in roughly 6–7 minutes.
+    const wait = settings.every * (0.88 + Math.random() * 0.24);
+    console.log(`   next in ${String(Math.round(wait))}s`);
+    await sleep(wait * 1_000);
   }
 
   console.log("\nDone.");

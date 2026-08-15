@@ -10,6 +10,8 @@
     "preview": "python3 -m http.server 4321 --bind 127.0.0.1 --directory out",
     "brand": "node scripts/prepare-brand.ts",
     "preflight:instant": "node scripts/preflight-instant.ts",
+    "boost:keeper": "node scripts/boost-keeper.ts",
+    "seed:instant": "node scripts/seed-instant.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run"

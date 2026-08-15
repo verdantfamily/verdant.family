@@ -211,6 +211,57 @@ export interface InstantDeployment {
   readonly treasury: `0x${string}`;
   /** The block the factory was created in, for indexers to start from. */
   readonly deployedAtBlock: number;
+  /**
+   * Agen Boost, or `null` where it has not been broadcast.
+   *
+   * Nested under Instant rather than beside it because Boost is not a second launch layer.
+   * It adds no contract to the launch path and changes none: an escrow is simply the address
+   * a creator names as `feeRecipient`, and the factory, hook, registry and deployer above are
+   * untouched by its existence. A build with `boost: null` launches and trades Instant markets
+   * exactly as one without the feature.
+   *
+   * The consequence of the mechanism, worth recording next to the addresses: only markets
+   * launched *after* this was deployed, and launched naming an escrow, can ever be Boosted.
+   * `InstantFeeVault.creator` is immutable, so a market that named a wallet pays that wallet
+   * forever. Every market created before this line was filled in is permanently ineligible,
+   * and that is a property of v4 immutability rather than a migration nobody has run yet.
+   */
+  readonly boost: InstantBoostDeployment | null;
+}
+
+export interface InstantBoostDeployment {
+  /**
+   * Where the platform 0.50% lands, and the only way it can be Boosted by code.
+   *
+   * This has to be the `treasury` of the Instant deployment above, and it has to have existed
+   * before that deployment was broadcast — `InstantFactory.treasury` is an immutable and every
+   * vault snapshots it at creation. An Instant whose treasury is an ordinary address can never
+   * route its platform fee into Boost, for any market, ever.
+   *
+   * Null where the Instant deployment predates this contract. Boost still works for the creator's
+   * 1.00% in that case; it is the total that differs, and `BoostState.platformBoosted` is what the
+   * interface reads to say 1.50% or 1.00%.
+   */
+  readonly treasury: `0x${string}` | null;
+  /**
+   * Deploys one `BoostEscrow` per creator, at an address derived from the creator.
+   *
+   * Also the authority on whether an escrow is genuine: `isGenuine(owner, escrow)` is a
+   * CREATE2 derivation, which is what lets Agen decide whether to contribute its platform
+   * fees to a market without trusting anything the creator supplied.
+   */
+  readonly escrowFactory: `0x${string}`;
+  /**
+   * Where bought-back tokens go. Recorded for the same reason `treasury` is: nothing on chain
+   * can be asked whether the sink is the *intended* one.
+   *
+   * A `constant` in the escrow's bytecode rather than storage, so this is a statement of what
+   * was deployed and not a setting. Instant tokens have no `burn`, so `totalSupply()` does not
+   * decrease and a circulating supply must subtract this address's balance.
+   */
+  readonly deadAddress: `0x${string}`;
+  /** The block the escrow factory was created in, for indexers to start from. */
+  readonly deployedAtBlock: number;
 }
 
 export interface VerdantAddons {
@@ -345,6 +396,16 @@ export const ADDONS = {
       factory: "0xF85b06710E2CbEf54230c92733e12824c8fCa2D6",
       treasury: "0xabfB34D1C870c7b2334E93b25B1299346209bE38",
       deployedAtBlock: 36_378_954,
+      // Not broadcast. `BoostEscrowFactory` and `BoostEscrow` are written, tested against the
+      // real Instant stack and unreferenced by anything on chain; filling this in is what
+      // turns the Boost surface on, and it is deliberately a separate decision from having
+      // the code — the same split this file already makes for `INSTANT_LAUNCHABLE`.
+      // Not broadcast. Note the ordering requirement recorded on `InstantBoostDeployment.treasury`:
+      // the platform half of Boost needs `BoostTreasury` to be the Instant deployment's own
+      // `TREASURY`, and the deployment above pays an EOA. Capturing both fee streams therefore
+      // means a new Instant deployment — same bytecode, different constructor argument — and the
+      // markets created by the one above keep the 1.00%/0.50% split for their whole lives.
+      boost: null,
     },
   },
   [ROBINHOOD_TESTNET_ID]: {
@@ -390,6 +451,18 @@ export function agenFor(chainId: VerdantChainId): AgenDeployment | null {
  */
 export function instantFor(chainId: VerdantChainId): InstantDeployment | null {
   return ADDONS[chainId].instant;
+}
+
+/**
+ * Agen Boost for a chain, or `null` where it is not deployed.
+ *
+ * Null on either level — no Instant, or Instant without Boost — collapses to null here, so a
+ * consumer asking "can this build offer Boost" has one question rather than two. The interface
+ * hides the Boost surface entirely on null rather than rendering a disabled switch, because a
+ * switch a creator cannot use is a worse answer than no switch.
+ */
+export function boostFor(chainId: VerdantChainId): InstantBoostDeployment | null {
+  return ADDONS[chainId].instant?.boost ?? null;
 }
 
 /**

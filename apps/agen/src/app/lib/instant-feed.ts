@@ -97,6 +97,18 @@ interface RawStats {
     readonly volumeToken: string;
     readonly trades: number;
     readonly changePercent: number | null;
+    /**
+     * The Boost split, optional because an older indexer does not send it.
+     *
+     * Optional rather than required, and it matters which: this app and the indexer deploy
+     * separately, so a build of the site can be newer than the feed answering it. An absent
+     * field then means "this feed cannot tell Boost apart", and the reader below falls back to
+     * treating all volume as organic — which is exactly right for a feed indexed before Boost
+     * existed, since none of it was a buyback.
+     */
+    readonly organicVolumeQuote?: string;
+    readonly boostVolumeQuote?: string;
+    readonly boostBuybacks?: number;
   };
   readonly allTime: { readonly high: string; readonly low: string };
 }
@@ -195,6 +207,12 @@ export async function fetchInstantStats(
     at: raw.at,
     day: {
       volumeQuote: BigInt(raw.day.volumeQuote),
+      // Absent means the feed predates Boost, in which case no volume was a buyback and the
+      // total *is* the organic figure. Defaulting the other way round would report zero
+      // activity for every market on an older feed.
+      organicVolumeQuote: BigInt(raw.day.organicVolumeQuote ?? raw.day.volumeQuote),
+      boostVolumeQuote: BigInt(raw.day.boostVolumeQuote ?? "0"),
+      boostBuybacks: raw.day.boostBuybacks ?? 0,
       trades: raw.day.trades,
       changePercent: raw.day.changePercent,
     },

@@ -381,6 +381,37 @@ export const INSTANT_ADDRESSES: InstantAddresses | null = (() => {
 export const INSTANT_TREASURY: Address | null =
   INSTANT_RECORD === null ? null : getAddress(INSTANT_RECORD.treasury);
 
+/**
+ * Agen Boost, or null where it is not deployed.
+ *
+ * Null hides the Boost surface entirely rather than rendering a switch that cannot be thrown.
+ * From the record with an environment override for the same reason as the addresses above, and
+ * with the same all-or-nothing rule: an escrow's address is a CREATE2 derivation over the
+ * factory's own address, so a factory from one deployment paired with a sink from another
+ * describes escrows that do not exist.
+ */
+export interface BoostAddresses {
+  readonly escrowFactory: Address;
+  readonly deadAddress: Address;
+}
+
+export const BOOST_ADDRESSES: BoostAddresses | null = (() => {
+  const override = process.env.NEXT_PUBLIC_BOOST_ESCROW_FACTORY?.trim();
+  const record = INSTANT_RECORD?.boost ?? null;
+
+  const escrowFactory = override !== undefined && override !== "" ? override : record?.escrowFactory;
+  if (escrowFactory === undefined) return null;
+  if (!isAddress(escrowFactory, { strict: false })) return null;
+
+  return {
+    escrowFactory: getAddress(escrowFactory),
+    // The sink is a `constant` in the escrow's bytecode, so this is a label rather than a
+    // parameter. Falling back to the canonical address keeps an override of the factory alone
+    // from producing a build with no destination to name.
+    deadAddress: getAddress(record?.deadAddress ?? "0x000000000000000000000000000000000000dEaD"),
+  };
+})();
+
 // --- Uniswap's, which Agen does not deploy --------------------------------------
 
 /**

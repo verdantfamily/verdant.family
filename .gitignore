@@ -41,6 +41,9 @@ apps/landing/brand-source/
 .env.*
 !.env.example
 
+# Instant seeder keys. One hex key per line; never source, never printed.
+apps/agen/scripts/seed-keys.local
+
 # Ponder's local store and generated env types: a PGlite database and a declaration
 # file, both rebuilt from ponder.config.ts on every dev run. Twice over, because Instant
 # is indexed by a second Ponder app against a second database — see ADR-014.

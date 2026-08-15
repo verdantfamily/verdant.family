@@ -92,8 +92,23 @@ export interface TradingData {
   readonly marketCap: number;
   /** The pool's own depth, in the quote asset. */
   readonly liquidity: number;
-  /** Null until the indexer has a day of history for this market. */
+  /**
+   * Trading volume in the last day, with Boost buybacks removed.
+   *
+   * Organic rather than total, deliberately, and this is the figure every ranking and every card
+   * uses. A Boost buyback is a real trade, but it is the market's own creator fees being spent in
+   * the market's own pool — so counting it here would say a market is in demand when what it is
+   * doing is recycling. `boostVolume24h` carries the other part, so nothing is hidden; it is
+   * simply not called demand.
+   *
+   * An indexer that predates Boost reports no split, and the reader treats all of its volume as
+   * organic — which is right, because none of it was a buyback.
+   *
+   * Null until the indexer has a day of history for this market.
+   */
   readonly volume24h: number | null;
+  /** The part of the day's volume that was a Boost buyback. Zero for a market without Boost. */
+  readonly boostVolume24h: number | null;
   readonly trades24h: number | null;
   readonly change24hPercent: number | null;
   readonly holders: number | null;
@@ -340,7 +355,11 @@ function summaryFrom(
             // knows its price now and has no memory of yesterday. Null rather than zero
             // whenever there is no indexer to ask — see `lib/feed.ts` for why the
             // difference matters.
-            volume24h: stats === null ? null : Number(stats.day.volumeQuote) / 1e18,
+            volume24h:
+              stats === null
+                ? null
+                : Number(stats.day.organicVolumeQuote ?? stats.day.volumeQuote) / 1e18,
+            boostVolume24h: stats === null ? null : Number(stats.day.boostVolumeQuote ?? 0n) / 1e18,
             trades24h: stats?.day.trades ?? null,
             change24hPercent: stats?.day.changePercent ?? null,
             // Agen's indexer does not follow token transfers, so nothing here has
@@ -532,7 +551,9 @@ function instantSummaryFrom(
       price: market.price,
       marketCap: market.supplyTokens * market.price,
       liquidity: Number(market.liquidity) / 1e18,
-      volume24h: stats === null ? null : Number(stats.day.volumeQuote) / 1e18,
+      volume24h:
+        stats === null ? null : Number(stats.day.organicVolumeQuote ?? stats.day.volumeQuote) / 1e18,
+      boostVolume24h: stats === null ? null : Number(stats.day.boostVolumeQuote ?? 0n) / 1e18,
       trades24h: stats?.day.trades ?? null,
       change24hPercent: stats?.day.changePercent ?? null,
       holders: null,

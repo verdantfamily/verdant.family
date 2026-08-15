@@ -1187,6 +1187,135 @@ span.ax-pager-arrow {
   color: var(--ax-ink);
 }
 
+/*
+ * The one Instant token that is currently worth the most.
+ *
+ * A full-width panel rather than a fifth card, so it reads as a feature and not as a
+ * grid item that happened to be first. White, with a gold stroke and glow — no fill
+ * and no dark outline.
+ */
+.ax-spot {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.42fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 36px;
+  min-height: 220px;
+  padding: 28px 32px;
+  background: #ffffff;
+  border-radius: 24px;
+  text-decoration: none;
+  border: 1.5px solid #c9a227;
+  box-shadow: 0 0 28px rgb(201 162 39 / 28%);
+  transition:
+    transform 0.22s var(--ax-ease),
+    box-shadow 0.22s var(--ax-ease);
+}
+
+.ax-spot:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0 36px rgb(201 162 39 / 38%);
+}
+
+.ax-spot-who {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.ax-spot .ax-art {
+  width: 88px;
+  height: 88px;
+  border-radius: 20px;
+}
+
+.ax-spot-id {
+  display: flex;
+  flex-direction: column;
+  margin-top: 16px;
+  min-width: 0;
+}
+
+.ax-spot-name {
+  font-size: 1.35rem;
+  font-weight: 500;
+  letter-spacing: -0.032em;
+  line-height: 1.15;
+  color: var(--ax-ink);
+}
+
+.ax-spot-tic {
+  margin-top: 4px;
+  font-size: 0.95rem;
+  color: var(--ax-muted);
+}
+
+.ax-spot-cap {
+  display: flex;
+  flex-direction: column;
+  margin-top: 18px;
+}
+
+.ax-spot-cap b {
+  font-size: clamp(1.8rem, 1.4rem + 1.4vw, 2.4rem);
+  font-weight: 500;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: var(--ax-ink);
+}
+
+.ax-spot-cap span {
+  margin-top: 6px;
+  font-size: 0.78rem;
+  letter-spacing: -0.004em;
+  color: var(--ax-faint);
+}
+
+.ax-spot-chart {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 168px;
+  height: 100%;
+}
+
+.ax-spark-plot,
+.ax-spark-area,
+.ax-spark-flat-area {
+  width: 100%;
+  height: 168px;
+  margin: 0;
+}
+
+.ax-spark-plot {
+  position: relative;
+  display: block;
+}
+
+/* Token-page greens, not the darker text-on-white `--ax-up`. */
+.ax-spark-plot .ax-spark-area {
+  display: block;
+  width: 100%;
+  height: 100%;
+  --spark-up: #17c06b;
+  --spark-down: #e0483f;
+}
+
+.ax-spark-tip {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2.5px #fff;
+  pointer-events: none;
+}
+
+.ax-spark-flat-area {
+  justify-content: flex-start;
+  font-size: 0.85rem;
+}
+
 /* The one card that is bigger than the others, because a catalogue with nothing at the
    top of it is a list rather than a front page. */
 .ax-feature {
@@ -2898,17 +3027,20 @@ span.ax-pager-arrow {
 /* --- cards --------------------------------------------------------------- */
 
 .ax-tcard,
-.ax-feature {
+.ax-feature,
+.ax-spot {
   will-change: transform;
 }
 
 .ax-tcard .ax-art,
-.ax-feature .ax-art {
+.ax-feature .ax-art,
+.ax-spot .ax-art {
   transition: transform 0.45s var(--ax-ease);
 }
 
 .ax-tcard:hover .ax-art,
-.ax-feature:hover .ax-art {
+.ax-feature:hover .ax-art,
+.ax-spot:hover .ax-art {
   transform: scale(1.035);
 }
 
@@ -3122,6 +3254,35 @@ span.ax-pager-arrow {
     gap: 18px;
   }
 
+  .ax-spot {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 22px;
+    padding: 22px 20px;
+    min-height: 0;
+  }
+
+  .ax-spot .ax-art {
+    width: 72px;
+    height: 72px;
+    border-radius: 16px;
+  }
+
+  .ax-spot-name {
+    font-size: 1.15rem;
+  }
+
+  .ax-spot-cap {
+    margin-top: 14px;
+  }
+
+  .ax-spot-chart,
+  .ax-spark-plot,
+  .ax-spark-area,
+  .ax-spark-flat-area {
+    height: 120px;
+    min-height: 120px;
+  }
+
   .ax-feature .ax-art {
     width: 92px;
     height: 92px;
@@ -3244,6 +3405,15 @@ span.ax-pager-arrow {
     grid-template-columns: minmax(0, 1fr);
     justify-items: start;
     gap: 14px;
+  }
+
+  .ax-spot {
+    padding: 20px 16px;
+    border-radius: 20px;
+  }
+
+  .ax-spot-id {
+    margin-top: 14px;
   }
 
   .ax-feature .ax-art {
@@ -3993,10 +4163,29 @@ span.ax-pager-arrow {
 
 /* The token side, which a creator did not ask to be paid in. Set back from the ether
    figure rather than beside it as an equal, because it is not one. */
+/* A checkbox that is the field rather than a qualifier on one, so it sits where an input
+   would instead of beneath it. */
+.ax-check-lead {
+  margin-top: 2px;
+}
+
+.ax-in-note {
+  margin: 8px 0 0;
+  font-size: 0.74rem;
+  line-height: 1.55;
+  color: var(--ax-faint);
+}
+
 .ax-claim-figs em {
   font-style: normal;
   font-size: 0.78rem;
   color: var(--ax-faint);
+}
+
+/* Committed to buybacks, not owed to the creator. Green because it is the market's gain and
+   not the creator's loss, and quiet because it is not an amount they can act on. */
+.ax-claim-boost {
+  color: var(--ax-up);
 }
 
 .ax-claim-go {
@@ -5110,6 +5299,237 @@ span.ax-pager-arrow {
 .ax-tk-ca:disabled {
   color: var(--ax-faint);
   cursor: default;
+}
+
+/* --- Agen Boost ----------------------------------------------------------- */
+
+/*
+ * The Boost card, in the aside beside the trade panel.
+ *
+ * Set on the panel grey rather than in a coloured box. It is a standing property of the
+ * market — like the fee — and not an alert, so it reads as another section of the sidebar
+ * until the pill says ON, which is the one thing here that earns a colour.
+ */
+.ax-boost {
+  padding: 16px;
+  background: var(--ax-panel);
+  border-radius: var(--ax-r-md);
+}
+
+.ax-boost-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ax-boost-head .ax-tk-label {
+  margin-bottom: 0;
+}
+
+.ax-boost-pill {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--ax-line);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--ax-muted);
+}
+
+.ax-boost-on {
+  background: color-mix(in srgb, var(--ax-buy) 16%, transparent);
+  color: var(--ax-up);
+}
+
+/* The strongest state gets the strongest treatment, because it is the strongest claim: a
+   creator who cannot switch Boost off has committed rather than decided. */
+.ax-boost-lock {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid #c9a227;
+  background: rgb(201 162 39 / 12%);
+  font-size: 0.66rem;
+  font-weight: 550;
+  letter-spacing: 0.06em;
+  color: #8a6d12;
+}
+
+.ax-boost-say {
+  margin: 10px 0 0;
+  font-size: 0.83rem;
+  line-height: 1.6;
+  color: var(--ax-body);
+}
+
+.ax-boost-all {
+  margin: 10px 0 0;
+  font-size: 0.79rem;
+  font-weight: 500;
+  line-height: 1.55;
+  color: var(--ax-up);
+}
+
+/* Who is giving up what. Set as a small table rather than a sentence, because the point is that
+   two parties appear in it. */
+.ax-boost-split {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 12px;
+  background: color-mix(in srgb, var(--ax-buy) 7%, transparent);
+  border-radius: var(--ax-r-sm);
+}
+
+.ax-boost-split > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ax-boost-split dt {
+  font-size: 0.76rem;
+  color: var(--ax-muted);
+}
+
+.ax-boost-split dd {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--ax-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The total, which is the line somebody will screenshot. */
+.ax-boost-split > div:last-child dt,
+.ax-boost-split > div:last-child dd {
+  color: var(--ax-up);
+  font-weight: 550;
+}
+
+.ax-boost-facts {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 0;
+}
+
+.ax-boost-facts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ax-boost-facts dt {
+  font-size: 0.78rem;
+  color: var(--ax-muted);
+}
+
+.ax-boost-facts dd {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 450;
+  text-align: right;
+  color: var(--ax-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.ax-boost-facts dd em {
+  font-style: normal;
+  font-weight: 400;
+  color: var(--ax-faint);
+}
+
+.ax-boost-do {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.ax-boost-on-go,
+.ax-boost-off,
+.ax-boost-lockask,
+.ax-boost-lockgo {
+  padding: 11px 14px;
+  border: 0;
+  border-radius: var(--ax-r-sm);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.18s var(--ax-ease);
+}
+
+.ax-boost-on-go {
+  background: var(--ax-buy);
+  color: #fff;
+}
+
+.ax-boost-off {
+  background: var(--ax-line);
+  color: var(--ax-ink);
+}
+
+/* Asking is quiet; confirming is not. The second press is irreversible, so it does not look
+   like the first. */
+.ax-boost-lockask {
+  background: transparent;
+  border: 1px solid var(--ax-line);
+  color: var(--ax-muted);
+}
+
+.ax-boost-lockgo {
+  background: #c9a227;
+  color: #fff;
+}
+
+.ax-boost-on-go:disabled,
+.ax-boost-off:disabled,
+.ax-boost-lockask:disabled,
+.ax-boost-lockgo:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.ax-boost-note {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.55;
+  color: var(--ax-muted);
+}
+
+.ax-boost-bad {
+  color: var(--ax-down);
+  overflow-wrap: anywhere;
+}
+
+/* The two things the product must not overstate: that this is a burn, and that Agen's half
+   percent is part of it. Small, and present on every Boost card whatever its state. */
+.ax-boost-fine {
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--ax-line-soft);
+  font-size: 0.72rem;
+  line-height: 1.55;
+  color: var(--ax-faint);
+}
+
+.ax-boost-away {
+  display: flex;
+  gap: 14px;
+  margin: 10px 0 0;
+  font-size: 0.72rem;
+}
+
+.ax-boost-away a {
+  color: var(--ax-muted);
+  text-decoration: none;
+  border-bottom: 1px solid var(--ax-line);
+}
+
+.ax-boost-away a:hover {
+  color: var(--ax-ink);
 }
 
 .ax-tk-about {

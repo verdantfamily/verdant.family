@@ -25,6 +25,7 @@ original design intent, and these files are the diff.
 | [012](012-the-agent-guardian.md) | Agent contracts have a guardian; market contracts still have nobody | extends 010 |
 | [013](013-the-repository-is-mit.md) | The repository is MIT; two SPDX headers are frozen by a deployment | resolves the `LICENSE` conflict |
 | [014](014-instant-is-a-preset-not-a-model.md) | Instant is a preset over Classic on v4, not a launch model; v3 cannot carry the fee | extends 008, 009 |
+| [015](015-boost-is-a-fee-recipient-not-a-fee-change.md) | Agen Boost captures both fee streams by being the fee recipient and the treasury; the platform half needs one Instant redeployment of unchanged bytecode | extends 014 |
 
 ## Format
 

@@ -130,10 +130,66 @@ export const instantMarket = onchainTable(
     liquidity: t.bigint().notNull(),
 
     // --- running totals ------------------------------------------------------
+    /**
+     * Every swap in the pool, Boost buybacks included.
+     *
+     * Total rather than organic, deliberately. A buyback *is* a trade — real ether, real price
+     * impact, real fee — so excluding it from the pool's own totals would make this column
+     * disagree with the chain. Organic is the derived figure: `volumeQuote - boostVolumeQuote`.
+     * The subtraction has to be available, because a Boosted market's volume is partly its own
+     * creator's fees recycled and presenting that as demand would be the dishonest reading.
+     */
     swapCount: t.integer().notNull(),
     volumeQuote: t.bigint().notNull(),
     volumeToken: t.bigint().notNull(),
     lastSwapAt: t.integer(),
+
+    // --- Agen Boost ----------------------------------------------------------
+    /**
+     * The market's `BoostEscrow`, or null.
+     *
+     * Null for every market that named a wallet at launch, which is every market created before
+     * Boost existed — `InstantFeeVault.creator` is immutable, so those can never be Boosted.
+     * Set when the escrow announces the market rather than at creation, because the escrow is
+     * what knows.
+     */
+    boostEscrow: t.hex(),
+    boostEnabled: t.boolean().notNull(),
+    boostLocked: t.boolean().notNull(),
+    /** Ether the escrow has spent buying this token back. Cumulative. */
+    boostSpentQuote: t.bigint().notNull(),
+    /**
+     * Ether of that spend which was Agen's 0.50%, routed by the fee architecture.
+     *
+     * The number that makes "all 1.50% is recycled" checkable: on a market that routes both streams
+     * it should trend toward one third of `boostSpentQuote`, because 0.50 of 1.50 is a third. It is
+     * kept apart from `boostAgenDonatedQuote` because a routed fee is a guarantee and a donation is
+     * a choice, and conflating them would let a voluntary top-up be presented as the fee split.
+     */
+    boostAgenRoutedQuote: t.bigint().notNull(),
+    /** Ether contributed from outside either fee stream. Discretionary, not routed. */
+    boostAgenDonatedQuote: t.bigint().notNull(),
+    /** Whether this market's platform 0.50% is captured by Boost at all. */
+    boostPlatformCaptured: t.boolean().notNull(),
+    /**
+     * The portion of `volumeQuote` and `volumeToken` that was a buyback.
+     *
+     * Taken from the escrow's own `BoostExecuted` rather than by matching swaps, which would
+     * mean pairing two events from two contracts on amounts that legitimately differ once the
+     * hook has taken its cut.
+     */
+    boostVolumeQuote: t.bigint().notNull(),
+    boostVolumeToken: t.bigint().notNull(),
+    /**
+     * Tokens at the dead address, as the escrow has reported sending them.
+     *
+     * Not a supply reduction: Instant tokens have no `burn`, so `totalSupply` above is unchanged
+     * by any of this. A circulating supply is `totalSupply - boostSunkToken`, and the two must
+     * never be conflated.
+     */
+    boostSunkToken: t.bigint().notNull(),
+    boostCount: t.integer().notNull(),
+    lastBoostAt: t.integer(),
   }),
   (table) => ({
     createdAtIdx: index().on(table.createdAt),
@@ -193,3 +249,39 @@ export const instantSwapRelations = relations(instantSwap, ({ one }) => ({
     references: [instantMarket.id],
   }),
 }));
+
+/**
+ * One Boost buyback cycle.
+ *
+ * The audit trail. Every row is one `BoostExecuted`, which the escrow emits with the ether it
+ * spent, the tokens it bought and the tokens it sent to the dead address — so Boost's whole
+ * accounting is reconstructible from this table without trusting a running total.
+ */
+export const boostBuyback = onchainTable(
+  "boost_buyback",
+  (t) => ({
+    id: t.text().primaryKey(),
+    poolId: t.hex(),
+    token: t.hex().notNull(),
+    escrow: t.hex().notNull(),
+    /** Whoever ran the cycle. Permissionless, so usually but not necessarily Agen's keeper. */
+    caller: t.hex().notNull(),
+
+    etherSpent: t.bigint().notNull(),
+    tokensBought: t.bigint().notNull(),
+    /** Sent to the dead address. Equals `tokensBought` unless the escrow held some already. */
+    tokensSunk: t.bigint().notNull(),
+    /** The escrow's own cumulative figure at this point, for checking the running total. */
+    cumulativeSunk: t.bigint().notNull(),
+    /** Still committed after this cycle. Non-zero when the pool could not absorb it all. */
+    remainingPending: t.bigint().notNull(),
+
+    timestamp: t.integer().notNull(),
+    blockNumber: t.bigint().notNull(),
+    transactionHash: t.hex().notNull(),
+  }),
+  (table) => ({
+    tokenIdx: index().on(table.token, table.timestamp),
+    escrowIdx: index().on(table.escrow),
+  }),
+);

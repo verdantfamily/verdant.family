@@ -319,7 +319,15 @@ function Card({
             >
               {name}
             </div>
-            <div style={{ fontSize: 22, color: "#77777f", marginTop: 4 }}>${symbol}</div>
+            {/*
+              One child, not two.
+
+              `${symbol}` is a text node and an expression, which Satori counts as two children —
+              and it refuses a `div` with more than one child unless the `display` is explicit. The
+              failure is a 502 on the image route rather than a build error, so it does not show up
+              until something tries to unfurl a link. A template literal keeps it to one child.
+            */}
+            <div style={{ fontSize: 22, color: "#77777f", marginTop: 4 }}>{`$${symbol}`}</div>
           </div>
         </div>
 

@@ -125,6 +125,10 @@ ponder.on("InstantFactory:MarketCreated", async ({ event, context }) => {
     volumeToken: 0n,
     lastSwapAt: null,
 
+    feeEtherLegQuote: 0n,
+    feesCreatorQuote: 0n,
+    feesPlatformQuote: 0n,
+
     /*
      * Boost, unknown at creation and mostly never known.
      *
@@ -259,6 +263,38 @@ ponder.on("BoostEscrow:BoostExecuted", async ({ event, context }) => {
     boostSunkToken: event.args.cumulativeSunk,
     boostCount: row.boostCount + 1,
     lastBoostAt: Number(event.block.timestamp),
+  }));
+});
+
+/**
+ * A trade paid its fee, as the market's own vault credited it.
+ *
+ * The one source for what Instant has earned. `Accrued` carries the ether leg the hook took
+ * its cut from and both shares it split that into, so nothing here computes a fee — which is
+ * the property that matters, because the alternative is multiplying `volumeQuote` by a rate
+ * and publishing the result as revenue. That would be wrong for any market whose trades
+ * predate this indexer's start block, wrong by a wei wherever the split rounded, and wrong in
+ * a way that looks plausible enough to go unquestioned.
+ *
+ * Found by vault rather than by pool, because a vault is all the event knows about itself. A
+ * missing market is skipped: during a backfill a vault's first trade can be indexed before
+ * the factory event that names it, and a fee cannot belong to a market this feed has not seen
+ * yet. The row it would have updated is written with zeroes and the next trade corrects it.
+ */
+ponder.on("InstantFeeVault:Accrued", async ({ event, context }) => {
+  const rows = await context.db.sql
+    .select()
+    .from(instantMarket)
+    .where(eq(instantMarket.vault, event.log.address))
+    .limit(1);
+
+  const market = rows[0];
+  if (market === undefined) return;
+
+  await context.db.update(instantMarket, { id: market.id }).set((row) => ({
+    feeEtherLegQuote: row.feeEtherLegQuote + event.args.etherLeg,
+    feesCreatorQuote: row.feesCreatorQuote + event.args.creatorAmount,
+    feesPlatformQuote: row.feesPlatformQuote + event.args.platformAmount,
   }));
 });
 

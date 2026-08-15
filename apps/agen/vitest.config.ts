@@ -23,4 +23,23 @@ export default defineConfig({
   // `React` binding that nothing in this app imports, and any test that renders a
   // component fails on the transform rather than on the component.
   esbuild: { jsx: "automatic" },
+  resolve: {
+    /*
+     * `server-only` resolved the way a server does.
+     *
+     * The package is a marker: its `react-server` export is empty and its default export
+     * throws, which is what stops a server module being pulled into a client bundle. Vitest
+     * runs under neither condition, so it takes the default and every `import "server-only"`
+     * module throws on import — which would make the feed boundary, the one place the
+     * indexer's JSON becomes this app's types, the one place that cannot be tested.
+     *
+     * The stub is local rather than the package's own `empty.js`, whose `exports` map declares
+     * only `"."` and so has no `./empty` specifier to resolve, and rather than
+     * `conditions: ["react-server"]`, which would change how React resolves for every other
+     * test in the suite. See the note in `test/server-only.ts`.
+     */
+    alias: {
+      "server-only": fileURLToPath(new URL("./test/server-only.ts", import.meta.url)),
+    },
+  },
 });

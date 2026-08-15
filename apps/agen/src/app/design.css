@@ -5732,6 +5732,89 @@ span.ax-pager-arrow {
   }
 }
 
+/* ---------------------------------------------------------------- metrics */
+
+/*
+ * The metrics grid.
+ *
+ * Auto-fit rather than a fixed column count, because the sections have four, three and three
+ * cards and a `repeat(4, …)` would leave the three-card rows with a hole at the end. The
+ * minimum is 200px, which is the width at which a compact ether figure and its dollar line
+ * both fit without wrapping.
+ */
+.ax-mx {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+/*
+ * Grey rather than bordered white, matching the Boost card and the token page's panels: on a
+ * white page a fill reads as a grouped figure while a border reads as an input.
+ */
+.ax-mx-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 18px;
+  background: var(--ax-panel);
+  border-radius: var(--ax-r-md);
+}
+
+/* The headline figure of its section. Marked by the number's size, not by a colour — every
+   card here is a fact and colouring one would imply the others are less so. */
+.ax-mx-lead {
+  background: var(--ax-fill);
+}
+
+.ax-mx-label {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ax-muted);
+}
+
+.ax-mx-value {
+  margin: 0;
+  font-size: clamp(1.35rem, 1.1rem + 0.9vw, 1.75rem);
+  font-weight: 500;
+  letter-spacing: -0.028em;
+  color: var(--ax-ink);
+}
+
+.ax-mx-lead .ax-mx-value {
+  font-size: clamp(1.6rem, 1.2rem + 1.3vw, 2.15rem);
+}
+
+.ax-mx-note {
+  margin: 0;
+  font-size: 0.76rem;
+  font-weight: 400;
+  color: var(--ax-faint);
+}
+
+/* The caveat under a section, where a figure needs a sentence rather than a caption. */
+.ax-mx-say {
+  margin: 16px 0 0;
+  max-width: 62ch;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--ax-body);
+}
+
+@media (max-width: 560px) {
+  .ax-mx {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .ax-mx-card {
+    padding: 15px 16px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ax-page *,
   .ax-page *::before,

@@ -9,6 +9,7 @@ import { Wallet } from "./wallet";
 const LINKS: readonly { readonly href: string; readonly label: string; readonly key: string }[] = [
   { href: "/", label: "Explore", key: "explore" },
   { href: "/launch", label: "Create", key: "create" },
+  { href: "/metrics", label: "Metrics", key: "metrics" },
   { href: "/profile", label: "Profile", key: "profile" },
 ];
 
@@ -21,7 +22,7 @@ const LINKS: readonly { readonly href: string; readonly label: string; readonly 
  *
  * ## Below the fold of a phone
  *
- * Four links, a mark and an address do not fit across 390 pixels, and the arrangements
+ * Five links, a mark and an address do not fit across 390 pixels, and the arrangements
  * that make them fit are all worse than not trying: shrinking the type below its floor,
  * or dropping links until the bar is no longer navigation. So under 780px the links move
  * into a sheet behind a button, and the bar keeps only the mark, the wallet and the way
@@ -30,7 +31,7 @@ const LINKS: readonly { readonly href: string; readonly label: string; readonly 
 export function TopBar({
   active,
 }: {
-  readonly active?: "explore" | "create" | "profile" | "docs" | undefined;
+  readonly active?: "explore" | "create" | "metrics" | "profile" | "docs" | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const path = usePathname();
@@ -132,7 +133,7 @@ export function TopBar({
             href="https://x.com/agendotspace"
             target="_blank"
             rel="noreferrer"
-            style={{ ["--i" as string]: "3" }}
+            style={{ ["--i" as string]: String(LINKS.length) }}
           >
             Docs
           </a>

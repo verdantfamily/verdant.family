@@ -144,6 +144,22 @@ export const instantMarket = onchainTable(
     volumeToken: t.bigint().notNull(),
     lastSwapAt: t.integer(),
 
+    // --- what the market has earned, as its vault credited it -----------------
+    /**
+     * The ether the fee was taken from, summed over every trade.
+     *
+     * Not the same as `volumeQuote` and the difference is the point: this is what
+     * `InstantFeeVault.Accrued` reports the hook charged against, so the three columns here
+     * are a closed system that can be checked against each other without knowing the rate.
+     * Deriving them from `volumeQuote` instead would be arithmetic on a number this table
+     * observed for a different purpose.
+     */
+    feeEtherLegQuote: t.bigint().notNull(),
+    /** Ether credited to the creator over the market's life, claimed or not. */
+    feesCreatorQuote: t.bigint().notNull(),
+    /** Ether credited to Agen over the market's life, claimed or not. */
+    feesPlatformQuote: t.bigint().notNull(),
+
     // --- Agen Boost ----------------------------------------------------------
     /**
      * The market's `BoostEscrow`, or null.
@@ -195,6 +211,9 @@ export const instantMarket = onchainTable(
     createdAtIdx: index().on(table.createdAt),
     creatorIdx: index().on(table.creator),
     tokenIdx: index().on(table.token),
+    // `InstantFeeVault:Accrued` arrives knowing only which vault emitted it, so the fee
+    // handler reaches a market by this column on every trade.
+    vaultIdx: index().on(table.vault),
   }),
 );
 

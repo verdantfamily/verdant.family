@@ -220,6 +220,117 @@ export async function fetchInstantStats(
   };
 }
 
+interface RawMetrics {
+  readonly at: number;
+  readonly markets: number;
+  readonly creators: number;
+  readonly trades: number;
+  readonly volume: {
+    readonly quote: string;
+    readonly boostQuote: string;
+    readonly organicQuote: string;
+  };
+  readonly fees: {
+    readonly creator: string;
+    readonly platform: string;
+    readonly total: string;
+  };
+  readonly boost: {
+    readonly marketsEnabled: number;
+    readonly spentQuote: string;
+    readonly sunkToken: string;
+    readonly buybacks: number;
+  };
+  readonly day: {
+    readonly volumeQuote: string;
+    readonly organicVolumeQuote: string;
+    readonly trades: number;
+  };
+  readonly lastLaunchAt: number | null;
+}
+
+/**
+ * Everything Instant has done, in wei and whole counts.
+ *
+ * Amounts stay `bigint` all the way to the formatter. A total volume in wei is around 10^18
+ * before anybody has traded much, and the moment it becomes a `number` the low digits are
+ * gone — which does not matter for a headline figure and matters a great deal for the
+ * identity a reader might check, that the creator's share is exactly twice the platform's.
+ */
+export interface InstantMetrics {
+  /** Chain time the figures were computed at, not the reader's clock. */
+  readonly at: number;
+  readonly markets: number;
+  readonly creators: number;
+  readonly trades: number;
+
+  /** Every swap in every Instant pool. */
+  readonly volumeQuote: bigint;
+  /** The part of it that was a Boost buyback: a market spending its own fees. */
+  readonly boostVolumeQuote: bigint;
+  /** The subtraction, which is the figure a "how busy is this" reading wants. */
+  readonly organicVolumeQuote: bigint;
+
+  /**
+   * Fees as the vaults credited them — earned, not withdrawn.
+   *
+   * Claimed-only figures would fall when a creator withdrew, which would describe their
+   * banking rather than what the protocol produced.
+   */
+  readonly feesCreator: bigint;
+  readonly feesPlatform: bigint;
+  readonly feesTotal: bigint;
+
+  readonly boostMarkets: number;
+  readonly boostSpentQuote: bigint;
+  readonly boostSunkToken: bigint;
+  readonly boostBuybacks: number;
+
+  readonly dayVolumeQuote: bigint;
+  readonly dayOrganicVolumeQuote: bigint;
+  readonly dayTrades: number;
+
+  readonly lastLaunchAt: number | null;
+}
+
+/**
+ * The platform's totals, or null when there is no feed to ask.
+ *
+ * Null rather than a zeroed object, and the distinction is the whole reason this returns an
+ * option: zeroes would render as a launchpad where nothing has ever happened, which is a
+ * confident false statement. A page with no feed shows dashes instead.
+ */
+export async function fetchInstantMetrics(): Promise<InstantMetrics | null> {
+  const raw = await ask<RawMetrics>("/instant/metrics");
+  if (raw === null) return null;
+
+  return {
+    at: raw.at,
+    markets: raw.markets,
+    creators: raw.creators,
+    trades: raw.trades,
+
+    volumeQuote: BigInt(raw.volume.quote),
+    boostVolumeQuote: BigInt(raw.volume.boostQuote),
+    organicVolumeQuote: BigInt(raw.volume.organicQuote),
+
+    feesCreator: BigInt(raw.fees.creator),
+    feesPlatform: BigInt(raw.fees.platform),
+    feesTotal: BigInt(raw.fees.total),
+
+    boostMarkets: raw.boost.marketsEnabled,
+    boostSpentQuote: BigInt(raw.boost.spentQuote),
+    boostSunkToken: BigInt(raw.boost.sunkToken),
+    boostBuybacks: raw.boost.buybacks,
+
+    dayVolumeQuote: BigInt(raw.day.volumeQuote),
+    dayOrganicVolumeQuote: BigInt(raw.day.organicVolumeQuote),
+    dayTrades: raw.day.trades,
+
+    lastLaunchAt: raw.lastLaunchAt,
+  };
+}
+
 /**
  * An Instant market's trades, newest first.
  *

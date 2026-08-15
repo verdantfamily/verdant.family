@@ -25,7 +25,7 @@ export function Bloom({
   centred = false,
   children,
 }: {
-  readonly active?: "explore" | "create" | "profile" | "docs" | undefined;
+  readonly active?: "explore" | "create" | "metrics" | "profile" | "docs" | undefined;
   /** A basename in `public/`, which must exist as `.avif`, `.webp` and `.jpg`. */
   readonly photo?: string | undefined;
   readonly centred?: boolean;

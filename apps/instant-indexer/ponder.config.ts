@@ -66,6 +66,39 @@ export default createConfig({
     },
 
     /**
+     * Every market's `InstantFeeVault`, discovered from the factory's own event.
+     *
+     * Here for one reason: fee revenue has to be **observed rather than inferred**. The
+     * obvious shortcut is to take 1.50% of `volumeQuote` and split it 1.00/0.50, and it is
+     * wrong in a way nobody would notice — the hook takes its cut from the ether leg, so
+     * the relationship between a swap's reported `amount0` and the fee charged on it is the
+     * hook's business, and a market that traded before this indexer's start block, or a
+     * trade too small to owe a wei, breaks the arithmetic silently. `Accrued` carries the
+     * ether leg and both shares as the vault credited them, which is the only figure that
+     * is true by construction.
+     *
+     * The vault is per market and its address is in `MarketCreated`, so the set grows as
+     * creators launch and Ponder's factory pattern is the only way to subscribe to it —
+     * the same mechanism `BoostEscrow` below uses, for the same reason.
+     *
+     * `Claimed` is deliberately not filtered in. What a recipient has *taken* is a
+     * different question from what a market has *earned*, and only the second is revenue.
+     * A creator who never claims has still been paid, and a metric that moved when they
+     * pressed a button would be measuring their habits rather than the protocol.
+     */
+    InstantFeeVault: {
+      abi: abi.instantFeeVaultAbi,
+      chain: "robinhood",
+      address: factory({
+        address: INSTANT.factory,
+        event: getAbiItem({ abi: abi.instantFactoryAbi, name: "MarketCreated" }),
+        parameter: "vault",
+      }),
+      startBlock: INSTANT.startBlock,
+      filter: [{ event: "Accrued", args: {} }],
+    },
+
+    /**
      * Agen Boost's escrow factory. One event, and it exists to find the escrows.
      */
     BoostEscrowFactory: {

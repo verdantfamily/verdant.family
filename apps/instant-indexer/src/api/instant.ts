@@ -132,6 +132,20 @@ function present(row: MarketRow) {
     lastSwapAt: row.lastSwapAt,
 
     /**
+     * What this market has earned, as its vault credited it. Accrued, not claimed.
+     *
+     * `feeEtherLeg` is the ether the fee was charged against, and the two shares are what
+     * the vault split it into — all three from `InstantFeeVault.Accrued` rather than from a
+     * rate applied to volume, so a consumer can check the split without knowing the rate.
+     */
+    fees: {
+      etherLeg: row.feeEtherLegQuote.toString(),
+      creator: row.feesCreatorQuote.toString(),
+      platform: row.feesPlatformQuote.toString(),
+      total: (row.feesCreatorQuote + row.feesPlatformQuote).toString(),
+    },
+
+    /**
      * Agen Boost, as of the last event this feed saw.
      *
      * `boostEscrow` is null for every market that cannot be Boosted, which is every market
@@ -202,6 +216,125 @@ export function instantRoutes({
       total: Number(total[0]?.rows ?? 0),
       limit,
       offset,
+    });
+  });
+
+  /**
+   * Everything Instant has done, as one row of totals.
+   *
+   * Summed in the database rather than by paging `/markets` and adding it up in a client,
+   * which is not an optimisation: a caller that adds up a page gets the totals for a page,
+   * and the default page is twenty-five markets. A figure labelled "total volume" that
+   * silently means "volume of the most recent twenty-five" is the kind of wrong that only
+   * shows up once there are twenty-six.
+   *
+   * ## Accrued, not claimed
+   *
+   * `fees.creator` is what creators have earned, whether or not they have pressed the
+   * button. Claimed-only figures would go down when somebody withdrew, which describes
+   * treasury operations rather than what the protocol produced.
+   *
+   * ## Volume is split three ways for the reason `present` gives
+   *
+   * A Boost buyback is a real trade with real price impact, so it belongs in the pool's
+   * own total — and it is a market spending its own fees, so it is not demand. Both
+   * figures are served, along with the subtraction, so that no consumer has to decide
+   * which one "volume" meant.
+   */
+  instant.get("/metrics", async (c) => {
+    const at = await chainNow();
+    const since = at - DAY_SECONDS;
+
+    const [totals, creators, day, dayBoost, burns] = await Promise.all([
+      db
+        .select({
+          markets: count(),
+          trades: sum(instantMarket.swapCount),
+          volumeQuote: sum(instantMarket.volumeQuote),
+          volumeToken: sum(instantMarket.volumeToken),
+          boostVolumeQuote: sum(instantMarket.boostVolumeQuote),
+          boostVolumeToken: sum(instantMarket.boostVolumeToken),
+          feeEtherLeg: sum(instantMarket.feeEtherLegQuote),
+          feesCreator: sum(instantMarket.feesCreatorQuote),
+          feesPlatform: sum(instantMarket.feesPlatformQuote),
+          boostSpentQuote: sum(instantMarket.boostSpentQuote),
+          boostSunkToken: sum(instantMarket.boostSunkToken),
+          boostCount: sum(instantMarket.boostCount),
+          lastLaunchAt: max(instantMarket.createdAt),
+        })
+        .from(instantMarket),
+
+      // Distinct rather than a row count: one creator with six markets is one creator, and
+      // conflating the two would make "creators" a synonym for "markets".
+      db
+        .select({ creators: sql<number>`count(distinct ${instantMarket.creator})` })
+        .from(instantMarket),
+
+      db
+        .select({
+          volumeQuote: sum(instantSwap.quoteAmount),
+          trades: count(),
+        })
+        .from(instantSwap)
+        .where(gte(instantSwap.timestamp, since)),
+
+      db
+        .select({ volumeQuote: sum(boostBuyback.etherSpent), count: count() })
+        .from(boostBuyback)
+        .where(gte(boostBuyback.timestamp, since)),
+
+      // How many markets have Boost on right now, which is a different question from how
+      // many have ever bought back.
+      db
+        .select({ boosting: count() })
+        .from(instantMarket)
+        .where(eq(instantMarket.boostEnabled, true)),
+    ]);
+
+    const all = totals[0];
+    const asText = (value: unknown): string => BigInt(String(value ?? 0)).toString();
+
+    return c.json({
+      at,
+      markets: Number(all?.markets ?? 0),
+      creators: Number(creators[0]?.creators ?? 0),
+      trades: Number(all?.trades ?? 0),
+
+      volume: {
+        quote: asText(all?.volumeQuote),
+        token: asText(all?.volumeToken),
+        boostQuote: asText(all?.boostVolumeQuote),
+        boostToken: asText(all?.boostVolumeToken),
+        organicQuote: notBelowZero(all?.volumeQuote, all?.boostVolumeQuote),
+        organicToken: notBelowZero(all?.volumeToken, all?.boostVolumeToken),
+      },
+
+      fees: {
+        etherLeg: asText(all?.feeEtherLeg),
+        creator: asText(all?.feesCreator),
+        platform: asText(all?.feesPlatform),
+        total: (
+          BigInt(asText(all?.feesCreator)) + BigInt(asText(all?.feesPlatform))
+        ).toString(),
+      },
+
+      boost: {
+        marketsEnabled: Number(burns[0]?.boosting ?? 0),
+        spentQuote: asText(all?.boostSpentQuote),
+        sunkToken: asText(all?.boostSunkToken),
+        buybacks: Number(all?.boostCount ?? 0),
+      },
+
+      day: {
+        since,
+        volumeQuote: asText(day[0]?.volumeQuote),
+        boostVolumeQuote: asText(dayBoost[0]?.volumeQuote),
+        organicVolumeQuote: notBelowZero(day[0]?.volumeQuote, dayBoost[0]?.volumeQuote),
+        trades: Number(day[0]?.trades ?? 0),
+        boostBuybacks: Number(dayBoost[0]?.count ?? 0),
+      },
+
+      lastLaunchAt: all?.lastLaunchAt ?? null,
     });
   });
 

@@ -111,6 +111,14 @@ export interface Workspace {
   readonly root: string;
   /** Write generated files, creating directories as needed. Overwrites. */
   write(sources: readonly GeneratedSource[]): Promise<void>;
+  /**
+   * Delete generated files. Missing paths are not an error.
+   *
+   * Exists for one purpose: quarantining a model-authored test file that cannot be made to
+   * run. Emptying the file instead would leave a suite that still fails to compile, and
+   * leaving it in place is what used to end builds whose markets were correct.
+   */
+  remove(paths: readonly string[]): Promise<void>;
   /** Remove the whole project. Safe to call more than once. */
   dispose(): Promise<void>;
 }
@@ -224,6 +232,12 @@ function safeJoin(root: string, relative: string): string {
   return target;
 }
 
+function removerFor(root: string): Workspace["remove"] {
+  return async (paths) => {
+    await Promise.all(paths.map((path) => rm(safeJoin(root, path), { force: true })));
+  };
+}
+
 function writerFor(root: string): Workspace["write"] {
   return async (sources) => {
     const targets = sources.map((source) => safeJoin(root, source.path));
@@ -258,6 +272,7 @@ export async function createWorkspace(options: WorkspaceOptions): Promise<Worksp
   return {
     root,
     write: writerFor(root),
+    remove: removerFor(root),
     dispose: async () => {
       await rm(root, { recursive: true, force: true });
     },
@@ -361,6 +376,7 @@ export async function createJobWorkspace(
       diagnostics: join(root, LAYOUT.diagnostics),
     },
     write,
+    remove: removerFor(root),
     writeJson: async (relative, value) => {
       await write([{ path: relative, content: `${JSON.stringify(value, jsonSafe, 2)}\n` }]);
     },

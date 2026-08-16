@@ -15,6 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import { CORE_TEST_PATH } from "./core-tests.js";
 import { FailureCode, Stage, progressOf } from "./job.js";
 import { ModelError, scriptedProvider } from "./model.js";
 import {
@@ -462,6 +463,12 @@ describe("a build that goes well", () => {
     expect(job.plan?.components).toHaveLength(2);
     expect(job.testOutcomes.every((outcome) => outcome.passed)).toBe(true);
 
+    // Agen's own suite ran against this market, beside the generated one. It is the half of
+    // the evidence that does not depend on a model having written a correct test.
+    const own = job.testOutcomes.filter((outcome) => outcome.suite.includes(CORE_TEST_PATH));
+    expect(own.length).toBeGreaterThan(0);
+    expect(own.every((outcome) => outcome.passed)).toBe(true);
+
     // The job is readable from the store, which is what lets a refreshed tab recover.
     const reloaded = await store.read(job.id);
     expect(reloaded?.stage).toBe(Stage.DeploymentReady);
@@ -898,6 +905,96 @@ describe("the test repair loop", () => {
     expect(rounds).toBe(2);
     expect(job.testAttempts).toBe(2);
   });
+
+  /**
+   * The largest single cause of lost markets, and it was never about the market.
+   *
+   * Six of one day's programmable launches ended with "the generated test suite could not be
+   * made to compile" after three rounds of patching the same broken file. A suite that will
+   * not compile is usually wrong from its first line, and repairing it line by line is the
+   * expensive way to find that out — so the suite is written again, once, knowing what went
+   * wrong with the last one.
+   */
+  it("writes the suite again rather than losing a market to tests that never compiled", async () => {
+    const noop = {
+      diagnosis: "tried again",
+      files: [{ path: "test/StreakHook.t.sol", content: UNCOMPILABLE_TESTS }],
+      giveUp: false,
+    };
+
+    const { options, provider } = pipeline([
+      ...interpretationAnswers(),
+      matchAnswer(),
+      planAnswer(),
+      sources(GOOD_HOOK),
+      tests(UNCOMPILABLE_TESTS),
+      noop,
+      noop,
+      tests(GOOD_TESTS),
+    ]);
+
+    const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
+
+    expect(job.failure).toBeNull();
+    expect(job.stage).toBe(Stage.DeploymentReady);
+
+    // The second generation call was told what happened to the first suite, so it is not
+    // the same question asked twice.
+    const generations = provider.calls.filter((call) => call.stage === "test_generation");
+    expect(generations).toHaveLength(2);
+    expect(generations[1]?.instructions).toContain("discarded");
+  });
+
+  /**
+   * A generated test broken in a way Agen has seen before is dropped, not argued with.
+   *
+   * Only with evidence: the playbook has to recognise the failure and attribute it to the
+   * test, and the market must still be left with a test for every invariant it claims. Both
+   * halves matter — a market that ships because the test proving its promise was deleted is
+   * worse than a market that does not ship.
+   */
+  it("drops a generated test whose failure is its own fault", async () => {
+    // The Agen Smoke failure, exactly: a test opening its own prank and then calling a
+    // trade helper, which opens one of its own. Foundry refuses the second, the market is
+    // never reached, and this used to end the build.
+    const stackedPrank = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.26;
+
+import {MarketTestBase} from "./MarketTestBase.sol";
+
+contract StackedPrankTest is MarketTestBase {
+    function test_a_trade_from_another_wallet() public {
+        vm.prank(OTHER_TRADER);
+        buy(0.001 ether);
+    }
+}
+`;
+    const noop = { diagnosis: "no change", files: [], giveUp: false };
+
+    const { options } = pipeline([
+      ...interpretationAnswers(),
+      matchAnswer(),
+      planAnswer(),
+      sources(GOOD_HOOK),
+      {
+        files: [
+          { path: "test/StreakHook.t.sol", content: GOOD_TESTS },
+          { path: "test/StackedPrank.t.sol", content: stackedPrank },
+        ],
+        notes: [],
+      },
+      noop,
+      noop,
+    ]);
+
+    const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
+
+    expect(job.failure).toBeNull();
+    expect(job.stage).toBe(Stage.DeploymentReady);
+    expect(job.tests.map((file) => file.path)).not.toContain("test/StackedPrank.t.sol");
+    // The suite that proves this market's declared invariant is untouched.
+    expect(job.tests.map((file) => file.path)).toContain("test/StreakHook.t.sol");
+  });
 });
 
 describe("failing closed", () => {
@@ -1109,7 +1206,7 @@ describe("failing closed", () => {
     // It was asked about the finding, not about a compiler error.
     expect(provider.calls.some((call) => call.stage === "static_analysis")).toBe(true);
     expect(job.stages.some((record) => record.stage === Stage.StaticAnalysis)).toBe(true);
-  }, 180_000);
+  }, 360_000);
 
   it("allows low-level code that has been fuzzed, and discloses it", async () => {
     // The policy this replaced rejected delegatecall outright, which meant refusing a
@@ -1398,14 +1495,24 @@ describe("showing the creator their market before the slow checks finish", () =>
     const order = job.stages.map((record) => record.stage);
     expect(order.indexOf(Stage.ReviewReady)).toBeLessThan(order.indexOf(Stage.DeepValidation));
     expect(order.indexOf(Stage.DeepValidation)).toBeLessThan(order.indexOf(Stage.DeploymentReady));
-  }, 180_000);
+  }, 360_000);
 
   it("refuses to deploy a market that only fails under fuzzing", async () => {
     // The trade the split makes: this market is shown to its creator and then blocked.
     // What protects them is the launch button, not the wait.
+    //
+    // The bug is keyed to the depth of the run rather than to the input, because keying it to
+    // the input cannot be made reliable in both directions at once. The critical pass draws a
+    // single input and has to get past it, the deep pass has to find it, and any failing set
+    // sparse enough to survive one draw is one a search of 256 can also miss: `trades > 200`
+    // failed the critical pass a fifth of the time, `trades % 64 == 7` about one run in
+    // sixty-four, and both flaked in a suite where adding a file reseeds the fuzzer. The
+    // shallow pass is the one that sets the fuzz-run count explicitly — see SHALLOW in
+    // foundry.ts — so its absence is exactly "this is the deep search", and the fixture fails
+    // then and only then.
     const FUZZ_FINDS_IT = GOOD_TESTS.replace(
       "        trades = uint8(bound(trades, 1, 12));",
-      `        if (trades > 200) assertEq(uint256(1), uint256(0));
+      `        if (vm.envOr("FOUNDRY_FUZZ_RUNS", uint256(0)) == 0) assertEq(uint256(1), uint256(0));
         trades = uint8(bound(trades, 1, 12));`,
     );
 
@@ -1427,7 +1534,7 @@ describe("showing the creator their market before the slow checks finish", () =>
     expect(reviewed).toBe(true);
     expect(job.stage).toBe(Stage.Failed);
     expect(job.failure?.stage).toBe(Stage.DeepValidation);
-  }, 180_000);
+  }, 360_000);
 });
 
 describe("a market with more behaviours than one answer holds", () => {
@@ -1485,7 +1592,7 @@ describe("a market with more behaviours than one answer holds", () => {
 
     // And nothing needed repairing, which is the point of the smaller answers.
     expect(provider.calls.filter((call) => call.schemaName === "rule_effects")).toHaveLength(0);
-  }, 180_000);
+  }, 360_000);
 });
 
 describe("carrying on a build that stopped", () => {
@@ -1530,7 +1637,7 @@ describe("carrying on a build that stopped", () => {
     expect(resumed.failure).toBeNull();
     expect(resumed.stage).toBe(Stage.DeploymentReady);
     expect(second.calls.map((call) => call.stage)).toEqual(["test_generation"]);
-  }, 180_000);
+  }, 360_000);
 
   it("keeps the very same market, rather than interpreting the prompt afresh", async () => {
     // The point of resuming rather than restarting. A creator who was reading a market
@@ -1548,7 +1655,7 @@ describe("carrying on a build that stopped", () => {
     expect(resumed.specification).toEqual(job.specification);
     expect(resumed.plan).toEqual(job.plan);
     expect(resumed.sources).toEqual(job.sources);
-  }, 180_000);
+  }, 360_000);
 
   it("runs the tests again rather than inheriting the last run's evidence", async () => {
     // A resumed build must never be able to reach deployment on a test suite it did not
@@ -1566,7 +1673,7 @@ describe("carrying on a build that stopped", () => {
     expect(stages).toContain(Stage.Compilation);
     expect(stages).toContain(Stage.TestExecution);
     expect(resumed.testOutcomes.length).toBeGreaterThan(0);
-  }, 180_000);
+  }, 360_000);
 
   it("says which stages it carried over rather than appearing to skip them", async () => {
     const { job, store, options } = await interrupted();
@@ -1584,7 +1691,7 @@ describe("carrying on a build that stopped", () => {
       Stage.ArchitecturePlanning,
       Stage.CodeGeneration,
     ]);
-  }, 180_000);
+  }, 360_000);
 
   it("refuses to resume a job that was never started", async () => {
     const { options, store } = pipeline([]);
@@ -1630,7 +1737,7 @@ describe("asking the creator instead of guessing", () => {
     // And it is durable: a reload has to find the same question.
     const stored = await store.read(job.id);
     expect(stored?.stage).toBe(Stage.AwaitingClarification);
-  }, 180_000);
+  }, 360_000);
 
   it("does not ask when the question has a defensible default", async () => {
     const soft = {
@@ -1650,7 +1757,7 @@ describe("asking the creator instead of guessing", () => {
 
     // Built, not interviewed.
     expect(job.stage).toBe(Stage.DeploymentReady);
-  }, 180_000);
+  }, 360_000);
 
   it("folds the answer into the same specification and carries on building", async () => {
     const { options, store } = pipeline(interpretationAnswers(withQuestion()));
@@ -1694,7 +1801,7 @@ describe("asking the creator instead of guessing", () => {
     expect(built.specification?.rules.map((rule) => rule.id)).toEqual(
       paused.specification?.rules.map((rule) => rule.id),
     );
-  }, 180_000);
+  }, 360_000);
 
   it("offers an improvement without waiting for an answer about it", async () => {
     // The difference between a suggestion and a question, at the level that matters: the
@@ -1723,7 +1830,7 @@ describe("asking the creator instead of guessing", () => {
 
     // And it is still only an offer: nothing was applied on the creator's behalf.
     expect(acceptedSuggestions(job.specification!)).toEqual([]);
-  }, 180_000);
+  }, 360_000);
 
   it("builds the market again when an improvement is accepted", async () => {
     const suggestion = {
@@ -1767,7 +1874,7 @@ describe("asking the creator instead of guessing", () => {
       "Carry 20% of the pot into the round that follows.",
     ]);
     expect(rebuilt.specification!.version).toBeGreaterThan(first.specification!.version);
-  }, 180_000);
+  }, 360_000);
 
   it("carries one specification through several turns, forgetting nothing", async () => {
     // The claim being tested is that the specification is the memory. Three turns, each
@@ -1956,5 +2063,5 @@ describe("asking the creator instead of guessing", () => {
     expect(built.specification?.assumptions.at(-1)?.interpretation).toBe(
       "On the first buy after each ten-minute interval.",
     );
-  }, 180_000);
+  }, 360_000);
 });

@@ -31,7 +31,12 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import type { BuildArtifacts, DeployableManifest, GenerationJob } from "@verdant/market-compiler";
+import type {
+  BuildArtifacts,
+  DeployableManifest,
+  DeploymentSpecification,
+  GenerationJob,
+} from "@verdant/market-compiler";
 import {
   assembleManifest,
   initialTickProblem,
@@ -172,6 +177,24 @@ export async function prepareLaunch(request: LaunchRequest): Promise<PreparedLau
     throw new LaunchError("This build has no architecture to deploy.", 409);
   }
 
+  /**
+   * A build cleared before the deployment specification existed.
+   *
+   * `LaunchManifest.deployment` is not optional, so nothing here has a reason to doubt it —
+   * but a job on the volume is older than the type that describes it, and these two facts met
+   * in production: EMBER and VOLT sat at `deployment_ready`, offered a launch button, and
+   * answered a creator's signature request by reading `components` off `undefined` three
+   * frames inside the materializer. A stale build is an ordinary thing to have and it needs an
+   * ordinary refusal, in the same breath as the manifest it belongs to.
+   */
+  if ((job.manifest.deployment as DeploymentSpecification | undefined) === undefined) {
+    throw new LaunchError(
+      "This build predates the deployment specification Agen now launches from, so its " +
+        "manifest cannot be turned into a transaction. Building the market again produces one.",
+      409,
+    );
+  }
+
   const creator = address(request.creator, "The connected wallet");
   const feeReceiver = address(request.feeReceiver, "The fee receiver");
 
@@ -264,6 +287,20 @@ export async function prepareLaunch(request: LaunchRequest): Promise<PreparedLau
     // addresses. Reaching this means something that depends on the real ones failed —
     // most plausibly the token not sorting above the quote asset for this creator — and
     // it is not the creator's mistake to explain away.
+    //
+    // Anything that is not a `ManifestError` is a case nobody anticipated, so it is logged
+    // before the message is generalized. The creator-facing text stays vague because there is
+    // nothing useful to tell them, but a build that cannot be launched for an unknown reason
+    // must not be unknowable to us as well: the whole of the cause was being dropped here,
+    // which is how two markets on the volume sat unlaunchable with no way to ask why.
+    if (!(error instanceof ManifestError)) {
+      console.error(
+        `[agen] ${request.jobId}: assembling the launch manifest failed for creator ` +
+          `${request.creator}:`,
+        error,
+      );
+    }
+
     throw new LaunchError(
       error instanceof ManifestError
         ? `This market cannot be launched from this wallet. ${error.message}`

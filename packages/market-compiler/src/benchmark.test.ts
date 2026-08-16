@@ -103,11 +103,33 @@ function specificationAnswer() {
   };
 }
 
-function interpretationAnswers(): readonly unknown[] {
+function interpretationAnswers({ conditionalFee = false } = {}): readonly unknown[] {
   const { summary, rules, ...frame } = specificationAnswer();
+
+  // A shape whose hook charges nothing needs a market that does not promise it will.
+  //
+  // Agen writes its own core assertions from the locked specification and holds the contracts
+  // to them, which is the whole point of them: a specification stating a flat sell fee and a
+  // hook that takes none is a market that does not do what it says. The passive-hook shapes
+  // here are about the pool's fee, not about the money, so they say the fee depends on the
+  // size of the trade — and everything they exist to prove is unaffected.
+  const stated = conditionalFee
+    ? rules.map((rule) => ({
+        ...rule,
+        conditions: [
+          {
+            kind: "tradeSizeVsLiquidity",
+            description: "Only sells above a tenth of the pool",
+            parameters: [{ key: "percent", value: 10 }],
+            combinator: null,
+          },
+        ],
+      }))
+    : rules;
+
   return [
     { behaviours: rules.map((rule) => rule.title.toLowerCase()) },
-    { summary, rules },
+    { summary, rules: stated },
     frame,
     { suggestions: [] },
   ];
@@ -324,11 +346,17 @@ contract BenchBehaviorTest is MarketTestBase {
         assertGe(tokenBalance(TRADER), 0);
     }
 
-    /// A sell needs no set-up and cannot exceed what the seller holds.
-    function testFuzz_sells_never_exceed_the_balance(uint128 amountIn) public {
-        sell(amountIn);
+    /// A sell needs no set-up, of tokens a buy actually produced.
+    ///
+    /// A raw uint128 straight into sell asks for more tokens than any market contains, which
+    /// the fixture now refuses rather than selling a smaller amount and letting the market
+    /// answer for the difference. See MarketTestBase._acquireForSale.
+    function testFuzz_sells_what_the_buy_produced(uint128 amountIn) public {
+        uint256 bought = buy(_tradeSize(amountIn, MIN_TRADE, MAX_TRADE));
 
-        assertGe(tokenBalance(TRADER), 0);
+        sell(uint128(bought));
+
+        assertEq(lastSellTokens, uint128(bought));
     }
 ${extra}}
 `;
@@ -345,6 +373,14 @@ interface Shape {
   /** One entry per model-written component, in plan order, excluding the token. */
   readonly sources: readonly string[];
   readonly behaviour?: string;
+  /**
+   * Whether this shape's hook charges nothing, so its market must not promise a flat fee.
+   *
+   * Only the fixed-fee shapes: every other hook here charges through the pool's fee override,
+   * where the money goes to the liquidity providers and Agen asserts nothing about where it
+   * lands. See `interpretationAnswers`.
+   */
+  readonly passiveHook?: boolean;
 }
 
 const token = (id: string, contractName: string) => ({
@@ -776,6 +812,7 @@ const STATEFUL_COUNTER: Shape = {
 const STATIC_FEE: Shape = {
   name: "a market opened at a fixed pool fee",
   tests: "a pool fee the hook requires and does not vary, read from the hook rather than assumed",
+  passiveHook: true,
   plan: STATEFUL_COUNTER.plan,
   deployment: {
     ...STATEFUL_COUNTER.deployment,
@@ -857,7 +894,7 @@ const SHAPES: readonly Shape[] = [
 
 async function launch(shape: Shape): Promise<GenerationJob> {
   const provider = scriptedProvider([
-    ...interpretationAnswers(),
+    ...interpretationAnswers({ conditionalFee: shape.passiveHook === true }),
     MATCH,
     { plan: shape.plan, deployment: shape.deployment },
     ...shape.sources.map((content) => ({ content, notes: [] })),
@@ -888,15 +925,19 @@ function expectLaunchable(job: GenerationJob, shape: Shape): void {
     "succeeded",
   );
 
-  // The canonical launch ran through the real factory, and the behaviour suite executed.
+  // The canonical launch ran through the real factory.
   expect(stageOf(Stage.TestEnvironment).at(-1)?.status, `${shape.name}: ${detail}`).toBe("succeeded");
-  expect(job.testOutcomes.length, `${shape.name}: no behaviour test ran`).toBeGreaterThan(0);
-  expect(job.testOutcomes.every((outcome) => outcome.passed), `${shape.name}: ${detail}`).toBe(true);
 
-  // And it is launchable, with no round spent working out how.
+  // Why it did not launch, before what that cost: a build that died at test_repair has an
+  // empty outcome list as a symptom, and asserting the symptom first reports "no behaviour
+  // test ran" for a failure that named itself.
   expect(job.failure, `${shape.name}: ${detail}`).toBeNull();
   expect(job.stage, shape.name).toBe(Stage.DeploymentReady);
   expect(job.manifest, shape.name).not.toBeNull();
+
+  // And the behaviour suite ran, rather than being quarantined down to nothing.
+  expect(job.testOutcomes.length, `${shape.name}: no behaviour test ran`).toBeGreaterThan(0);
+  expect(job.testOutcomes.every((outcome) => outcome.passed), `${shape.name}: ${detail}`).toBe(true);
 
   /**
    * The number this whole design exists to drive to zero.

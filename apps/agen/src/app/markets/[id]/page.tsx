@@ -13,6 +13,7 @@ import { fetchInstantCandles, instantFeedConfigured } from "../../lib/instant-fe
 import { ethUsd } from "../../lib/eth-price";
 import { eth, marketCapUsd } from "../../lib/format";
 import { INSTANT_FEE_PPM } from "../../lib/instant";
+import { attributionForToken } from "../../lib/agents/attribution";
 import { marketSource } from "../../lib/markets";
 import { shareDescription, shareTitle } from "../../lib/og-card";
 import { SiteFooter } from "../../footer";
@@ -277,10 +278,7 @@ export default async function Token({ params }: { params: Promise<{ id: string }
                 */}
                 <p>{market.headline === "" ? "This token came with no description." : market.headline}</p>
 
-                <div className="ax-tk-maker">
-                  <span>Creator</span>
-                  <b>{market.creator ?? "Not recorded for this build"}</b>
-                </div>
+                <Maker token={market.tokenAddress} creator={market.creator} />
 
                 {/*
                   The creator's own accounts, and the explorer.
@@ -339,6 +337,35 @@ export default async function Token({ params }: { params: Promise<{ id: string }
 
         <SiteFooter />
       </main>
+    </div>
+  );
+}
+
+function Maker({
+  token,
+  creator,
+}: {
+  readonly token: string | null;
+  readonly creator: string | null;
+}) {
+  const attribution = token === null ? null : attributionForToken(token);
+
+  if (attribution !== null) {
+    return (
+      <div className="ax-tk-maker">
+        <span>Launched by</span>
+        <b>
+          <Link href={`/agents/${attribution.agent.username}`}>@{attribution.agent.username}</Link>
+        </b>
+        <em className="ax-agent-label">Autonomous Agent</em>
+      </div>
+    );
+  }
+
+  return (
+    <div className="ax-tk-maker">
+      <span>Creator</span>
+      <b>{creator ?? "Not recorded for this build"}</b>
     </div>
   );
 }

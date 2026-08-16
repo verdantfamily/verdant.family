@@ -37,6 +37,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { DYNAMIC_FEE_FLAG } from "@verdant/config";
 
+import type { DeploymentSpecification } from "./deployment-spec.js";
+import { preludeActivationProblems, preludeConstructorProblems } from "./engineer.js";
+import { preludeActivations } from "./prelude.js";
 import { Stage, type GenerationJob } from "./job.js";
 import type { StructuredRequest } from "./model.js";
 import { scriptedProvider } from "./model.js";
@@ -111,6 +114,37 @@ function interpretationAnswers(): readonly unknown[] {
   ];
 }
 
+/**
+ * The same market with a condition on its fee.
+ *
+ * Used where the fixture's hook records a fee rather than moving one. Agen's core suite holds
+ * a market to any fee its specification states unconditionally — that is the point of it — so a
+ * fixture that pays nobody has to say the fee depends on something, which this one's does.
+ */
+function conditionalFeeAnswers(): readonly unknown[] {
+  const answers = [...interpretationAnswers()] as Record<string, never>[];
+  const mechanic = answers[1] as unknown as {
+    rules: { conditions: unknown[] }[];
+  };
+
+  answers[1] = {
+    ...answers[1],
+    rules: mechanic.rules.map((rule) => ({
+      ...rule,
+      conditions: [
+        {
+          kind: "tradeSizeVsLiquidity",
+          description: "Only sells above a tenth of the pool",
+          parameters: [{ key: "percent", value: 10 }],
+          combinator: null,
+        },
+      ],
+    })),
+  } as unknown as Record<string, never>;
+
+  return answers;
+}
+
 const MATCH = {
   reuse: [
     { catalogueId: "base-hook", why: "it needs a hook at all" },
@@ -182,7 +216,10 @@ function plan(hookPermissions: readonly string[]) {
   };
 }
 
-function deployment(hookPermissions: readonly string[]) {
+function deployment(
+  hookPermissions: readonly string[],
+  pool: Record<string, unknown> = { feeMode: "dynamic", lpFee: String(DYNAMIC_FEE_FLAG) },
+) {
   return {
     components: [
       {
@@ -220,6 +257,9 @@ function deployment(hookPermissions: readonly string[]) {
           { name: "owner_", type: "address", source: "COMPONENT:flowAccounting" },
         ],
         immutable: ["owner_"],
+        // Nothing for the launch to call: `FlowAccounting` is told both the vault and the
+        // hook and installs one into the other, so a second `setHook` from the launch would
+        // revert `AlreadyWired`.
         wiring: [],
         controller: "COMPONENT:flowAccounting",
       },
@@ -235,7 +275,7 @@ function deployment(hookPermissions: readonly string[]) {
         controller: null,
       },
     ],
-    pool: { feeMode: "dynamic", lpFee: String(DYNAMIC_FEE_FLAG) },
+    pool,
     hookPermissions: [...hookPermissions],
     custodyComponentId: "feeVault",
     feeClaimComponentId: "flowAccounting",
@@ -311,10 +351,18 @@ function hookSource({
   cast,
   record,
   permissions,
+  /**
+   * Whether the hook sets the swap's fee, or leaves the pool's own fee alone.
+   *
+   * A hook that leaves it alone never mentions `PoolKey.fee`, which is the case that used to
+   * be read as "this hook demands a dynamic pool".
+   */
+  overrideFee = true,
 }: {
   readonly cast: string;
   readonly record: string;
   readonly permissions: readonly string[];
+  readonly overrideFee?: boolean;
 }): string {
   return `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
@@ -352,12 +400,16 @@ ${permissions.map((name) => `        permissions.${name} = true;`).join("\n")}
         override
         returns (BeforeSwapDelta, uint24)
     {
-        if (isBuy(params)) return (BeforeSwapDeltaLibrary.ZERO_DELTA, LPFeeLibrary.OVERRIDE_FEE_FLAG);
+        if (isBuy(params)) return (BeforeSwapDeltaLibrary.ZERO_DELTA, ${
+          overrideFee ? "LPFeeLibrary.OVERRIDE_FEE_FLAG" : "0"
+        });
 
         address currency = Currency.unwrap(inputCurrency(key, params));
 ${record}
 
-        return (BeforeSwapDeltaLibrary.ZERO_DELTA, SELL_FEE_PPM | LPFeeLibrary.OVERRIDE_FEE_FLAG);
+        return (BeforeSwapDeltaLibrary.ZERO_DELTA, ${
+          overrideFee ? "SELL_FEE_PPM | LPFeeLibrary.OVERRIDE_FEE_FLAG" : "0"
+        });
     }
 }
 `;
@@ -409,7 +461,18 @@ async function launch(
 }
 
 function reachedLaunch(job: GenerationJob): void {
-  const detail = job.failure === null ? "" : `${job.failure.code}: ${job.failure.detail}`;
+  // Every stage that failed, not only the failure the build stopped on. A script that runs
+  // out of answers reports itself as the cause, and the round that asked for the extra
+  // answer — the one worth reading — is only in the stage records.
+  const detail =
+    job.failure === null
+      ? ""
+      : [
+          `${job.failure.code}: ${job.failure.detail}`,
+          ...job.stages
+            .filter((record) => record.status === "failed")
+            .map((record) => `  ${record.stage}: ${record.detail ?? ""}`),
+        ].join("\n");
   expect(job.failure, detail).toBeNull();
   expect(job.stage, detail).toBe(Stage.DeploymentReady);
   expect(job.testOutcomes.every((outcome) => outcome.passed), detail).toBe(true);
@@ -551,6 +614,333 @@ describe("a hook calling its sibling with the wrong number of arguments", () => 
   );
 });
 
+// --- a hook with no opinion about the pool's fee -----------------------------
+
+describe("a market whose hook leaves the pool's own fee alone", () => {
+  /**
+   * The disagreement that actually ended the FLOWTEST replays.
+   *
+   * This hook records what a sell paid and never touches `PoolKey.fee`, and the architecture
+   * declared a fixed 3000 ppm pool for it — which is a coherent design and the one the model
+   * chose three times running. Reading the hook's silence as a demand for a dynamic pool put
+   * the build into a loop rewriting the hook to satisfy a constraint nothing had made, and
+   * it exhausted its rounds and failed. The declaration is what decides here.
+   */
+  it(
+    "opens at the fee the deployment declared, and launches",
+    async () => {
+      const { job } = await launch([
+        // The fee this market charges is conditional, which is what keeps the case about the
+        // pool's fee mode. This hook records a fee and moves nothing, and a market whose
+        // specification promises an unconditional fee is held to it by Agen's own core suite —
+        // rightly, and on a fixture that was never trying to pay anybody.
+        ...conditionalFeeAnswers(),
+        MATCH,
+        {
+          plan: plan(["beforeSwap"]),
+          deployment: deployment(["beforeSwap"], { feeMode: "fixed", lpFee: "3000" }),
+        },
+        { content: ACCOUNTING, notes: [] },
+        {
+          content: hookSource({
+            cast: CAST_GOOD,
+            record: RECORD_GOOD,
+            permissions: ["beforeSwap"],
+            overrideFee: false,
+          }),
+          notes: [],
+        },
+        TESTS,
+      ]);
+
+      reachedLaunch(job);
+
+      // No round was spent arguing about the fee, and the pool carries the declared one.
+      expect(job.manifest?.lpFee).toBe(3_000);
+      expect(job.manifest?.feeMode).toBe("fixed");
+      expect(job.manifest?.feeModeReason).toContain("as the deployment declares");
+      expect(
+        job.stages.filter((entry) => entry.stage === Stage.DeploymentValidation).at(-1)?.status,
+      ).toBe("succeeded");
+      expect(job.stages.filter((entry) => entry.stage === Stage.DeploymentValidation)).toHaveLength(1);
+    },
+    600_000,
+  );
+});
+
+// --- a constructor invented for a contract Agen already ships ---------------
+
+/**
+ * The other half of the same mistake, one stage earlier.
+ *
+ * A replay of the FLOWTEST prompt compiled cleanly and was then refused because the
+ * architecture stage had declared `FeeVault(address owner_, address hook_)`. `FeeVault` is
+ * Agen's own, takes one argument, and is never regenerated — so the disagreement named the
+ * one component in the bundle that nothing could fix, and the build ended with no repair
+ * available to it. Caught while the design is still an artefact, it is a retry.
+ */
+describe("a design that invents a constructor for one of Agen's own contracts", () => {
+  function specFor(
+    constructorArguments: readonly { name: string; type: string; source: string }[],
+  ): DeploymentSpecification {
+    return {
+      version: 1,
+      specificationVersion: 1,
+      components: [
+        {
+          componentId: "feeVault",
+          contractName: "FeeVault",
+          role: "vault",
+          constructorArguments: constructorArguments as never,
+          immutable: ["owner_"],
+          wiring: [],
+          controller: null,
+          custody: true,
+          claimsFees: false,
+        },
+      ],
+      pool: { feeMode: "dynamic", lpFee: DYNAMIC_FEE_FLAG, tickSpacing: 200 },
+      hookPermissions: [],
+      requiresPoolIdBeforeInitialize: false,
+      requiresAgenRouter: false,
+      custodyComponentId: "feeVault",
+      feeClaimComponentId: null,
+      oneTimeInitialization: [],
+    } as unknown as DeploymentSpecification;
+  }
+
+  it("is refused, with the real signature quoted back", () => {
+    const [problem] = preludeConstructorProblems(
+      specFor([
+        { name: "owner_", type: "address", source: "COMPONENT:flowAccounting" },
+        { name: "hook_", type: "address", source: "COMPONENT:flowHook" },
+      ]),
+    );
+
+    expect(problem).toBeDefined();
+    expect(problem).toContain("FeeVault");
+    expect(problem).toContain("fixed at (address owner_)");
+    expect(problem).toContain("declared (address owner_, address hook_)");
+  });
+
+  it("accepts the constructor the contract actually has, whatever fills it", () => {
+    expect(
+      preludeConstructorProblems(
+        specFor([{ name: "owner_", type: "address", source: "COMPONENT:flowAccounting" }]),
+      ),
+    ).toHaveLength(0);
+
+    // Who owns the vault is still the architecture's decision — only the shape is fixed.
+    expect(
+      preludeConstructorProblems(
+        specFor([{ name: "owner_", type: "address", source: "ROLE:FEE_RECEIVER" }]),
+      ),
+    ).toHaveLength(0);
+  });
+});
+
+// --- a reused contract the deployment never wires ---------------------------
+
+/**
+ * The SIMPLE failure, which was a whole build.
+ *
+ * The design declared a `FeeVault` owned through an accounting contract, the hook credited
+ * it on every sell, everything compiled, the bundle deployed — and every behaviour test
+ * reverted `NotHook(hook)`, because nothing had ever called `setHook`. It surfaced at test
+ * repair, where the only true repair was to change the deployment, so the model correctly
+ * refused and the build ended. The vault's own source says this; nothing had read it.
+ */
+describe("a design that deploys a vault nothing can wire", () => {
+  function specFor({
+    vaultWiring = [],
+    accountingWiring = [],
+  }: {
+    readonly vaultWiring?: readonly { functionName: string; argument: string }[];
+    readonly accountingWiring?: readonly { functionName: string; argument: string }[];
+  }): DeploymentSpecification {
+    const wiring = (calls: readonly { functionName: string; argument: string }[]) =>
+      calls.map((call) => ({
+        ...call,
+        caller: "INSTALLER",
+        phase: "before_pool_initialize",
+        once: true,
+      }));
+
+    return {
+      version: 1,
+      specificationVersion: 1,
+      components: [
+        {
+          componentId: "feeAccounting",
+          contractName: "FeeAccounting",
+          role: "accounting",
+          constructorArguments: [
+            { name: "installer_", type: "address", source: "INFRA:INSTALLER" },
+            { name: "feeReceiver_", type: "address", source: "ROLE:FEE_RECEIVER" },
+          ],
+          immutable: ["installer_", "feeReceiver_"],
+          wiring: wiring(accountingWiring),
+          controller: null,
+          custody: false,
+          claimsFees: true,
+        },
+        {
+          componentId: "feeVault",
+          contractName: "FeeVault",
+          role: "vault",
+          constructorArguments: [
+            { name: "owner_", type: "address", source: "COMPONENT:feeAccounting" },
+          ],
+          immutable: ["owner_"],
+          wiring: wiring(vaultWiring),
+          controller: "COMPONENT:feeAccounting",
+          custody: true,
+          claimsFees: false,
+        },
+        {
+          componentId: "hook",
+          contractName: "MarketHook",
+          role: "hook",
+          constructorArguments: [
+            { name: "manager_", type: "address", source: "INFRA:POOL_MANAGER" },
+            { name: "vault_", type: "address", source: "COMPONENT:feeVault" },
+          ],
+          immutable: ["manager_", "vault_"],
+          wiring: [],
+          controller: null,
+          custody: false,
+          claimsFees: false,
+        },
+      ],
+      pool: { feeMode: "dynamic", lpFee: DYNAMIC_FEE_FLAG, tickSpacing: 200 },
+      hookPermissions: [],
+      requiresPoolIdBeforeInitialize: false,
+      requiresAgenRouter: false,
+      custodyComponentId: "feeVault",
+      feeClaimComponentId: "feeAccounting",
+      oneTimeInitialization: [],
+    } as unknown as DeploymentSpecification;
+  }
+
+  /**
+   * The SIMPLE spec, in miniature: the vault is owned by a controller that is handed the
+   * vault and nothing else, so no address in the bundle can ever be installed as its hook.
+   */
+  it("is refused, naming the setter and what stays broken without it", () => {
+    const [problem] = preludeActivationProblems(
+      specFor({ accountingWiring: [{ functionName: "setFeeVault", argument: "COMPONENT:feeVault" }] }),
+    );
+
+    expect(problem).toBeDefined();
+    expect(problem).toContain("setHook");
+    expect(problem).toContain("credit");
+  });
+
+  it("accepts a declared setHook whichever component is allowed to credit", () => {
+    expect(
+      preludeActivationProblems(
+        specFor({ vaultWiring: [{ functionName: "setHook", argument: "COMPONENT:hook" }] }),
+      ),
+    ).toHaveLength(0);
+  });
+
+  /**
+   * The shape the launcher cannot distinguish from the outside, and must not refuse: the
+   * owning contract is told both the vault and the hook, and installs one into the other
+   * from its own wiring. Calling `setHook` again from the launch would revert `AlreadyWired`.
+   */
+  it("accepts an owner given both addresses, which can wire the vault itself", () => {
+    expect(
+      preludeActivationProblems(
+        specFor({
+          accountingWiring: [
+            { functionName: "setFeeVault", argument: "COMPONENT:feeVault" },
+            { functionName: "setHook", argument: "COMPONENT:hook" },
+          ],
+        }),
+      ),
+    ).toHaveLength(0);
+  });
+
+  /** A launch role cannot credit a vault: the caller has to be a contract in the bundle. */
+  it("refuses a launch role as the credited caller", () => {
+    expect(
+      preludeActivationProblems(
+        specFor({ vaultWiring: [{ functionName: "setHook", argument: "ROLE:FEE_RECEIVER" }] }),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("reads the requirement out of the prelude rather than a list beside it", () => {
+    const vault = preludeActivations().find(
+      (activation) => activation.contractName === "FeeVault",
+    );
+
+    expect(vault).toEqual({
+      contractName: "FeeVault",
+      functionName: "setHook",
+      field: "hook",
+      gated: ["credit"],
+    });
+  });
+});
+
+// --- a hook that declares more than the design predicted --------------------
+
+/**
+ * The prediction behind the program, rather than the program behind the prediction.
+ *
+ * `deployment.hookPermissions` is written by the architecture stage before a line of Solidity
+ * exists: it names the callbacks it expects the hook to need. The compiled `getHookPermissions`
+ * is the fact, and it is what `AgenFactory` checks the deployed bytecode against — so where the
+ * two differ by the hook needing *more*, the prediction is merely behind, and the address has to
+ * be mined from the code.
+ *
+ * HRBR, POT and DEGEN were lost to this in a single benchmark run, none of them at fault. Each
+ * hook charged its fee in `_beforeSwap` and correctly declared `beforeSwapReturnDelta`; each
+ * design had predicted a market charging in `_afterSwap` alone; and deployment validation
+ * refused the disagreement rather than resolving it. Three correct markets failed on Agen's own
+ * stale note about what they were going to be. Reconciliation already existed one stage later,
+ * at `test_environment`, where it could never run.
+ *
+ * The opposite direction is the case below, and stays a refusal: a hook declaring *fewer*
+ * callbacks than the market was designed around is missing a mechanic, not ahead of a note.
+ */
+describe("a hook needing a callback the design did not predict", () => {
+  it(
+    "is mined for what it declares instead of failing validation",
+    async () => {
+      const { job, calls } = await launch([
+        ...interpretationAnswers(),
+        MATCH,
+        // The design predicts a before-swap hook and nothing else.
+        { plan: plan(["beforeSwap"]), deployment: deployment(["beforeSwap"]) },
+        { content: ACCOUNTING, notes: [] },
+        // The hook, correct, declaring the extra callback its own fee needs.
+        {
+          content: hookSource({
+            cast: CAST_GOOD,
+            record: RECORD_GOOD,
+            permissions: ["beforeSwap", "beforeSwapReturnDelta"],
+          }),
+          notes: [],
+        },
+        TESTS,
+      ]);
+
+      reachedLaunch(job);
+
+      // The set the hook declares, not the one the architecture guessed.
+      expect(job.manifest?.deployment.hookPermissions).toContain("beforeSwapReturnDelta");
+
+      // And it cost nothing: no rewrite was asked for, so the script has no answer for one.
+      // Had validation refused, the provider would have thrown for want of a reply.
+      expect(calls.some((call) => call.schemaName === "rewritten_contract")).toBe(false);
+    },
+    360_000,
+  );
+});
+
 // --- 4. the regression that FLOWTEST actually was ---------------------------
 
 describe("a component changed to match its declared deployment", () => {
@@ -623,7 +1013,7 @@ describe("a component changed to match its declared deployment", () => {
       // assertion the live failure would have caught.
       expect(rewrite!.input).toContain("FeeVault(payable(feeVault_))");
       expect(rewrite!.input).toContain("recordSellFee(currency,");
-      expect(rewrite!.input).toContain("Change as little as settles");
+      expect(rewrite!.instructions).toContain("Change as little as settles");
 
       // And the sibling's interface came with it, so the rewrite had no reason to guess
       // the name back to what it was.

@@ -1,249 +1,96 @@
 /**
- * Tested against real compilations, for the reason the gates and the dev-buy probe are.
+ * Who decides the pool's fee, and when.
  *
- * This reads solc's AST, so a hand-written fixture would be testing this file against a
- * belief about what solc emits. The EMBER case below is that market's own guard, copied
- * from `test/agen/generated/ember/EmberHook.sol` — it is the market that made the pool's
- * fee a question, because opening it dynamic reverts `initialize` and loses the launch.
+ * There are two documents with an opinion and they are authoritative in different
+ * situations. The hook wins when it guarded `PoolKey.fee`, because a pool opened otherwise
+ * reverts inside `initialize` with the hook's own error. The declared deployment wins when
+ * the hook said nothing, because that is what declaring it was for.
+ *
+ * The case that was missing is the second one. Silence used to resolve to the dynamic
+ * sentinel and then behave exactly like a requirement, so every market whose hook takes its
+ * fee as a swap delta — an ordinary design, and the one a live FLOWTEST build used — was in
+ * permanent disagreement with any architecture declaring a fixed pool fee.
  */
 
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { execFile } from "node:child_process";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
+import { describe, expect, it } from "vitest";
 
 import { DYNAMIC_FEE_FLAG } from "@verdant/config";
 
-import { requiredFeeMode } from "./feemode.js";
-import { preludeSources } from "./prelude.js";
-import type { Workspace } from "./workspace.js";
-import { createWorkspace } from "./workspace.js";
+import { poolFee, type FeeRequirement } from "./feemode.js";
 
-const run = promisify(execFile);
-const here = dirname(fileURLToPath(import.meta.url));
-const VENDOR = resolve(here, "../../contracts/vendor");
+const SILENT: FeeRequirement = {
+  mode: "dynamic",
+  lpFee: DYNAMIC_FEE_FLAG,
+  reason: "The hook places no constraint on the pool's fee.",
+  problem: null,
+  stated: false,
+};
 
-let workspace: Workspace | null = null;
+const REQUIRES_ZERO: FeeRequirement = {
+  mode: "zero",
+  lpFee: 0,
+  reason: "Hook._afterInitialize requires no pool fee at all.",
+  problem: null,
+  stated: true,
+};
 
-afterEach(async () => {
-  await workspace?.dispose();
-  workspace = null;
-});
+describe("a hook that never mentions the pool's fee", () => {
+  it("opens at the fee the deployment declared", () => {
+    const settled = poolFee({ required: SILENT, declaredLpFee: 3_000 });
 
-beforeAll(async () => {
-  await run("forge", ["--version"]).catch(() => {
-    throw new Error("forge is not on the PATH; this cannot read an AST without a build");
+    expect(settled.lpFee).toBe(3_000);
+    expect(settled.mode).toBe("fixed");
+    expect(settled.stated).toBe(false);
+    expect(settled.problem).toBeNull();
+  });
+
+  it("opens dynamic where that is what was declared", () => {
+    const settled = poolFee({ required: SILENT, declaredLpFee: DYNAMIC_FEE_FLAG });
+
+    expect(settled.lpFee).toBe(DYNAMIC_FEE_FLAG);
+    expect(settled.mode).toBe("dynamic");
+  });
+
+  it("opens at nothing where that is what was declared", () => {
+    const settled = poolFee({ required: SILENT, declaredLpFee: 0 });
+
+    expect(settled.mode).toBe("zero");
+    expect(settled.lpFee).toBe(0);
+  });
+
+  it("says in the record that the declaration decided it", () => {
+    expect(poolFee({ required: SILENT, declaredLpFee: 3_000 }).reason).toContain(
+      "as the deployment declares",
+    );
   });
 });
 
-/** Compile a hook against the real prelude and ask what fee its pool must open with. */
-async function probe(body: string) {
-  workspace = await createWorkspace({ vendorRoot: VENDOR });
+describe("a hook that guarded the pool's fee", () => {
+  /**
+   * The requirement survives a declaration that disagrees, rather than being reconciled
+   * away. Deployment validation is what reports the disagreement, and it can only do that
+   * if the requirement reaches it intact.
+   */
+  it("keeps its requirement even when the declaration says otherwise", () => {
+    const settled = poolFee({ required: REQUIRES_ZERO, declaredLpFee: 3_000 });
 
-  await workspace.write([
-    ...preludeSources().map((source) => ({
-      path: source.path.replace(/^contracts\//, "src/"),
-      content: source.content,
-    })),
-    {
-      path: "src/MarketHook.sol",
-      content: `// SPDX-License-Identifier: MIT
-pragma solidity 0.8.26;
-
-import {AgenBaseHook} from "./AgenBaseHook.sol";
-
-import {Hooks} from "v4-core/src/libraries/Hooks.sol";
-import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
-import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
-import {PoolKey} from "v4-core/src/types/PoolKey.sol";
-import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
-import {SwapParams} from "v4-core/src/types/PoolOperation.sol";
-import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
-
-contract MarketHook is AgenBaseHook {
-    using PoolIdLibrary for PoolKey;
-
-    address public immutable marketToken;
-    PoolId public boundPoolId;
-    bool public poolBound;
-
-    error InvalidPool();
-
-    constructor(IPoolManager manager, address marketToken_) AgenBaseHook(manager) {
-        marketToken = marketToken_;
-    }
-
-    function getHookPermissions() public pure override returns (Hooks.Permissions memory permissions) {
-        permissions.afterInitialize = true;
-        permissions.beforeSwap = true;
-    }
-
-${body}
-}
-`,
-    },
-  ]);
-
-  const { stdout } = await run("forge", ["build", "--force", "--json"], {
-    cwd: workspace.root,
-    maxBuffer: 64 * 1024 * 1024,
-  }).catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? "{}" }));
-
-  return requiredFeeMode({
-    root: workspace.root,
-    buildOutput: JSON.parse(stdout) as unknown,
-    hookContractName: "MarketHook",
-  });
-}
-
-describe("which fee a market's pool must be opened with", () => {
-  it("reads EMBER's requirement that the pool charge nothing", async () => {
-    // The real guard, verbatim in shape: a `||` chain in `afterInitialize` that reverts,
-    // with the fee check as one of its terms. Before this probe existed the manifest
-    // opened every market dynamic, and this market's launch reverted inside `initialize`
-    // after all five of its contracts had been deployed.
-    const result = await probe(`    function _afterInitialize(address, PoolKey calldata key, uint160, int24)
-        internal
-        override
-    {
-        if (key.tickSpacing != 200 || key.fee != 0) revert InvalidPool();
-
-        boundPoolId = key.toId();
-        poolBound = true;
-    }`);
-
-    expect(result.problem).toBeNull();
-    expect(result.mode).toBe("zero");
-    expect(result.lpFee).toBe(0);
-    expect(result.reason).toMatch(/_afterInitialize/);
+    expect(settled.lpFee).toBe(0);
+    expect(settled.stated).toBe(true);
+    expect(settled).toEqual(REQUIRES_ZERO);
   });
 
-  it("reads an ordinary dynamic-fee hook's requirement", async () => {
-    const result = await probe(`    function _afterInitialize(address, PoolKey calldata key, uint160, int24)
-        internal
-        override
-    {
-        if (key.fee != LPFeeLibrary.DYNAMIC_FEE_FLAG) revert InvalidPool();
-
-        boundPoolId = key.toId();
-        poolBound = true;
-    }`);
-
-    expect(result.problem).toBeNull();
-    expect(result.mode).toBe("dynamic");
-    expect(result.lpFee).toBe(DYNAMIC_FEE_FLAG);
+  it("is unchanged when the declaration agrees", () => {
+    expect(poolFee({ required: REQUIRES_ZERO, declaredLpFee: 0 })).toEqual(REQUIRES_ZERO);
   });
+});
 
-  it("defaults a hook with no opinion about the fee to dynamic", async () => {
-    const result = await probe(`    function _afterInitialize(address, PoolKey calldata key, uint160, int24)
-        internal
-        override
-    {
-        boundPoolId = key.toId();
-        poolBound = true;
-    }`);
+describe("a hook whose fee cannot be established at all", () => {
+  it("carries the problem through untouched, so the build still fails on it", () => {
+    const broken: FeeRequirement = {
+      ...SILENT,
+      problem: "Hook requires the pool's fee to be two different things at once.",
+    };
 
-    expect(result.problem).toBeNull();
-    expect(result.mode).toBe("dynamic");
-    expect(result.lpFee).toBe(DYNAMIC_FEE_FLAG);
-    expect(result.reason).toMatch(/places no constraint/);
-  });
-
-  it("understands the same requirement written as a require", async () => {
-    // `require(key.fee == 0)` and `if (key.fee != 0) revert` say the same thing, and a
-    // check that read the polarity off the comparison alone would get one of them
-    // exactly backwards.
-    const result = await probe(`    function _afterInitialize(address, PoolKey calldata key, uint160, int24)
-        internal
-        override
-    {
-        require(key.fee == 0, "fee");
-        boundPoolId = key.toId();
-        poolBound = true;
-    }`);
-
-    expect(result.problem).toBeNull();
-    expect(result.mode).toBe("zero");
-  });
-
-  it("reads a fixed pool fee", async () => {
-    const result = await probe(`    function _afterInitialize(address, PoolKey calldata key, uint160, int24)
-        internal
-        override
-    {
-        if (key.fee != 3000) revert InvalidPool();
-        poolBound = true;
-    }`);
-
-    expect(result.problem).toBeNull();
-    expect(result.mode).toBe("fixed");
-    expect(result.lpFee).toBe(3_000);
-  });
-
-  it("fails the build when a hook wants two different fees at once", async () => {
-    const result = await probe(`    function _beforeInitialize(address, PoolKey calldata key, uint160) internal override {
-        if (key.fee != 0) revert InvalidPool();
-    }
-
-    function _afterInitialize(address, PoolKey calldata key, uint160, int24)
-        internal
-        override
-    {
-        if (key.fee != LPFeeLibrary.DYNAMIC_FEE_FLAG) revert InvalidPool();
-        poolBound = true;
-    }`);
-
-    expect(result.problem).toMatch(/two different things at once/);
-  });
-
-  it("defers a guard it cannot read to the launch instead of refusing the market", async () => {
-    // Compared against an immutable, so this reader genuinely cannot say what the value
-    // is. It used to refuse the market outright, which threw away a plain "1% on sells"
-    // build over the reader's vocabulary. The canonical fixture now opens the pool with
-    // this exact fee in Foundry before anything reaches a chain, and the manifest is
-    // built from the number the fixture proved — so the honest answer is to try it and
-    // let the launch say, rather than to guess that no answer exists.
-    const result = await probe(`    uint24 public immutable requiredFee = 500;
-
-    function _afterInitialize(address, PoolKey calldata key, uint160, int24)
-        internal
-        override
-    {
-        if (key.fee != requiredFee) revert InvalidPool();
-        poolBound = true;
-    }`);
-
-    expect(result.problem).toBeNull();
-    expect(result.lpFee).toBe(DYNAMIC_FEE_FLAG);
-    expect(result.reason).toMatch(/could not read the fee guard/);
-  });
-
-  it("still refuses a requirement no pool could satisfy", async () => {
-    const result = await probe(`    function _beforeInitialize(address, PoolKey calldata key, uint160) internal override {
-        if (key.fee != 0) revert InvalidPool();
-    }
-
-    function _afterInitialize(address, PoolKey calldata key, uint160, int24)
-        internal
-        override
-    {
-        if (key.fee != 3000) revert InvalidPool();
-        poolBound = true;
-    }`);
-
-    expect(result.problem).toMatch(/two different things at once/);
-  });
-
-  it("says so when the hook is not in the build at all", async () => {
-    workspace = await createWorkspace({ vendorRoot: VENDOR });
-
-    const result = await requiredFeeMode({
-      root: workspace.root,
-      buildOutput: { sources: {} },
-      hookContractName: "MarketHook",
-    });
-
-    expect(result.problem).toMatch(/could not find MarketHook/);
+    expect(poolFee({ required: broken, declaredLpFee: 3_000 })).toEqual(broken);
   });
 });

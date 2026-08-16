@@ -234,7 +234,10 @@ function categoryOf(
         diagnostic.severity === "error" &&
         (diagnostic.file?.endsWith("test/MarketTestBase.sol") === true ||
           diagnostic.file?.endsWith("test/MarketTestEnvironment.t.sol") === true ||
-          diagnostic.file?.endsWith("test/AgenTest.sol") === true),
+          diagnostic.file?.endsWith("test/AgenTest.sol") === true ||
+          // Agen's own core suite. A model may not edit it, so a compile error in it is
+          // Agen's bug to fix and there is no repair round that could help.
+          diagnostic.file?.endsWith("test/MarketCore.t.sol") === true),
     );
 
   if (canonicalFixtureWouldNotBuild) return FailureCategory.HarnessInfrastructure;

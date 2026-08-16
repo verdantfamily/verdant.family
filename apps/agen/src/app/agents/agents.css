@@ -1,0 +1,1403 @@
+/*
+ * Agen for Agents — the surface of a different room.
+ *
+ * Everything here is namespaced `ag-`, against the main product's `ax-`, and every rule
+ * is a descendant of `.ag-root`. That is not tidiness: the two systems disagree about
+ * the most basic thing a stylesheet declares — which way round black and white go — and
+ * a single unscoped rule would take the launchpad down with it. The token block below
+ * is deliberately not on `:root`.
+ *
+ * ## What it sits inside
+ *
+ * The main app's frame is a white rounded sheet with a gutter, on a black body. This
+ * environment does not replace that frame; it fills it. `.ag-root` matches the sheet's
+ * height exactly and paints it black, so the sheet's rounded corners survive and the
+ * page reads as one continuous dark surface rather than as a dark page pasted onto a
+ * light product.
+ *
+ * ## The look
+ *
+ * Near-black, hairlines, and space. There are no cards in the launchpad sense — a
+ * bordered box around every idea is how a dashboard happens, and this is not one. What
+ * separates things is a 1px line at 8% white and a lot of nothing. Colour appears three
+ * times: green for a live agent, blue for Telegram, and a cool silver for the marks and
+ * rules that need to read as machined rather than drawn.
+ *
+ * Numbers and machine state are set in mono. Prose is not.
+ */
+
+.ag-root {
+  /* Surfaces, darkest first. The canvas is not pure black: at #000 the hairlines have to
+     be brightened to be seen at all, and bright hairlines are what make an interface look
+     like a terminal emulator rather than a product. */
+  --ag-canvas: #08080a;
+  --ag-raise: #0d0d10;
+  --ag-raise-2: #141418;
+
+  --ag-line: rgb(255 255 255 / 8%);
+  --ag-line-strong: rgb(255 255 255 / 14%);
+
+  --ag-white: #f4f4f6;
+  --ag-text: #b9b9c2;
+  --ag-muted: #83838e;
+  --ag-faint: #55555f;
+
+  /* The chrome. Used for the mark, for rules that want to read as machined, and for the
+     edge of anything that should look milled rather than filled. */
+  --ag-chrome: #c3c7cf;
+
+  --ag-live: #35d07f;
+  --ag-warn: #d9a441;
+  --ag-blue: #3ea6ff;
+
+  --ag-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  --ag-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  /* Mirrors `.shell`'s gutter so the black fills the sheet to its corners. */
+  min-height: calc(100vh - 2 * clamp(0.6rem, 1.6vw, 1.4rem));
+  display: flex;
+  flex-direction: column;
+  background: var(--ag-canvas);
+  color: var(--ag-text);
+  color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (max-width: 720px) {
+  .ag-root {
+    min-height: 100vh;
+  }
+}
+
+.ag-root ::selection {
+  background: rgb(255 255 255 / 16%);
+  color: #fff;
+}
+
+.ag-mono {
+  font-family: var(--ag-mono);
+  font-size: 0.78rem;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- the mark ------------------------------------------------------------- */
+
+.ag-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 0.82rem;
+  letter-spacing: -0.02em;
+  color: var(--ag-white);
+  text-decoration: none;
+}
+
+.ag-mark i {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 1px solid var(--ag-chrome);
+  /* Not filled. An outlined mark at this size reads as an instrument face; a filled one
+     reads as a favicon. */
+  opacity: 0.85;
+  flex: none;
+}
+
+.ag-mark span {
+  color: var(--ag-muted);
+}
+
+/* --- the gate ------------------------------------------------------------- */
+
+/*
+ * One screen, four elements, and a great deal of nothing. The brief for this page was
+ * "extremely sparse", which in practice means resisting the two things a landing page
+ * always grows: a second column and a row of feature tiles.
+ */
+.ag-gate {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 34px clamp(24px, 6vw, 92px) 44px;
+}
+
+.ag-gate-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.ag-gate-back {
+  font-size: 0.78rem;
+  color: var(--ag-faint);
+  text-decoration: none;
+  transition: color 0.18s var(--ag-ease);
+}
+
+.ag-gate-back:hover {
+  color: var(--ag-text);
+}
+
+.ag-gate-mid {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  max-width: 760px;
+  padding: 72px 0;
+}
+
+.ag-gate-word {
+  font-size: clamp(2.6rem, 1.6rem + 4.6vw, 5rem);
+  font-weight: 500;
+  line-height: 0.98;
+  letter-spacing: -0.045em;
+  color: var(--ag-white);
+  margin: 0;
+}
+
+.ag-gate-word em {
+  display: block;
+  font-style: normal;
+  font-weight: 400;
+  color: var(--ag-faint);
+}
+
+.ag-gate-lead {
+  margin: clamp(38px, 6vw, 62px) 0 0;
+  font-size: clamp(1.25rem, 1.05rem + 0.9vw, 1.85rem);
+  font-weight: 400;
+  line-height: 1.25;
+  letter-spacing: -0.032em;
+  color: var(--ag-white);
+  /* The two lines are broken by hand, so this only has to stop a very wide window from
+     setting the whole headline on one line. Anything tighter re-wraps the first line and
+     the deliberate break stops reading as one. */
+  max-width: 26ch;
+}
+
+.ag-gate-sub {
+  margin: 20px 0 0;
+  max-width: 52ch;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--ag-muted);
+}
+
+.ag-gate-acts {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  flex-wrap: wrap;
+  margin-top: 44px;
+}
+
+.ag-gate-note {
+  font-family: var(--ag-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  color: var(--ag-faint);
+}
+
+/* --- actions -------------------------------------------------------------- */
+
+.ag-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 46px;
+  padding: 0 24px;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  color: #08080a;
+  background: var(--ag-white);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: transform 0.2s var(--ag-ease), background 0.2s var(--ag-ease);
+}
+
+.ag-go:hover:not(:disabled) {
+  background: #fff;
+  transform: translateX(2px);
+}
+
+.ag-go:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ag-go svg {
+  width: 15px;
+  height: 15px;
+}
+
+.ag-quiet {
+  display: inline-flex;
+  align-items: center;
+  height: 46px;
+  font: inherit;
+  font-size: 0.9rem;
+  letter-spacing: -0.012em;
+  color: var(--ag-muted);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: none;
+  transition: color 0.18s var(--ag-ease);
+}
+
+.ag-quiet:hover {
+  color: var(--ag-white);
+}
+
+.ag-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 16px;
+  font: inherit;
+  font-size: 0.82rem;
+  letter-spacing: -0.012em;
+  color: var(--ag-white);
+  background: var(--ag-raise-2);
+  border: 1px solid var(--ag-line);
+  border-radius: 10px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: border-color 0.18s var(--ag-ease), background 0.18s var(--ag-ease);
+}
+
+.ag-btn:hover:not(:disabled) {
+  border-color: var(--ag-line-strong);
+  background: #17171c;
+}
+
+.ag-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* --- the entry transition ------------------------------------------------- */
+
+/*
+ * Held for 620ms, which is long enough to register as crossing a threshold and short
+ * enough that nobody waits through it twice. It is a real navigation cover, not a
+ * decoration: the destination is being resolved behind it.
+ */
+.ag-enter {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  background: #050506;
+  /* Quick, because the hold is only 620ms in total: a quarter-second fade spends most of
+     it half-transparent, and a black state you can still read the previous screen through
+     is not a black state. */
+  animation: ag-enter-in 0.12s linear both;
+}
+
+.ag-enter i {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--ag-chrome);
+  opacity: 0.9;
+  animation: ag-enter-mark 1.6s var(--ag-ease) infinite;
+}
+
+.ag-enter p {
+  margin: 0;
+  font-family: var(--ag-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  color: var(--ag-faint);
+}
+
+@keyframes ag-enter-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes ag-enter-mark {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.95;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ag-enter,
+  .ag-enter i {
+    animation: none;
+  }
+}
+
+/* --- the shell ------------------------------------------------------------ */
+
+.ag-shell {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 244px minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.ag-side {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 22px 14px 18px;
+  border-right: 1px solid var(--ag-line);
+  background: var(--ag-canvas);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.ag-side-top {
+  padding: 0 8px;
+}
+
+/* --- the switcher --------------------------------------------------------- */
+
+.ag-switch {
+  position: relative;
+}
+
+.ag-switch-face {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 12px;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.16s var(--ag-ease), border-color 0.16s var(--ag-ease);
+}
+
+.ag-switch-face:hover {
+  background: var(--ag-raise);
+  border-color: var(--ag-line);
+}
+
+.ag-face {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--ag-raise-2);
+  border: 1px solid var(--ag-line);
+  flex: none;
+}
+
+.ag-face img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ag-face b {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--ag-muted);
+}
+
+.ag-switch-id {
+  min-width: 0;
+}
+
+.ag-switch-id strong {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--ag-white);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ag-switch-id em {
+  display: block;
+  font-style: normal;
+  font-family: var(--ag-mono);
+  font-size: 0.68rem;
+  color: var(--ag-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ag-switch-chev {
+  width: 12px;
+  height: 12px;
+  color: var(--ag-faint);
+}
+
+.ag-switch-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  padding: 6px;
+  background: var(--ag-raise);
+  border: 1px solid var(--ag-line-strong);
+  border-radius: 12px;
+}
+
+.ag-switch-item {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 8px;
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  color: var(--ag-text);
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.ag-switch-item:hover {
+  background: var(--ag-raise-2);
+  color: var(--ag-white);
+}
+
+.ag-switch-item .ag-face {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+}
+
+.ag-switch-new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--ag-muted);
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--ag-line);
+  border-radius: 0;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.ag-switch-new:hover {
+  color: var(--ag-white);
+}
+
+/* --- navigation ----------------------------------------------------------- */
+
+.ag-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ag-nav-label {
+  padding: 0 10px;
+  margin: 14px 0 6px;
+  font-family: var(--ag-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ag-faint);
+}
+
+.ag-nav a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  font-size: 0.855rem;
+  letter-spacing: -0.014em;
+  color: var(--ag-muted);
+  text-decoration: none;
+  border-radius: 8px;
+  transition: color 0.14s var(--ag-ease), background 0.14s var(--ag-ease);
+}
+
+.ag-nav a:hover {
+  color: var(--ag-white);
+  background: var(--ag-raise);
+}
+
+.ag-nav a[aria-current="page"] {
+  color: var(--ag-white);
+  background: var(--ag-raise-2);
+}
+
+.ag-nav-soon {
+  font-family: var(--ag-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ag-faint);
+}
+
+.ag-side-foot {
+  margin-top: auto;
+  padding: 14px 10px 0;
+  border-top: 1px solid var(--ag-line);
+}
+
+.ag-side-foot a {
+  font-size: 0.78rem;
+  color: var(--ag-faint);
+  text-decoration: none;
+  transition: color 0.16s var(--ag-ease);
+}
+
+.ag-side-foot a:hover {
+  color: var(--ag-text);
+}
+
+/* --- main ----------------------------------------------------------------- */
+
+.ag-main {
+  min-width: 0;
+  padding: 40px clamp(22px, 4vw, 56px) 96px;
+}
+
+.ag-wide {
+  max-width: 900px;
+}
+
+/* The screens with no sidebar — the gate's siblings and the public profile — centre the
+   same column the shell left-aligns against its navigation. */
+.ag-solo {
+  width: 100%;
+  max-width: 900px;
+  margin-inline: auto;
+  padding: 40px clamp(22px, 4vw, 56px) 96px;
+}
+
+.ag-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.ag-head .ag-face {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+}
+
+.ag-head h1 {
+  margin: 0;
+  font-size: clamp(1.5rem, 1.3rem + 0.9vw, 2rem);
+  font-weight: 500;
+  letter-spacing: -0.038em;
+  color: var(--ag-white);
+}
+
+.ag-head-sub {
+  margin: 0 0 34px;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--ag-muted);
+  max-width: 62ch;
+}
+
+/* --- status --------------------------------------------------------------- */
+
+.ag-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.76rem;
+  letter-spacing: -0.008em;
+  color: var(--ag-muted);
+}
+
+.ag-status i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ag-faint);
+  flex: none;
+}
+
+.ag-status-live i {
+  background: var(--ag-live);
+}
+
+.ag-status-warn i {
+  background: var(--ag-warn);
+}
+
+/* --- sections ------------------------------------------------------------- */
+
+/*
+ * A rule and a label, not a box. The whole point of the brief was that this should not
+ * look like a dashboard, and a dashboard is what you get the moment every group of
+ * numbers acquires a border and a radius.
+ */
+.ag-sec {
+  margin-top: 46px;
+}
+
+.ag-sec-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--ag-line);
+}
+
+.ag-sec-head h2 {
+  margin: 0;
+  font-family: var(--ag-mono);
+  font-size: 0.66rem;
+  font-weight: 400;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ag-faint);
+}
+
+.ag-sec-more {
+  font-size: 0.76rem;
+  color: var(--ag-faint);
+  text-decoration: none;
+}
+
+.ag-sec-more:hover {
+  color: var(--ag-white);
+}
+
+/* --- metrics -------------------------------------------------------------- */
+
+/*
+ * Two rules and some air.
+ *
+ * The first version drew a vertical hairline between every figure by showing a 1px gap of
+ * the container's background through the cells. It looked right at four across and wrong
+ * everywhere else: three figures in a two-column grid left a lit grey rectangle where the
+ * fourth would have been. Rules that only work at one column count are not rules, so the
+ * dividers went and the spacing does the separating.
+ */
+.ag-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 26px 34px;
+  margin-top: 22px;
+  padding: 20px 0 22px;
+  border-top: 1px solid var(--ag-line);
+  border-bottom: 1px solid var(--ag-line);
+}
+
+.ag-metrics-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ag-metric {
+  min-width: 0;
+}
+
+.ag-metric span {
+  display: block;
+  font-family: var(--ag-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ag-faint);
+}
+
+.ag-metric b {
+  display: block;
+  margin-top: 10px;
+  font-size: 1.35rem;
+  font-weight: 400;
+  letter-spacing: -0.03em;
+  color: var(--ag-white);
+  font-variant-numeric: tabular-nums;
+}
+
+.ag-metric b small {
+  font-size: 0.72rem;
+  letter-spacing: 0;
+  color: var(--ag-faint);
+  margin-left: 4px;
+}
+
+.ag-metric em {
+  display: block;
+  margin-top: 5px;
+  font-style: normal;
+  font-size: 0.72rem;
+  color: var(--ag-faint);
+}
+
+/* --- rows ----------------------------------------------------------------- */
+
+.ag-rows {
+  margin-top: 6px;
+}
+
+.ag-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 15px 2px;
+  border-bottom: 1px solid var(--ag-line);
+  text-decoration: none;
+  color: inherit;
+}
+
+a.ag-row:hover {
+  background: var(--ag-raise);
+}
+
+.ag-row-id {
+  min-width: 0;
+  flex: 1;
+}
+
+.ag-row-id strong {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 450;
+  letter-spacing: -0.02em;
+  color: var(--ag-white);
+}
+
+.ag-row-id em {
+  display: block;
+  margin-top: 3px;
+  font-style: normal;
+  font-family: var(--ag-mono);
+  font-size: 0.7rem;
+  color: var(--ag-faint);
+}
+
+.ag-row-when {
+  font-family: var(--ag-mono);
+  font-size: 0.7rem;
+  color: var(--ag-faint);
+  flex: none;
+}
+
+/* --- wallet --------------------------------------------------------------- */
+
+.ag-wallet {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+  padding: 14px 16px;
+  background: var(--ag-raise);
+  border: 1px solid var(--ag-line);
+  border-radius: 12px;
+}
+
+.ag-wallet code {
+  font-family: var(--ag-mono);
+  font-size: 0.76rem;
+  color: var(--ag-text);
+  word-break: break-all;
+}
+
+.ag-wallet-tag {
+  font-family: var(--ag-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ag-faint);
+}
+
+.ag-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  margin-left: auto;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 0.74rem;
+  color: var(--ag-muted);
+  background: var(--ag-raise-2);
+  border: 1px solid var(--ag-line);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.16s var(--ag-ease), border-color 0.16s var(--ag-ease);
+}
+
+.ag-copy:hover {
+  color: var(--ag-white);
+  border-color: var(--ag-line-strong);
+}
+
+.ag-copy svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+/* --- empty states --------------------------------------------------------- */
+
+/*
+ * Deliberately plain. An empty state that tries to look like content is how a product
+ * ends up shipping fake data, and the one rule this phase has is that nothing invented
+ * appears on screen.
+ */
+.ag-empty {
+  padding: 30px 2px;
+}
+
+.ag-empty-lead {
+  margin: 0;
+  font-size: 0.95rem;
+  letter-spacing: -0.02em;
+  color: var(--ag-text);
+}
+
+.ag-empty-body {
+  margin: 9px 0 0;
+  max-width: 48ch;
+  font-size: 0.86rem;
+  line-height: 1.6;
+  color: var(--ag-faint);
+}
+
+.ag-empty-act {
+  margin-top: 20px;
+}
+
+.ag-empty-flat {
+  padding: 22px 2px;
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--ag-faint);
+}
+
+/* --- notices -------------------------------------------------------------- */
+
+.ag-note {
+  margin: 18px 0 0;
+  padding: 13px 15px;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--ag-text);
+  background: var(--ag-raise);
+  border: 1px solid var(--ag-line);
+  border-radius: 10px;
+}
+
+.ag-note-bad {
+  color: #f0b5b5;
+  border-color: rgb(220 120 120 / 26%);
+}
+
+/* --- the directory -------------------------------------------------------- */
+
+/* Borders on the cards, not a lit background behind them — an odd number of agents must
+   not leave a glowing empty slot in the last row. */
+.ag-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 24px;
+  border-top: 1px solid var(--ag-line);
+}
+
+.ag-card {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 14px;
+  padding: 20px;
+  border-bottom: 1px solid var(--ag-line);
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.16s var(--ag-ease);
+}
+
+.ag-card:nth-child(odd) {
+  border-right: 1px solid var(--ag-line);
+}
+
+.ag-card:hover {
+  background: var(--ag-raise);
+}
+
+.ag-card .ag-face {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+}
+
+.ag-card-id strong {
+  display: block;
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+  color: var(--ag-white);
+}
+
+.ag-card-id em {
+  display: block;
+  margin-top: 2px;
+  font-style: normal;
+  font-family: var(--ag-mono);
+  font-size: 0.7rem;
+  color: var(--ag-faint);
+}
+
+.ag-card-id p {
+  margin: 10px 0 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--ag-muted);
+}
+
+/* --- forms ---------------------------------------------------------------- */
+
+.ag-form {
+  max-width: 560px;
+  margin-top: 30px;
+}
+
+.ag-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 22px;
+}
+
+.ag-field > span {
+  font-family: var(--ag-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ag-faint);
+}
+
+.ag-field input,
+.ag-field textarea {
+  width: 100%;
+  font: inherit;
+  font-size: 0.9rem;
+  letter-spacing: -0.012em;
+  color: var(--ag-white);
+  background: var(--ag-raise);
+  border: 1px solid var(--ag-line);
+  border-radius: 10px;
+  outline: none;
+  transition: border-color 0.16s var(--ag-ease), background 0.16s var(--ag-ease);
+}
+
+.ag-field input {
+  height: 44px;
+  padding: 0 14px;
+}
+
+.ag-field textarea {
+  min-height: 82px;
+  padding: 12px 14px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.ag-field input::placeholder,
+.ag-field textarea::placeholder {
+  color: var(--ag-faint);
+}
+
+.ag-field input:focus,
+.ag-field textarea:focus {
+  border-color: var(--ag-line-strong);
+  background: var(--ag-raise-2);
+}
+
+.ag-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 18px;
+}
+
+.ag-trio {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 18px;
+}
+
+.ag-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 0.85rem;
+  color: var(--ag-text);
+  cursor: pointer;
+}
+
+.ag-check input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #fff;
+  cursor: pointer;
+}
+
+.ag-hint {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--ag-faint);
+}
+
+.ag-upload {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 44px;
+  padding: 0 12px 0 5px;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--ag-muted);
+  text-align: left;
+  background: var(--ag-raise);
+  border: 1px solid var(--ag-line);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.16s var(--ag-ease);
+}
+
+.ag-upload:hover {
+  border-color: var(--ag-line-strong);
+}
+
+.ag-upload i {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--ag-raise-2);
+  flex: none;
+}
+
+.ag-upload i img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ag-upload i svg {
+  width: 16px;
+  height: 16px;
+  color: var(--ag-faint);
+}
+
+/* --- mobile --------------------------------------------------------------- */
+
+/*
+ * The sidebar does not become a drawer. A drawer means every navigation is two taps and
+ * a gesture, which is how a phone build of a desktop layout announces itself. Instead the
+ * four things worth reaching on a phone go into a fixed bottom bar, and the rest of the
+ * sidebar — the configuration sections nobody edits one-handed — moves to the top of the
+ * screen as a scrolling strip.
+ */
+.ag-mobile-top,
+.ag-tabs {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .ag-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ag-side {
+    display: none;
+  }
+
+  .ag-mobile-top {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--ag-line);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--ag-canvas);
+  }
+
+  .ag-mobile-top .ag-switch {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .ag-main {
+    padding: 26px 18px 108px;
+  }
+
+  .ag-solo {
+    padding: 26px 18px 64px;
+  }
+
+  .ag-tabs {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
+    background: rgb(8 8 10 / 94%);
+    backdrop-filter: blur(12px);
+    border-top: 1px solid var(--ag-line);
+  }
+
+  .ag-tabs a {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    padding: 7px 0;
+    font-size: 0.66rem;
+    letter-spacing: -0.005em;
+    color: var(--ag-faint);
+    text-decoration: none;
+    border-radius: 8px;
+  }
+
+  .ag-tabs a[aria-current="page"] {
+    color: var(--ag-white);
+  }
+
+  .ag-tabs svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  .ag-metrics,
+  .ag-metrics-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ag-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ag-card:nth-child(odd) {
+    border-right: 0;
+  }
+}
+
+/* ---------------------------------------------------------------- *
+ * Autonomy.
+ *
+ * An objective is the only long piece of prose in the environment that a
+ * person wrote rather than the product, so it is set slightly larger and in
+ * the reading face — it should look like a quotation, not like a field value.
+ * ---------------------------------------------------------------- */
+
+.ag-mandate {
+  margin: 22px 0 30px;
+  padding-left: 16px;
+  border-left: 1px solid var(--ag-line-strong);
+  font-size: 1rem;
+  line-height: 1.62;
+  color: var(--ag-text);
+}
+
+.ag-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.ag-actions-note {
+  font-family: var(--ag-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  color: var(--ag-faint);
+}
+
+.ag-modes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.ag-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 16px;
+  text-align: left;
+  background: var(--ag-raise);
+  border: 1px solid var(--ag-line);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+.ag-mode:hover:not(:disabled) {
+  border-color: var(--ag-line-strong);
+}
+
+.ag-mode strong {
+  font-family: var(--ag-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ag-faint);
+}
+
+.ag-mode span {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--ag-text);
+}
+
+.ag-mode-on {
+  background: var(--ag-raise-2);
+  border-color: var(--ag-white);
+}
+
+.ag-mode-on strong {
+  color: var(--ag-white);
+}
+
+/* A proposal is the one thing on screen waiting on the person reading it, so it
+   gets the only left accent in the environment. */
+.ag-proposals {
+  margin-top: 30px;
+}
+
+.ag-proposals-title {
+  margin: 0 0 12px;
+  font-family: var(--ag-mono);
+  font-size: 0.66rem;
+  font-weight: 400;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ag-white);
+}
+
+.ag-proposal {
+  padding: 18px;
+  margin-bottom: 10px;
+  background: var(--ag-raise);
+  border: 1px solid var(--ag-line-strong);
+  border-radius: 10px;
+}
+
+.ag-proposal .ag-actions {
+  margin-top: 16px;
+}
+
+.ag-decision {
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--ag-line);
+}
+
+.ag-decision-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.ag-decision-head strong {
+  font-size: 0.92rem;
+  color: var(--ag-white);
+}
+
+.ag-decision-tag {
+  font-family: var(--ag-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ag-faint);
+  padding: 2px 7px;
+  border: 1px solid var(--ag-line);
+  border-radius: 999px;
+}
+
+.ag-decision-why {
+  margin: 9px 0 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--ag-dim);
+}
+
+@media (max-width: 720px) {
+  .ag-modes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 620px) {
+  .ag-pair,
+  .ag-trio {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ag-gate-mid {
+    padding: 48px 0;
+  }
+}
+
+/* Two across survives a 390px phone: the longest label, `BUDGET LEFT TODAY`, still fits a
+   half column, and one across turns the Overview into a very long list of small numbers. */
+@media (max-width: 359px) {
+  .ag-metrics,
+  .ag-metrics-3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

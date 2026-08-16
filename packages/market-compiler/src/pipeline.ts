@@ -41,11 +41,12 @@ import { contractApis } from "./contract-api.js";
 import { mechanicalRepair } from "./mechanical-repair.js";
 import { buildContext } from "./context.js";
 import type { DeploymentSpecification } from "./deployment-spec.js";
-import { deploymentInconsistencies } from "./deployment-validation.js";
+import { deploymentInconsistencies, hookPermissionsDeclaredIn } from "./deployment-validation.js";
 import { assembleManifest, marketSaltFor } from "./deployment.js";
 import { preflight } from "./preflight.js";
 import { supportsAtomicDevBuy } from "./devbuy.js";
-import { requiredFeeMode } from "./feemode.js";
+import type { FeeRequirement } from "./feemode.js";
+import { poolFee, requiredFeeMode } from "./feemode.js";
 import type { LaunchManifest } from "./manifest.js";
 import { ManifestError, ZERO_ADDRESS } from "./manifest.js";
 import type { CompileAttempt, TestAttempt } from "./diagnostics.js";
@@ -62,15 +63,17 @@ import type { MarketSpecification } from "./spec.js";
 import type { Decision } from "./spec.js";
 import { assess, changesTheMarket, decideAll, outstanding, rulesAreStale } from "./spec.js";
 import type { Diagnostic, TestDepth, TestOutcome, TestResult } from "./foundry.js";
-import { build as compile, buildWithOutput, test as runTests } from "./foundry.js";
-import type { GateFinding, GateResult } from "./gates.js";
+import { build as compile, buildWithOutput, forModel, test as runTests } from "./foundry.js";
+import type { GateFinding, GateResult, HookPermission } from "./gates.js";
 import {
   analyseGenerated,
   combine,
   elevatedRiskIsCovered,
+  generatedSources,
   invariantCoverage,
   invariantsWereProven,
 } from "./gates.js";
+import { coreTests, CORE_TEST_PATH } from "./core-tests.js";
 import { recogniseAll, remedyBrief } from "./playbook.js";
 import { classify, FailureCategory, tacticFor, Tactic } from "./recovery.js";
 import { Blame } from "./playbook.js";
@@ -208,14 +211,14 @@ export const NATIVE_QUOTE = ZERO_ADDRESS;
  */
 async function withArtefactRetries<O extends StageOutput<unknown>>(
   attempts: number,
-  ask: (problems: readonly string[] | undefined) => Promise<O>,
+  ask: (problems: readonly string[] | undefined, attempt: number) => Promise<O>,
 ): Promise<{ readonly output: O; readonly retries: number }> {
   let problems: readonly string[] | undefined;
   let transient = 0;
 
   for (let attempt = 1; ; attempt++) {
     try {
-      return { output: await ask(problems), retries: attempt - 1 };
+      return { output: await ask(problems, attempt), retries: attempt - 1 };
     } catch (error) {
       // A rejected artefact is worth another turn with the validator's complaints.
       if (error instanceof ArtefactError && attempt < attempts) {
@@ -836,19 +839,40 @@ export async function runBuild(
               (entry) => entry.componentId === component.id,
             )!;
 
-            const { output, retries } = await withArtefactRetries(budget.artefactRetries, () =>
-              generateComponent(provider, {
-                component,
-                deployed: declared,
-                deployment,
-                specification,
-                plan,
-                context,
-                // The generated siblings are being written in this same round and have no
-                // interface yet. Agen's own contracts do, they are fixed, and they are what
-                // a hook calls on every swap.
-                apis: contractApis({ sources: preludeSources() }),
-              }),
+            /*
+             * The last attempt at a contract goes to the other vendor, where there is one.
+             *
+             * POT asked for a jackpot that pays every twenty-fifth buyer, and its hook came
+             * back empty — no content at all — twice in a row. Nothing was wrong with the
+             * market, the plan or the schema, and there was nothing for a complaint to
+             * correct: a second identical ask of the same model produced the same empty
+             * answer, and the build ended there with no Solidity ever written.
+             *
+             * This is the same reasoning the repair ladder already runs on, one stage
+             * earlier: a model that has now answered the same way twice is not going to
+             * answer differently a third time, and a different family is worth more than
+             * another round of the same prompt.
+             */
+            const writeWith = (attempt: number): ModelProvider =>
+              attempt < budget.artefactRetries || escalationProvider === null
+                ? provider
+                : escalationProvider;
+
+            const { output, retries } = await withArtefactRetries(
+              budget.artefactRetries,
+              (_problems, attempt) =>
+                generateComponent(writeWith(attempt), {
+                  component,
+                  deployed: declared,
+                  deployment,
+                  specification,
+                  plan,
+                  context,
+                  // The generated siblings are being written in this same round and have no
+                  // interface yet. Agen's own contracts do, they are fixed, and they are what
+                  // a hook calls on every swap.
+                  apis: contractApis({ sources: preludeSources() }),
+                }),
             );
             return { source: output.value, output, component: component.contractName, retries };
           }),
@@ -907,6 +931,27 @@ export async function runBuild(
       artifacts: readonly ContractArtifact[] = [],
     ): ReadonlyMap<string, ContractApi> =>
       contractApis({ artifacts, sources: [...sources, ...preludeSources()] });
+
+    /**
+     * The fee this market's pool opens with, asked in one place.
+     *
+     * The hook's requirement and the declared deployment are reconciled here rather than at
+     * each of the four sites that need an answer — the fixture, the preflight, the manifest
+     * and the launch. Two of them reading the hook and reconciling differently is how a
+     * market gets tested at one fee and launched at another.
+     */
+    const poolFeeFor = async (
+      buildOutput: Awaited<ReturnType<typeof buildWithOutput>>["output"],
+      hookContractName: string,
+    ): Promise<FeeRequirement> =>
+      poolFee({
+        required: await requiredFeeMode({
+          root: workspace!.root,
+          buildOutput,
+          hookContractName,
+        }),
+        declaredLpFee: deployment.pool.lpFee,
+      });
 
     /**
      * One round of repair, from the cheapest thing that could work upward.
@@ -1340,6 +1385,7 @@ export async function runBuild(
        * written again against the declaration it was always supposed to satisfy.
        */
       let architectureAttempt = 0;
+      let previousDisagreement: string | null = null;
 
       for (;;) {
         const builtForValidation = await forcedBuild();
@@ -1352,11 +1398,78 @@ export async function runBuild(
           });
         }
 
-        const fee = await requiredFeeMode({
-          root: workspace.root,
-          buildOutput: builtForValidation.output,
-          hookContractName: hookContract,
-        });
+        const fee = await poolFeeFor(builtForValidation.output, hookContract);
+
+        /*
+         * The fee the hook insists on, adopted for the same reason the permissions are.
+         *
+         * `deployment.pool` is written at design time too, and a hook guarding `key.fee` has
+         * settled the question in code: `AgenFactory` opens the pool through the hook, and a
+         * pool opened at any other fee reverts inside `initialize` with the hook's own error,
+         * after every contract has been deployed and paid for. There is nothing to negotiate.
+         *
+         * Refusing the disagreement instead sends a correct hook to be written again over a
+         * stale prediction — the same mistake the permissions made, in the field next to them.
+         *
+         * This adopts how the pool is *opened*, not what the market *charges*. If a hook demands
+         * an LP fee the market's rules never mentioned, the core suite measures it on a real
+         * trade in the fixture and fails, which is where a claim about economics belongs.
+         */
+        if (fee.stated && fee.problem === null && fee.lpFee !== deployment.pool.lpFee) {
+          deployment = {
+            ...deployment,
+            pool: { ...deployment.pool, feeMode: fee.mode, lpFee: fee.lpFee },
+          };
+        }
+
+        /*
+         * The hook's own declaration, adopted before it is compared to.
+         *
+         * `deployment.hookPermissions` is a prediction: the architecture stage writes it before
+         * a line of Solidity exists, naming the callbacks it expects the hook to need. The
+         * compiled `getHookPermissions` is the fact, and it is the one `AgenFactory` checks the
+         * deployed bytecode against — so where they differ it is the prediction that is wrong,
+         * and the address must be mined from the code.
+         *
+         * This already happened at `test_environment`, one stage too late to matter. HRBR, POT
+         * and DEGEN were each lost here in a single run: every one of their hooks correctly
+         * declared `beforeSwapReturnDelta` for a fee it charges in `_beforeSwap`, the design
+         * had predicted a market that charges only in `_afterSwap`, and validation refused the
+         * disagreement rather than resolving it. Three markets, all correct, all failing on
+         * Agen's own stale note about what they were going to be.
+         *
+         * Adopting a declaration is not adopting behaviour. What the hook *does* is checked
+         * against the specification by semantic validation, which runs on the code either way;
+         * this only decides which address the code is deployed at.
+         *
+         * Only in this direction, though. A hook declaring *more* than was predicted has found
+         * it needs a callback, and the prediction is simply behind. A hook declaring *fewer*
+         * is a different claim — that a callback the market was designed around is not there —
+         * and adopting that would quietly deploy a market missing a mechanic. That case keeps
+         * the refusal and the component is written again; see the FLOWTEST regression.
+         */
+        const declared = hookPermissionsDeclaredIn(
+          await generatedSources({ root: workspace.root, buildOutput: builtForValidation.output }),
+          hookContract,
+        );
+
+        if (declared !== null && declared.size > 0) {
+          const permissions = [...declared].sort() as readonly HookPermission[];
+          const predicted = [...deployment.hookPermissions].sort();
+          const onlyAdds = predicted.every((permission) => declared.has(permission));
+
+          if (onlyAdds && permissions.join(",") !== predicted.join(",")) {
+            deployment = { ...deployment, hookPermissions: permissions };
+            plan = {
+              ...plan,
+              components: plan.components.map((component) =>
+                component.role === "hook"
+                  ? { ...component, hookPermissions: permissions }
+                  : component,
+              ),
+            };
+          }
+        }
 
         const disagreements = await deploymentInconsistencies({
           root: workspace.root,
@@ -1396,11 +1509,24 @@ export async function runBuild(
 
         architectureAttempt += 1;
 
+        /**
+         * The rung where a different vendor is worth more than another go at the same one.
+         *
+         * A rewrite that comes back with the disagreement stated in exactly the same words
+         * did not misunderstand the instruction — it disagreed with it, or could not see
+         * what to change, and asking again produces the third identical answer. A live
+         * FLOWTEST replay spent both of its rounds that way on one fee-mode complaint.
+         */
+        const signature = disagreements.map((entry) => entry.detail).join(" ");
+        const stalled = previousDisagreement === signature;
+        const rewriteWith = stalled && escalationProvider !== null ? escalationProvider : provider;
+        previousDisagreement = signature;
+
         diagnostics = withRepair(diagnostics, {
           attempt: architectureAttempt,
           at: now(),
           kind: "compilation",
-          diagnosis: disagreements.map((entry) => entry.detail).join(" "),
+          diagnosis: `[${rewriteWith.name}] ${signature}`,
           files: rewritable.map((component) => `${LAYOUT.contracts}/${component.contractName}.sol`),
           gaveUp: false,
           category: FailureCategory.ArchitectureConsistency,
@@ -1425,7 +1551,7 @@ export async function runBuild(
               )!;
 
               const { output } = await withArtefactRetries(budget.artefactRetries, () =>
-                rewriteComponent(provider, {
+                rewriteComponent(rewriteWith, {
                   component,
                   deployed: declared,
                   deployment,
@@ -1478,11 +1604,7 @@ export async function runBuild(
       // second rather than a behaviour suite and three repair rounds.
       const artefacts = await marketArtifacts();
       const built = await forcedBuild();
-      const fee = await requiredFeeMode({
-        root: workspace.root,
-        buildOutput: built.output,
-        hookContractName: hookContract,
-      });
+      const fee = await poolFeeFor(built.output, hookContract);
       const proved = preflight({
         plan,
         deployment,
@@ -1540,12 +1662,47 @@ export async function runBuild(
         throw new ManifestError("the canonical test environment has no hook to deploy");
       }
 
-      const fee = await requiredFeeMode({
-        root: workspace!.root,
-        buildOutput: builtForTests.output,
-        hookContractName: hookContract,
-      });
+      const fee = await poolFeeFor(builtForTests.output, hookContract);
       if (fee.problem !== null) throw new ManifestError(fee.problem);
+
+      /*
+       * Mine the hook's address for the callbacks the hook now declares.
+       *
+       * Read again here rather than trusted from the design stage, because this runs after
+       * every change to the contracts and a repair can change the answer. SIMPLE — the
+       * simplest prompt in the benchmark — was lost exactly there: its hook took the sell fee
+       * through a before-swap delta without declaring `beforeSwapReturnDelta`, a repair added
+       * the declaration, and the address went on being mined for the old set. Uniswap
+       * discards a delta from an address that is not mined for it, so the fee left the pool
+       * unaccounted and every trade in the market reverted `CurrencyNotSettled` — including
+       * Agen's own core tests, which is how a market that was one flag from working spent
+       * three repair rounds and failed.
+       *
+       * The compiled declaration is the authority and not an inference: `AgenFactory` checks
+       * the deployed bytecode against the address before it opens the pool, so an address
+       * mined for anything else is a launch that reverts on chain. Deployment validation still
+       * compares the two and still fails a build where they disagree; this keeps them from
+       * disagreeing because a repair moved one of them.
+       */
+      const declaredNow = hookPermissionsDeclaredIn(
+        await generatedSources({ root: workspace!.root, buildOutput: builtForTests.output }),
+        hookContract,
+      );
+
+      if (declaredNow !== null && declaredNow.size > 0) {
+        const permissions = [...declaredNow] as readonly HookPermission[];
+        const before = [...deployment.hookPermissions].sort().join(",");
+
+        if ([...permissions].sort().join(",") !== before) {
+          deployment = { ...deployment, hookPermissions: permissions };
+          plan = {
+            ...plan,
+            components: plan.components.map((component) =>
+              component.role === "hook" ? { ...component, hookPermissions: permissions } : component,
+            ),
+          };
+        }
+      }
 
       return canonicalTestEnvironment({
         plan,
@@ -1764,27 +1921,81 @@ export async function runBuild(
 
     // --- behavior tests --------------------------------------------------
 
+    /*
+     * Agen's own assertions, beside the model's.
+     *
+     * Written from the locked specification rather than asked for, and separated from
+     * `tests` everywhere below: these are the ones allowed to fail a build. See
+     * `core-tests.ts` — of thirty-five launches lost in the testing stages, fourteen were
+     * lost to a broken generated test rather than a broken market, and telling the two
+     * apart is only possible if one of them was not written by a model.
+     *
+     * Written before generation rather than after it so the generator can see it. An
+     * invariant this suite already proves does not need a second test to be written for it,
+     * and demanding one cost EMBR — the plainest prompt in the benchmark — its launch.
+     */
+    let core = coreTests(specification, {
+      // A hook that overrides the pool's fee is charging through Uniswap, which pays it to
+      // the liquidity providers: there is no account of this market's for it to land in, and
+      // an assertion that there is fails a market that is right. See `coreTests`.
+      collectsItsOwnFee: deployment.pool.feeMode !== "dynamic",
+    });
+
     job = await save(beginStage(job, Stage.TestGeneration, now()));
 
     const generationEnvironment = testEnvironment;
-    let tests;
+    let tests: readonly GeneratedSource[];
+    /** Model-authored files left out of the build, with the evidence for leaving each out. */
+    let quarantined: readonly { readonly path: string; readonly why: string }[] = [];
+    /** The last rejected suite, so a retry corrects an answer instead of writing a new one. */
+    let rejectedSuite: readonly GeneratedSource[] = [];
+
     try {
-      const { output, retries } = await withArtefactRetries(budget.artefactRetries, (problems) =>
-        generateTests(provider, {
-          specification,
-          sources,
-          context,
-          testEnvironment: generationEnvironment,
-          ...(problems === undefined ? {} : { validationProblems: problems }),
-        }),
+      const { output, retries } = await withArtefactRetries(
+        budget.artefactRetries,
+        async (problems) => {
+          try {
+            return await generateTests(provider, {
+              specification,
+              sources,
+              context,
+              testEnvironment: generationEnvironment,
+              core: [core.source],
+              previous: rejectedSuite,
+              ...(problems === undefined ? {} : { validationProblems: problems }),
+            });
+          } catch (error) {
+            if (error instanceof ArtefactError && error.files !== undefined) {
+              rejectedSuite = error.files;
+            }
+            throw error;
+          }
+        },
       );
-      tests = output.value;
+      tests = output.value.files;
+      core = { ...core, source: output.value.core[0] ?? core.source };
+      quarantined = output.value.discarded;
       job = remember(job, Stage.TestGeneration, output, null, undefined, retries);
     } catch (error) {
       return await fail(failureFor(error, Stage.TestGeneration));
     }
 
-    job = await save(endStage({ ...job, tests }, { status: "succeeded", now: now() }));
+    job = await save(
+      endStage(
+        { ...job, tests },
+        {
+          status: "succeeded",
+          ...(quarantined.length === 0
+            ? {}
+            : {
+                detail: `Left out ${quarantined
+                  .map((entry) => `${entry.path} — ${entry.why}`)
+                  .join("; ")}.`,
+              }),
+          now: now(),
+        },
+      ),
+    );
 
     // Before spending a compile on it: does the suite call anything that is not there?
     //
@@ -1828,10 +2039,7 @@ export async function runBuild(
         if (!output.value.giveUp) {
           const candidate = mergeSources(
             tests,
-            output.value.files.filter(
-              (file) =>
-                file.path.startsWith(`${LAYOUT.tests}/`) && file.path !== CANONICAL_TEST_BASE,
-            ),
+            output.value.files.filter((file) => isModelTest(file.path)),
           );
           if (manualTestInfrastructureProblems(candidate).length === 0) tests = candidate;
           job = remember(job, Stage.TestRepair, output);
@@ -1848,14 +2056,33 @@ export async function runBuild(
     }
 
     job = await save(beginStage(job, Stage.TestExecution, now()));
-    await workspace.write([testEnvironment.source, testEnvironment.smoke, ...tests]);
+    await workspace.write([testEnvironment.source, testEnvironment.smoke, core.source, ...tests]);
 
     // Critical only. Fuzzing and invariants are worth more per bug found and cost
     // minutes rather than seconds, so they run after the creator has their market
     // rather than before — see the deep validation stage below.
     let tested = await runSuite({ depth: "critical" });
     let testAttempt = 0;
+    /**
+     * Rounds spent getting the suite to compile, budgeted apart from the rounds spent on what
+     * the market does.
+     *
+     * A suite that does not compile has not tested anything, so a round spent on it has said
+     * nothing about the market — and charging it to the same budget means a reserved keyword
+     * costs a market the same as a real defect. TESTC was lost exactly that way: of four rounds,
+     * one went to a local variable named `after`, one to a helper called with two arguments
+     * instead of three, and the third finally reached the real problem — a hook accruing a fee
+     * it never credited — diagnosed it correctly, and ran out of rounds mistyping the fix.
+     *
+     * Bounded on its own, so a suite that genuinely cannot be compiled still stops the build,
+     * and the stall check still ends a round that keeps producing the identical error.
+     */
+    let compileRounds = 0;
+    /** Rounds of either kind, for the repair ladder and the record. Monotonic. */
+    let round = 0;
     let testSignature: string | null = null;
+    /** Whether the suite has already been thrown away and written again from scratch. */
+    let regenerated = false;
     /**
      * How many rounds in a row have produced the identical failure.
      *
@@ -1891,7 +2118,210 @@ export async function runBuild(
       ...tests,
     ]);
 
-    while (!tested.ok && testAttempt < budget.testRepairs) {
+    // Bound once so the salvage helpers below can reach it: the pipeline's own handle is
+    // reassigned across stages, which is enough to lose the non-null narrowing in a closure.
+    const project: JobWorkspace = workspace;
+
+    /**
+     * The model-authored files a failure is positive evidence against, or null.
+     *
+     * Null is the answer whenever the market is implicated, and absence of evidence counts
+     * as implication: a plain assertion failure in a generated test is exactly how a broken
+     * mechanic announces itself, so it keeps failing the build. What qualifies is evidence
+     * about the test itself — a file that does not compile, or a failure the playbook has
+     * met before and attributes to the test or to its misuse of the harness.
+     *
+     * Agen's own files never qualify. A core assertion that fails is the market's problem,
+     * and a fixture that fails is Agen's; neither is answered by deleting a test.
+     */
+    const testsAtFault = (result: TestResult): readonly { path: string; why: string }[] | null => {
+      if (result.buildFailure !== null) {
+        const errors = result.buildFailure.filter((diagnostic) => diagnostic.severity === "error");
+        const paths = [
+          ...new Set(errors.map((diagnostic) => testPathOf(diagnostic.file ?? ""))),
+        ];
+        if (paths.length === 0 || !paths.every((path) => path !== null && isModelTest(path))) {
+          return null;
+        }
+
+        return (paths as readonly string[]).map((path) => ({
+          path,
+          why: "the file does not compile, and repair rounds did not change that",
+        }));
+      }
+
+      const failing = result.outcomes.filter((outcome) => !outcome.passed);
+      if (failing.length === 0 || failing.some(isCoreOutcome)) return null;
+
+      const paths = [...new Set(failing.map((outcome) => outcome.suite.split(":")[0] ?? ""))];
+      if (!paths.every((path) => isModelTest(path))) return null;
+
+      const blamed = classify({
+        stage: Stage.TestExecution,
+        diagnostics: [],
+        failingTests: failing,
+      });
+
+      // A recognised failure, not merely an unrecognised one. The classifier's default for
+      // a plain assertion failure is to blame the test, which is a sensible default for
+      // deciding what to show a repair and useless as grounds for deleting evidence: a
+      // broken mechanic announces itself as exactly that. Only a failure the playbook has
+      // met before and attributes to the test qualifies.
+      if (blamed.playbook === null) return null;
+      if (blamed.blame !== Blame.Test && blamed.blame !== Blame.HarnessMisuse) return null;
+
+      return paths.map((path) => ({
+        path,
+        why: `its failures are ${blamed.playbook ?? "a mistake in the test"}, which is about the test rather than the market`,
+      }));
+    };
+
+    /** Whether a reduced suite still proves every invariant the specification declares. */
+    const stillProves = (remaining: readonly GeneratedSource[]): boolean => {
+      const coverage = invariantCoverage({
+        invariantIds: specification.invariants.map((invariant) => invariant.id),
+        sources: [core.source, ...remaining],
+      });
+
+      return [...coverage.values()].every((names) => names.length > 0);
+    };
+
+    /**
+     * Drop unreliable generated tests, or write the suite again, rather than lose the market.
+     *
+     * The ordering is by cost and by honesty. Quarantine is free and is only reached with
+     * evidence, but it leaves the market with less proof, so it is refused if it would leave
+     * one of the specification's own invariants unproven. Regeneration costs a model call and
+     * restores that proof, and is allowed once: a suite that cannot be repaired is often one
+     * that was wrong from its first line, and three rounds of patching a broken file is the
+     * expensive way to discover that.
+     */
+    /**
+     * Take the named files out of the build, if what remains still proves the market.
+     *
+     * The coverage condition is the whole guard. Dropping a test is only defensible while
+     * every invariant the specification declares still has something standing behind it;
+     * otherwise this would be a way for a suite to pass by deleting itself.
+     */
+    const removeFaulty = async (
+      fault: readonly { readonly path: string; readonly why: string }[],
+    ): Promise<boolean> => {
+      const survivors = tests.filter((file) => !fault.some((entry) => entry.path === file.path));
+      if (survivors.length === tests.length || !stillProves(survivors)) return false;
+
+      await project.remove(fault.map((entry) => entry.path));
+      tests = survivors;
+      quarantined = [...quarantined, ...fault];
+      return true;
+    };
+
+    const salvageSuite = async (): Promise<boolean> => {
+      const fault = testsAtFault(tested);
+      // No evidence, no salvage. A market whose behaviour assertions fail and cannot be
+      // repaired is a market under suspicion, and neither deleting the assertion nor asking
+      // for a different one is an answer to that.
+      if (fault === null) return false;
+
+      if (await removeFaulty(fault)) {
+        job = await save(
+          endStage(
+            { ...job, tests },
+            {
+              status: "succeeded",
+              detail: `Dropped ${fault.map((entry) => `${entry.path} — ${entry.why}`).join("; ")}.`,
+              now: now(),
+            },
+          ),
+        );
+
+        job = await save(beginStage(job, Stage.TestExecution, now()));
+        tested = await runSuite({ depth: "critical" });
+        diagnostics = withTestAttempt(diagnostics, testAttemptFrom(tested, round, now()));
+        await flushDiagnostics();
+
+        return tested.ok;
+      }
+
+      if (regenerated) return false;
+      regenerated = true;
+
+      job = await save(
+        endStage(job, {
+          status: "succeeded",
+          detail: "The generated suite could not be repaired; writing it again from the market.",
+          now: now(),
+        }),
+      );
+      job = await save(beginStage(job, Stage.TestGeneration, now()));
+      try {
+        const { output } = await withArtefactRetries(budget.artefactRetries, (problems) =>
+          generateTests(provider, {
+            specification,
+            sources,
+            context,
+            testEnvironment: generationEnvironment,
+            core: [core.source],
+            validationProblems: [
+              ...(problems ?? []),
+              "The previous suite for this market was discarded. It " +
+                (tested.buildFailure === null
+                  ? `failed and could not be repaired: ${tested.outcomes
+                      .filter((outcome) => !outcome.passed)
+                      .map((outcome) => `${outcome.name}: ${outcome.reason ?? "no reason given"}`)
+                      .join("; ")}`
+                  : `never compiled: ${forModel(tested.buildFailure)}`) +
+                ". Write the suite again from the market itself rather than repairing that one.",
+            ],
+          }),
+        );
+        tests = output.value.files;
+        core = { ...core, source: output.value.core[0] ?? core.source };
+        job = remember(job, Stage.TestGeneration, output);
+      } catch {
+        // The build is already failing; a provider that cannot answer this call has not
+        // made anything worse, and the caller reports the original failure.
+        return false;
+      }
+
+      job = await save(endStage({ ...job, tests }, { status: "succeeded", now: now() }));
+      job = await save(beginStage(job, Stage.TestExecution, now()));
+      // The core file too: a claim the new suite made against one of Agen's own tests is an
+      // annotation in that file, and the gate reads coverage off the disk.
+      await project.write([core.source, ...tests]);
+      tested = await runSuite({ depth: "critical" });
+      diagnostics = withTestAttempt(diagnostics, testAttemptFrom(tested, round, now()));
+      await flushDiagnostics();
+
+      return tested.ok;
+    };
+
+    /**
+     * What did not compile, named by the file the compiler pointed at.
+     *
+     * "The generated test suite could not be made to compile" was reported for whatever the
+     * last error happened to be, and TESTC's last error was in its hook — a contract a test
+     * repair had been allowed to edit and mistyped. A creator reading that was told the tests
+     * were at fault about a file that is not a test, and so was everyone reading the benchmark.
+     */
+    const whatDidNotCompile = (): string => {
+      const broken = [
+        ...new Set(
+          (tested.buildFailure ?? [])
+            .map((entry) => entry.file ?? "")
+            .filter((file) => file.startsWith(`${LAYOUT.contracts}/`)),
+        ),
+      ];
+
+      return broken.length === 0
+        ? "The generated test suite could not be made to compile"
+        : `${broken.join(", ")} stopped compiling after a repair edited it`;
+    };
+
+    while (
+      !tested.ok &&
+      testAttempt < budget.testRepairs &&
+      compileRounds < budget.testRepairs
+    ) {
       // A suite that will not compile is a different question from a suite that fails,
       // and the model is told which one it is looking at.
       const failures = tested.outcomes
@@ -1930,11 +2360,35 @@ export async function runBuild(
         });
       }
 
+      /*
+       * A core assertion cannot be repaired by editing the assertion.
+       *
+       * The playbook may well recognise the revert and blame the test — most reverts in a
+       * test come from a test — but these assertions are Agen's own and follow from the
+       * locked specification, so the only thing left to change is the market. Saying so
+       * here is what keeps a wrong fee from being repaired into a weaker check.
+       */
+      /*
+       * A compiler error in a contract is the exception to that read-only rule.
+       *
+       * Contracts are normally frozen once the suite stops compiling, because a suite that
+       * does not compile is the suite's problem. But the previous round may have been allowed
+       * to edit a contract and mistyped it, and then the compiler is pointing at a file the
+       * next round is forbidden to touch — which it cannot fix, and spends its remaining
+       * rounds proving. The compiler named the file; that is evidence, not a heuristic.
+       */
+      const brokenContract = (tested.buildFailure ?? []).some((entry) =>
+        (entry.file ?? "").startsWith(`${LAYOUT.contracts}/`),
+      );
+
       const editableContracts =
-        tested.buildFailure === null &&
-        (failure.blame === Blame.Contract || failure.playbook === null);
+        brokenContract ||
+        (tested.buildFailure === null &&
+          (failure.blame === Blame.Contract ||
+            failure.playbook === null ||
+            failures.some(isCoreOutcome)));
       const tactic = tacticFor({
-        attempt: testAttempt,
+        attempt: round,
         previousSignature: testSignature,
         signature: failure.signature,
       });
@@ -1947,13 +2401,18 @@ export async function runBuild(
       // than spending another model call to arrive here. Checked before the attempt is
       // counted or the stage opened, so the record shows the rounds that happened.
       if (stalled >= 2) {
+        // The rounds are spent, but the market may be fine and only its generated tests
+        // broken. Salvage decides that on evidence and returns false when there is none.
+        if (await salvageSuite()) break;
+        if (tested.ok) break;
+
         return await fail({
           code: FailureCode.TestsUnrepairable,
           stage: Stage.TestRepair,
           detail:
             tested.outcomes.length === 0
-              ? "The generated test suite could not be made to compile, and two repair " +
-                "attempts left it failing in exactly the same way."
+              ? `${whatDidNotCompile()}, and two repair attempts left it failing in exactly ` +
+                "the same way."
               : `The same ${String(failures.length)} test${failures.length === 1 ? "" : "s"} ` +
                 `failed unchanged across two repair attempts.`,
           failingTests: failures,
@@ -1961,9 +2420,14 @@ export async function runBuild(
         });
       }
 
-      testAttempt += 1;
+      // Which budget this round is charged to. A suite that will not compile has not run,
+      // so it cannot have said anything about the market; see `compileRounds`.
+      if (tested.buildFailure === null) testAttempt += 1;
+      else compileRounds += 1;
+      round += 1;
+
       job = await save(
-        beginStage({ ...job, testAttempts: testAttempt }, Stage.TestRepair, now()),
+        beginStage({ ...job, testAttempts: round }, Stage.TestRepair, now()),
       );
 
       let repair: Repair;
@@ -1975,7 +2439,7 @@ export async function runBuild(
                 // in a generated behavior suite; contract files are read-only evidence.
                 sources: tests,
                 diagnostics: tested.buildFailure,
-                attempt: testAttempt,
+                attempt: round,
                 remedy: remedyBrief(recogniseAll(tested.buildFailure)),
                 tactic,
               })
@@ -1984,11 +2448,12 @@ export async function runBuild(
                 sources,
                 tests,
                 failures,
-                attempt: testAttempt,
+                attempt: round,
                 remedy: remedyBrief(recogniseAll([], failures)),
                 tactic,
                 editableContracts,
                 placement: testEnvironment.placement,
+                core: [core.source],
               });
         repair = output.value;
         job = remember(job, Stage.TestRepair, output);
@@ -1997,7 +2462,7 @@ export async function runBuild(
       }
 
       diagnostics = withRepair(diagnostics, {
-        attempt: testAttempt,
+        attempt: round,
         at: now(),
         kind: "test",
         diagnosis: repair.diagnosis,
@@ -2012,6 +2477,12 @@ export async function runBuild(
       await flushDiagnostics();
 
       if (repair.giveUp) {
+        // A model refusing to repair a test is often right and is not, by itself, a verdict
+        // on the market: the SIMPLE build that provoked this said so explicitly, that the
+        // only honest repair would have been to change the deployment.
+        if (await salvageSuite()) break;
+        if (tested.ok) break;
+
         return await fail({
           code: FailureCode.TestsUnrepairable,
           stage: Stage.TestRepair,
@@ -2024,9 +2495,7 @@ export async function runBuild(
       const contractRepairs = editableContracts
         ? repair.files.filter((file) => file.path.startsWith(`${LAYOUT.contracts}/`))
         : [];
-      const testRepairs = repair.files.filter(
-        (file) => file.path.startsWith(`${LAYOUT.tests}/`) && file.path !== CANONICAL_TEST_BASE,
-      );
+      const testRepairs = repair.files.filter((file) => isModelTest(file.path));
       const nextTests = mergeSources(tests, testRepairs);
       const manualInfrastructure = manualTestInfrastructureProblems(nextTests);
       if (manualInfrastructure.length > 0) {
@@ -2053,14 +2522,41 @@ export async function runBuild(
             ...tests,
           ]);
         } catch (error) {
-          return await fail({
-            code: FailureCode.HarnessInfrastructure,
-            stage: Stage.TestRepair,
-            detail:
-              error instanceof Error
-                ? `A behavior repair made the canonical deployment unreadable. ${error.message}`
-                : "A behavior repair made the canonical deployment unreadable.",
-          });
+          /*
+           * A repair that does not compile is a compile error, not the end of the market.
+           *
+           * This used to end the build outright, under a code that reads as Agen's own
+           * infrastructure failing — and the last thing that happened was a model editing the
+           * contract at Agen's request. A six-word prompt was lost that way after seven and a
+           * half minutes of correct work: the repair fixed the failing test by narrowing an
+           * argument, mistyped the contract while doing it, and the market died holding a
+           * one-line error that the next round would have been shown.
+           *
+           * So the round ends here instead. The fixture cannot be rebuilt against a market
+           * that does not compile, and it does not need to be: running the suite against the
+           * workspace as it stands reports the compiler's own diagnostics, which is what the
+           * next repair is given and what it is good at. The rounds remain bounded, and a
+           * repair that keeps failing to compile still stops the build — with the diagnostics
+           * that say why, rather than a sentence about a deployment nobody can read.
+           */
+          job = await save(
+            endStage(
+              { ...job, sources, tests },
+              {
+                status: "succeeded",
+                detail:
+                  `${repair.diagnosis} — the repaired contracts did not compile` +
+                  (error instanceof Error ? `: ${error.message}` : ""),
+                now: now(),
+              },
+            ),
+          );
+
+          job = await save(beginStage(job, Stage.TestExecution, now()));
+          tested = await runSuite({ depth: "critical" });
+          diagnostics = withTestAttempt(diagnostics, testAttemptFrom(tested, round, now()));
+          await flushDiagnostics();
+          continue;
         }
       }
 
@@ -2074,9 +2570,11 @@ export async function runBuild(
       job = await save(beginStage(job, Stage.TestExecution, now()));
       tested = await runSuite({ depth: "critical" });
 
-      diagnostics = withTestAttempt(diagnostics, testAttemptFrom(tested, testAttempt, now()));
+      diagnostics = withTestAttempt(diagnostics, testAttemptFrom(tested, round, now()));
       await flushDiagnostics();
     }
+
+    if (!tested.ok) await salvageSuite();
 
     if (!tested.ok) {
       const remaining = tested.outcomes.filter((outcome) => !outcome.passed);
@@ -2102,7 +2600,7 @@ export async function runBuild(
         stage: Stage.TestExecution,
         detail:
           tested.outcomes.length === 0
-            ? "The generated test suite could not be made to compile."
+            ? `${whatDidNotCompile()}.`
             : `${String(tested.failed)} test${tested.failed === 1 ? "" : "s"} still failed after ` +
               `${String(budget.testRepairs)} repair attempts.`,
         failingTests: remaining,
@@ -2111,7 +2609,25 @@ export async function runBuild(
     }
 
     job = await save(
-      endStage({ ...job, testOutcomes: tested.outcomes }, { status: "succeeded", now: now() }),
+      endStage(
+        { ...job, testOutcomes: tested.outcomes },
+        {
+          status: "succeeded",
+          detail: [
+            `Agen's own suite proves: ${core.proves.join("; ")}.`,
+            ...(quarantined.length === 0
+              ? []
+              : [
+                  `${String(quarantined.length)} generated test file${
+                    quarantined.length === 1 ? "" : "s"
+                  } dropped as unreliable: ${quarantined
+                    .map((entry) => `${entry.path} — ${entry.why}`)
+                    .join("; ")}.`,
+                ]),
+          ].join(" "),
+          now: now(),
+        },
+      ),
     );
 
     // --- reviewable -------------------------------------------------------
@@ -2137,7 +2653,44 @@ export async function runBuild(
 
     job = await save(beginStage(job, Stage.DeepValidation, now()));
 
-    const deep = await runSuite({ depth: "deep" });
+    let deep = await runSuite({ depth: "deep" });
+
+    /*
+     * A test at fault under search is still a test at fault.
+     *
+     * This stage used to read every failure as a verdict on the market — "the market behaves
+     * correctly in the ordinary case and breaks under one Agen searched for" — with none of the
+     * evidence the execution stage weighs before saying anything so final. HRBR was refused
+     * that way: "1% on sells, buys free", implemented correctly, its one failing test fuzzing
+     * an unbounded uint128 into a sale of 1.9e36 tokens the market does not contain. Agen's own
+     * fuzz test over the same market passed 256 runs of it.
+     *
+     * So the same policy applies here as there, with the same evidence and the same guard: a
+     * recognised test fault, in a model-authored file, and every invariant still proven without
+     * it. Once — this is a search, and a market that keeps failing it is telling you something.
+     */
+    if (!deep.ok) {
+      const fault = testsAtFault(deep);
+      if (fault !== null && (await removeFaulty(fault))) {
+        job = await save(
+          endStage(
+            { ...job, tests },
+            {
+              status: "succeeded",
+              detail: `Dropped ${fault
+                .map((entry) => `${entry.path} — ${entry.why}`)
+                .join("; ")}, then searched again.`,
+              now: now(),
+            },
+          ),
+        );
+
+        job = await save(beginStage(job, Stage.DeepValidation, now()));
+        deep = await runSuite({ depth: "deep" });
+        diagnostics = withTestAttempt(diagnostics, testAttemptFrom(deep, testAttempt + 1, now()));
+        await flushDiagnostics();
+      }
+    }
 
     // The gates below judge evidence, and the evidence is the deep run. A fuzz test that
     // ran once during the pre-review pass proves the suite compiles, not that anything
@@ -2248,7 +2801,9 @@ export async function runBuild(
           // repair that renames a test moves the evidence, and the gate has to follow it.
           coverage: invariantCoverage({
             invariantIds: specification.invariants.map((invariant) => invariant.id),
-            sources: tests,
+            // Agen's own suite counts as proof of the invariants it names, exactly as a
+            // generated one does. It is the more reliable of the two.
+            sources: [core.source, ...tests],
           }),
         }),
       ]);
@@ -2260,8 +2815,14 @@ export async function runBuild(
         verdict,
         elevatedRiskIsCovered({
           findings: verdict.findings,
+          // Agen's own fuzz test does not count as evidence here. It searches over trade
+          // sizes, which says nothing about an assembly block, and letting it satisfy this
+          // gate would turn "low-level code must be fuzzed" into a formality every market
+          // passes for free.
           fuzzedTests: proven
-            .filter((outcome) => outcome.passed && (outcome.runs ?? 0) > 1)
+            .filter(
+              (outcome) => outcome.passed && (outcome.runs ?? 0) > 1 && !isCoreOutcome(outcome),
+            )
             .map((outcome) => outcome.name),
         }),
       ]);
@@ -2352,11 +2913,7 @@ export async function runBuild(
     > => {
       const artifacts = await collectArtifacts();
 
-      const fee = await requiredFeeMode({
-        root: workspace!.root,
-        buildOutput: built.output,
-        hookContractName: hookContract,
-      });
+      const fee = await poolFeeFor(built.output, hookContract);
 
       if (fee.problem !== null) return { ok: false, problem: fee.problem };
 
@@ -2760,6 +3317,39 @@ function testAttemptFrom(
     failures: result.outcomes.filter((outcome) => !outcome.passed),
     buildFailure: result.buildFailure,
   };
+}
+
+/**
+ * A test file a model owns, and is therefore allowed to rewrite.
+ *
+ * Three files under `test/` are Agen's and are not up for negotiation: the launch fixture,
+ * its smoke test, and the core suite. A repair handed the whole directory will happily
+ * "fix" a failing core assertion by relaxing it, which turns the one authoritative check
+ * in the build into a formality.
+ */
+function isModelTest(path: string): boolean {
+  return (
+    path.startsWith(`${LAYOUT.tests}/`) &&
+    path !== CANONICAL_TEST_BASE &&
+    path !== CANONICAL_TEST_SMOKE &&
+    path !== CORE_TEST_PATH
+  );
+}
+
+/**
+ * The workspace-relative test path a compiler diagnostic names, or null.
+ *
+ * Foundry reports a file however it was reached — absolute for one project, relative for
+ * another — and the only part that identifies it is the tail from `test/` onwards.
+ */
+function testPathOf(file: string): string | null {
+  const match = /(^|\/)(test\/[^\s:]+)$/.exec(file);
+  return match === null ? null : match[2]!;
+}
+
+/** Whether an outcome came out of Agen's own core suite. */
+function isCoreOutcome(outcome: TestOutcome): boolean {
+  return outcome.suite.startsWith(`${CORE_TEST_PATH}:`);
 }
 
 /**

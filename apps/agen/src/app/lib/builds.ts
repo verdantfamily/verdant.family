@@ -42,7 +42,12 @@ import type {
   JobStore,
   ModelProvider,
 } from "@verdant/market-compiler";
-import { anthropicProvider, fileJobStore, openAiProvider } from "@verdant/market-compiler";
+import {
+  anthropicProvider,
+  fallbackProvider,
+  fileJobStore,
+  openAiProvider,
+} from "@verdant/market-compiler";
 
 import { answer, positionOf, recoverInterrupted, submit, type QueuePosition } from "./queue";
 
@@ -113,20 +118,42 @@ export function modelStatus(): ModelStatus {
   };
 }
 
-function providerOrNull(): ModelProvider | null {
+/**
+ * The vendor wiring the pipeline uses, shared so the agent planner asks the same
+ * one. A second construction site would be a second set of environment variables
+ * to get wrong, and a deployment where builds work and agents quietly do not.
+ */
+export function providerOrNull(): ModelProvider | null {
   const key = process.env["OPENAI_API_KEY"];
   if (key === undefined || key.length === 0) return null;
 
   // Both models, because the stages ask for a role rather than a name: the strong one
   // does architecture, Solidity and repair, the fast one the work where the judgement
   // was already made upstream. See STAGE_ROLES.
-  return openAiProvider({
+  const openAi = openAiProvider({
     apiKey: key,
     model: modelStatus().model,
     fastModel: process.env["AGEN_MODEL_FAST"] ?? "gpt-5-mini",
     ...(process.env["OPENAI_BASE_URL"] === undefined
       ? {}
       : { baseUrl: process.env["OPENAI_BASE_URL"] }),
+  });
+
+  // A build is twenty minutes of work, and until now any minute of it could be thrown
+  // away by the vendor being briefly unable to answer — an exhausted balance, a spell of
+  // 500s. That is not a market Agen failed to understand, but it reached a creator as a
+  // failed launch all the same. Only reachability fails over; a rejected artefact still
+  // belongs to the repair loops. See `fallbackProvider`.
+  const other = escalationProviderOrNull();
+  if (other === null) return openAi;
+
+  return fallbackProvider(openAi, other, {
+    onFailover: (error) => {
+      console.warn(
+        `[agen] ${error.stage}: OpenAI could not answer (${error.message}); ` +
+          "finishing this stage on the escalation provider",
+      );
+    },
   });
 }
 

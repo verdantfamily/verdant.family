@@ -71,10 +71,10 @@ function Stat({
  *
  * ## Instant only, and it says so
  *
- * Programmable is still held (`PROGRAMMABLE_LAUNCHABLE` is false), so Instant is the whole
- * live product and these totals are the platform's totals. When Programmable opens this page
- * needs a second source rather than a relabelling, which is why nothing here is named as
- * though it already covered both.
+ * These totals are Instant's, and now that Programmable is open they are no longer the
+ * platform's. The second source this needs is not written yet, so the page keeps naming what it
+ * counts rather than being relabelled — an understatement a reader can see through is better
+ * than a total that quietly stopped being one.
  */
 export default async function Metrics() {
   const [metrics, usdPerEth] = await Promise.all([fetchInstantMetrics(), ethUsd()]);

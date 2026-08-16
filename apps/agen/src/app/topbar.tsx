@@ -8,6 +8,7 @@ import { Wallet } from "./wallet";
 
 const LINKS: readonly { readonly href: string; readonly label: string; readonly key: string }[] = [
   { href: "/", label: "Explore", key: "explore" },
+  { href: "/agents", label: "Agents", key: "agents" },
   { href: "/launch", label: "Create", key: "create" },
   { href: "/metrics", label: "Metrics", key: "metrics" },
   { href: "/profile", label: "Profile", key: "profile" },
@@ -31,7 +32,7 @@ const LINKS: readonly { readonly href: string; readonly label: string; readonly 
 export function TopBar({
   active,
 }: {
-  readonly active?: "explore" | "create" | "metrics" | "profile" | "docs" | undefined;
+  readonly active?: "explore" | "agents" | "create" | "metrics" | "profile" | "docs" | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const path = usePathname();

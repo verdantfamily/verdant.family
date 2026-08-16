@@ -37,6 +37,7 @@ export * from "./deployment-spec.js";
 export * from "./deployment-validation.js";
 export * from "./preflight.js";
 export * from "./contract-api.js";
+export * from "./core-tests.js";
 export * from "./mechanical-repair.js";
 export * from "./job.js";
 export * from "./limit.js";

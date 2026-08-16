@@ -39,7 +39,7 @@ import { TICK_SPACING } from "@verdant/config";
 import type { Diagnostic, TestOutcome } from "./foundry.js";
 import { forModel } from "./foundry.js";
 import type { ContractApi } from "./contract-api.js";
-import { renderContractApis } from "./contract-api.js";
+import { apiFromSource, contractApis, renderContractApis } from "./contract-api.js";
 import type { CuratedContext } from "./context.js";
 import type { FeeMode } from "./feemode.js";
 import type {
@@ -60,7 +60,7 @@ import type { GateFinding } from "./gates.js";
 import { invariantCoverage } from "./gates.js";
 import type { JsonSchema, ModelProvider, ModelRole, StructuredResponse } from "./model.js";
 import { array, bounded, object, optional, text } from "./model.js";
-import { PRELUDE_CONTRACTS } from "./prelude.js";
+import { PRELUDE_CONTRACTS, preludeActivations, preludeSources } from "./prelude.js";
 import { Tactic } from "./recovery.js";
 import type { MarketComponent, MarketImplementationPlan } from "./plan.js";
 import type { PlannedDependency } from "./plan.js";
@@ -79,7 +79,10 @@ import {
   SUGGESTION_CATEGORIES,
   validateSpecification,
 } from "./spec.js";
-import { manualTestInfrastructureProblems } from "./test-environment.js";
+import {
+  manualInfrastructureByFile,
+  manualTestInfrastructureProblems,
+} from "./test-environment.js";
 import type { GeneratedSource } from "./workspace.js";
 
 /**
@@ -245,12 +248,25 @@ export interface StageOutput<T> {
 export class ArtefactError extends Error {
   readonly problems: readonly string[];
   readonly raw: string;
+  /**
+   * The files the rejected answer contained, where it had any.
+   *
+   * So the next attempt can be given the work to correct rather than only the complaint about
+   * it. Optional because most stages return a document rather than files.
+   */
+  readonly files: readonly GeneratedSource[] | undefined;
 
-  constructor(stage: string, problems: readonly string[], raw: string) {
+  constructor(
+    stage: string,
+    problems: readonly string[],
+    raw: string,
+    files?: readonly GeneratedSource[],
+  ) {
     super(`the model's ${stage} output did not validate: ${problems.slice(0, 5).join("; ")}`);
     this.name = "ArtefactError";
     this.problems = problems;
     this.raw = raw;
+    this.files = files;
   }
 }
 
@@ -314,6 +330,143 @@ answer. An unresolved assumption that a creator can correct is worth more than a
 confident guess they cannot see.
 `.trim();
 
+/**
+ * The answer a provider meant to give, out of the shape it actually sent.
+ *
+ * Two providers, two guarantees, and the second one was never accounted for here. OpenAI's
+ * structured outputs return the schema or fail. Anthropic's tool use is a strong suggestion,
+ * and it misses in two ways that both arrived as a crash rather than as a complaint:
+ *
+ *   - a list with nothing in it is left out entirely, so the stage reads `undefined.length`
+ *   - the whole document comes back as JSON *text* inside one of its own fields:
+ *     `{"rules": "{\"summary\": ..., \"rules\": [...]}"}`
+ *
+ * Both are recoverable without guessing, because the schema says what was expected. A string
+ * where an object or a list belongs is parsed; a field that turns out to contain the entire
+ * answer is lifted to be the answer; a list the model had nothing for becomes empty. Anything
+ * that still does not fit is passed through untouched, to be refused by the stage's own
+ * validator in the stage's own words.
+ *
+ * This is not a benchmark convenience. Claude is the escalation provider on the repair ladder,
+ * so every one of these was a live build away from turning a recoverable repair into an
+ * internal error — and a six-word prompt did exactly that, in six seconds, twice.
+ */
+export function readAnswer(value: unknown, schema: JsonSchema): unknown {
+  const shape = schema as {
+    type?: string;
+    properties?: Record<string, JsonSchema>;
+    required?: string[];
+    items?: JsonSchema;
+  };
+
+  // JSON where a structure was asked for. Parsed rather than rejected: the content is right
+  // and only the envelope is wrong, and refusing it costs a call to be told the same thing.
+  let read = value;
+  if (typeof read === "string" && (shape.type === "object" || shape.type === "array")) {
+    try {
+      read = JSON.parse(read);
+    } catch {
+      return fillMissingArrays(value, schema);
+    }
+  }
+
+  if (shape.type === "array" && Array.isArray(read) && shape.items !== undefined) {
+    return read.map((entry) => readAnswer(entry, shape.items!));
+  }
+
+  if (shape.type === "object" && shape.properties !== undefined && isRecord(read)) {
+    const required = shape.required ?? Object.keys(shape.properties);
+
+    // A field holding the whole document. Recognised by the fields themselves rather than by
+    // which one it arrived in: an object that answers everything the schema asked for is the
+    // answer, wherever the provider happened to put it.
+    for (const key of Object.keys(read)) {
+      if (shape.properties[key] === undefined) continue;
+
+      const nested = typeof read[key] === "string" ? tryParse(read[key] as string) : read[key];
+      if (!isRecord(nested)) continue;
+
+      const answersEverything = required.every((field) => nested[field] !== undefined);
+      const parentDoesNot = required.some((field) => read[field] === undefined);
+      if (answersEverything && parentDoesNot) return readAnswer(nested, schema);
+    }
+
+    const properties: Record<string, unknown> = { ...read };
+    for (const [key, property] of Object.entries(shape.properties)) {
+      if (properties[key] === undefined || properties[key] === null) continue;
+      properties[key] = readAnswer(properties[key], property);
+    }
+
+    return fillMissingArrays(properties, schema);
+  }
+
+  return fillMissingArrays(read, schema);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function tryParse(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Give a missing list its empty value, everywhere the schema declared one.
+ *
+ * Two providers, two guarantees. OpenAI's structured outputs return every required field or
+ * fail; Anthropic's tool use is a strong suggestion, and an answer with nothing to say for a
+ * list frequently leaves it out. Every stage here was written against the first guarantee, so
+ * the second arrived as `Cannot read properties of undefined (reading 'length')` at whichever
+ * line touched it first — a defect, reported as `TOOLCHAIN_ERROR`, with a stage that had in
+ * fact answered the question. A market asked for in six words died that way with Claude
+ * driving, and it would have been the same for any prompt.
+ *
+ * Filling the list is the honest reading: absent and empty mean the same thing for every list
+ * in these schemas — no rules matched, no ambiguities found, no files returned — and each one
+ * already has a validator behind it that says so in the stage's own words. So a missing list
+ * becomes the complaint it was always going to be, instead of a stack trace.
+ */
+export function fillMissingArrays(value: unknown, schema: JsonSchema): unknown {
+  const shape = schema as {
+    type?: string;
+    properties?: Record<string, JsonSchema>;
+    items?: JsonSchema;
+  };
+
+  if (shape.type === "array") {
+    if (!Array.isArray(value)) return value;
+    return shape.items === undefined
+      ? value
+      : value.map((entry) => fillMissingArrays(entry, shape.items!));
+  }
+
+  if (shape.type !== "object" || shape.properties === undefined) return value;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+
+  const filled: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+
+  for (const [key, property] of Object.entries(shape.properties)) {
+    const declared = property as { type?: string };
+    const present = filled[key];
+
+    if (present === undefined || present === null) {
+      // Only lists. A missing string or number is a stage that did not answer, and inventing
+      // an empty one for it would hide that behind a market with a blank where a rule goes.
+      if (declared.type === "array") filled[key] = [];
+      continue;
+    }
+
+    filled[key] = fillMissingArrays(present, property);
+  }
+
+  return filled;
+}
+
 async function ask<T>(
   provider: ModelProvider,
   {
@@ -356,7 +509,7 @@ async function ask<T>(
   });
 
   return {
-    value: response.value,
+    value: readAnswer(response.value, schema) as T,
     raw: response.raw,
     promptHash: keccak256(toHex(input)),
     provider: provider.name,
@@ -949,6 +1102,38 @@ const sourcesSchema: JsonSchema = object({
     }),
   ),
   notes: array(text("anything a reviewer should know about this implementation")),
+});
+
+/**
+ * The tests, plus which of the specification's invariants each one stands behind.
+ *
+ * The mapping used to be asked for as a magic string — name the test after the invariant, or
+ * write `Invariant: <id>` in the comment above it — and models are unreliable at both. Two of
+ * ten real prompts died at generation for it: correct suites, with a fuzz test that plainly
+ * proved the fee ceiling, rejected because the words did not line up. That is a formatting
+ * failure being reported as a missing proof.
+ *
+ * As a field it can be checked instead of matched: the test it names either exists or does
+ * not, and Agen writes the comment into the file itself afterwards, so every reader
+ * downstream — the gate, the repairs, the review screen — sees the same annotation whether
+ * the model remembered the convention or not.
+ */
+const testSuiteSchema: JsonSchema = object({
+  files: array(
+    object({
+      path: text("a project-relative path under test/, e.g. test/KingMarket.t.sol"),
+      content: text("the complete file. No placeholders, no TODOs, no elisions."),
+    }),
+  ),
+  coverage: array(
+    object({
+      invariantId: text("the id of an invariant from the specification"),
+      testName: text(
+        "the name of the test in your files that proves it, without parentheses or arguments",
+      ),
+    }),
+  ),
+  notes: array(text("anything a reviewer should know about this suite")),
 });
 
 const repairSchema: JsonSchema = object({
@@ -2191,10 +2376,22 @@ export async function design(
         "call when it does not. Two contracts that each need the other's address cannot both " +
         "be placed — CREATE2 derives each address from creation code containing the other — " +
         "so one of them takes the address afterwards, through a setter only the factory may " +
-        "call.",
+        "call.\n\n" +
+        // The one place a declared constructor is not a decision. Everything else in this
+        // section says "declare the constructor you want"; for a contract that already
+        // exists there is nothing to want, and a design that declares otherwise cannot be
+        // satisfied by any file anybody is allowed to write.
+        "One exception to all of that: a contract you deploy unchanged from the list below " +
+        "already exists, so its constructor is a fact and not yours to choose. Declare " +
+        "exactly the arguments it has, and decide only where each one comes from.\n\n" +
+        // Stated here as well as enforced, because a rejected design costs a retry and the
+        // rule is short. A SIMPLE launch lost a whole build to exactly this omission.
+        activationBrief(),
       input: [
         "The market to implement, which this system produced and you may trust:",
         architectureDigest(specification),
+        "",
+        preludeBrief(),
         ...(match === undefined
           ? []
           : [
@@ -2252,9 +2449,16 @@ export async function design(
     absent,
   });
 
-  const deploymentProblems = validateDeploymentSpec(deployment, plan).map(
-    (problem) => `deployment.${problem.path}: ${problem.detail}`,
-  );
+  const deploymentProblems = [
+    ...validateDeploymentSpec(deployment, plan).map(
+      (problem) => `deployment.${problem.path}: ${problem.detail}`,
+    ),
+    // Checked here rather than at deployment validation, which is where it used to be
+    // found and is too late: the component it names is one Agen ships, so there is nothing
+    // to regenerate and the build simply ends.
+    ...preludeConstructorProblems(deployment).map((problem) => `deployment.${problem}`),
+    ...preludeActivationProblems(deployment).map((problem) => `deployment.${problem}`),
+  ];
 
   if (deploymentProblems.length > 0) {
     throw new ArtefactError("deployment specification", deploymentProblems, output.raw);
@@ -2351,6 +2555,191 @@ function assembleDeploymentSpec({
 }
 
 /**
+ * The constructors of Agen's own contracts, which are facts rather than choices.
+ *
+ * A deployment declares the constructor the generator is told to write, which is right for
+ * a contract that is about to be written and wrong for one that already exists. `FeeVault`
+ * has taken one argument since it was written and nothing in a build can change that, so a
+ * declaration saying otherwise is not a design decision — it is a mistake that no later
+ * stage can repair, because the only file that could satisfy it is one nobody may edit.
+ *
+ * A live FLOWTEST replay ended exactly there: the architecture stage declared
+ * `FeeVault(address owner_, address hook_)`, everything compiled, and deployment validation
+ * refused a bundle whose only inconsistent component was a contract Agen ships.
+ */
+let preludeConstructorCache: ReadonlyMap<
+  string,
+  readonly { name: string; type: string }[]
+> | null = null;
+
+function preludeConstructors(): ReadonlyMap<string, readonly { name: string; type: string }[]> {
+  preludeConstructorCache ??= new Map(
+    preludeSources().flatMap((source) =>
+      apiFromSource(source)
+        .filter((api) => api.constructorParameters !== null)
+        .map((api) => [api.contractName, splitParameters(api.constructorParameters!)] as const),
+    ),
+  );
+
+  return preludeConstructorCache;
+}
+
+/** Solidity's own types, so a contract type can be reported as the address an ABI shows. */
+const ELEMENTARY = /^(address|bool|string|bytes\d*|u?int\d*)$/;
+
+function splitParameters(rendered: string): readonly { name: string; type: string }[] {
+  if (rendered.trim() === "") return [];
+
+  return rendered.split(",").map((part) => {
+    const words = part.trim().split(/\s+/);
+    const name = words.at(-1) ?? "";
+    const written = words.slice(0, -1).join(" ");
+    // `IPoolManager manager_` is an address to everything downstream of the compiler, and
+    // the declaration is written in ABI terms.
+    return { name, type: ELEMENTARY.test(written) ? written : "address" };
+  });
+}
+
+/**
+ * A declared constructor for a contract Agen ships that is not the one it has.
+ *
+ * Reported rather than silently corrected. The source of each argument — whether a vault is
+ * owned by the fee receiver or by its accounting contract — is genuinely the architecture's
+ * to decide, and quietly rewriting the shape around a choice the model may not have meant
+ * would produce a market nobody designed.
+ */
+export function preludeConstructorProblems(
+  deployment: DeploymentSpecification,
+): readonly string[] {
+  return deployment.components.flatMap((component) => {
+    const fixed = preludeConstructors().get(component.contractName);
+    if (fixed === undefined) return [];
+
+    const rendered = fixed.map((entry) => `${entry.type} ${entry.name}`).join(", ");
+    const declared = component.constructorArguments;
+
+    const sameShape =
+      declared.length === fixed.length &&
+      fixed.every(
+        (entry, position) =>
+          declared[position]!.name === entry.name && declared[position]!.type === entry.type,
+      );
+
+    if (sameShape) return [];
+
+    return [
+      `components.${component.componentId}.constructorArguments: ${component.contractName} is ` +
+        `one of Agen's own contracts and already exists, so its constructor is fixed at ` +
+        `(${rendered === "" ? "" : rendered}) and cannot be changed by this design. You ` +
+        `declared (${declared.map((entry) => `${entry.type} ${entry.name}`).join(", ")}). ` +
+        `Declare exactly the arguments above, choosing only where each one comes from, or ` +
+        `design your own contract instead of reusing this one.`,
+    ];
+  });
+}
+
+/**
+ * A reused contract nothing in the deployment could ever wire.
+ *
+ * The counterpart to `preludeConstructorProblems`, and found the same way: by reading the
+ * shipped source rather than guessing at intent. `FeeVault.credit` reverts `NotHook` until
+ * `setHook` has named the address allowed to pay in, so the launch has to reach that setter
+ * somehow — either by calling it, or through a sibling that is handed both the vault and
+ * whatever is permitted to credit it and forwards the call from its own wiring.
+ *
+ * Only the case where neither is possible is refused, and that case is worth refusing: a
+ * live SIMPLE launch declared a vault owned by a controller that was never told the hook's
+ * address, so nothing in the bundle held both halves. It compiled, deployed, and failed
+ * every behaviour test with `NotHook(hook)` at test repair, where the only true repair was
+ * to change the deployment — which is not something test repair may do. A design that can
+ * wire its vault is left alone, since which component credits it is the design's decision.
+ */
+export function preludeActivationProblems(
+  deployment: DeploymentSpecification,
+): readonly string[] {
+  const refsOf = (component: DeployedComponent): readonly string[] => [
+    ...component.constructorArguments.map((argument) => argument.source),
+    ...component.wiring.map((call) => call.argument),
+  ];
+
+  return deployment.components.flatMap((component) =>
+    preludeActivations()
+      .filter((activation) => activation.contractName === component.contractName)
+      .filter((activation) => {
+        const declared = component.wiring.some(
+          (call) =>
+            call.functionName === activation.functionName &&
+            parseRef(call.argument)?.kind === "component",
+        );
+
+        // A sibling that holds this contract's address and the address of some other
+        // component can wire it on the launch's behalf, which is an ordinary shape: the
+        // accounting contract that owns a vault often installs the hook into it.
+        const forwardable = deployment.components.some((sibling) => {
+          if (sibling.componentId === component.componentId) return false;
+
+          const references = refsOf(sibling)
+            .map((reference) => parseRef(reference))
+            .filter((parsed) => parsed?.kind === "component");
+
+          return (
+            references.some(
+              (parsed) =>
+                parsed!.kind === "component" && parsed.componentId === component.componentId,
+            ) &&
+            references.some(
+              (parsed) =>
+                parsed!.kind === "component" && parsed.componentId !== component.componentId,
+            )
+          );
+        });
+
+        return !declared && !forwardable;
+      })
+      .map(
+        (activation) =>
+          `components.${component.componentId}.wiring: ${component.contractName} leaves ` +
+          `${activation.field} empty until ${activation.functionName} is called, and ` +
+          `${activation.gated.join(", ")} reverts for every caller while it is empty — that ` +
+          `is fixed in the contract and no generated file can work around it. Nothing in ` +
+          `this deployment could make that call: no component holds both this one's address ` +
+          `and the address of whatever is meant to call ` +
+          `${activation.gated.join("/")}. Declare a wiring call to ` +
+          `${activation.functionName} naming that component, or give the component that ` +
+          `owns this one both addresses so it can wire it, or design your own contract ` +
+          `without the restriction.`,
+      ),
+  );
+}
+
+/** The wiring a reused contract cannot work without, in the design instructions. */
+function activationBrief(): string {
+  const activations = preludeActivations();
+  if (activations.length === 0) return "";
+
+  return (
+    "Some of those contracts are inert until something wires them, and reusing one means " +
+    "saying what does: " +
+    activations
+      .map(
+        (activation) =>
+          `${activation.contractName}.${activation.gated.join("/")} reverts for every ` +
+          `caller until ${activation.functionName} names the component allowed to call it`,
+      )
+      .join("; ") +
+    ". Either declare that call as wiring on the reused contract, or hand the component " +
+    "that owns it both addresses and have it make the call from its own wiring. A design " +
+    "where no component holds both is a market that deploys and then reverts on every " +
+    "payment, and it is refused."
+  );
+}
+
+/** The interfaces of the contracts a design may deploy unchanged. */
+function preludeBrief(): string {
+  return renderContractApis(contractApis({ sources: preludeSources() }));
+}
+
+/**
  * Reuse of something that does not exist.
  *
  * A plan citing `epoch-accounting` when the catalogue calls it `epochs` would otherwise
@@ -2428,20 +2817,92 @@ interface RawSources {
   notes: string[];
 }
 
+interface RawTestSuite extends RawSources {
+  coverage?: { invariantId: string; testName: string }[];
+}
+
+/**
+ * A generated suite, and Agen's own suite as the model's coverage claims left it.
+ *
+ * Both come back because a claim can land in either. The core files themselves are unchanged
+ * apart from the `/// Invariant:` lines written into them, which is what makes a citation of
+ * Agen's own test visible to the gate that reads coverage out of the files.
+ */
+export interface TestSuite {
+  /** The model's files. Never includes a path the core suite owns. */
+  readonly files: readonly GeneratedSource[];
+  readonly core: readonly GeneratedSource[];
+  /**
+   * Files left out because they misused the fixture, with the reason for each.
+   *
+   * Only ever populated when the invariants are still covered without them. Reported on the
+   * build so a dropped test is a visible decision rather than a quiet one.
+   */
+  readonly discarded: readonly { readonly path: string; readonly why: string }[];
+}
+
+/**
+ * Write each claim into the file above the test that makes it.
+ *
+ * The annotation is Agen's, from the mapping the model returned, so the convention no longer
+ * depends on the model having followed it. A test already claiming its invariant is left
+ * alone; a name that matches nothing is ignored here and complained about by the caller,
+ * which can say what the files actually declare.
+ */
+export function annotateCoverage(
+  tests: readonly GeneratedSource[],
+  coverage: readonly { readonly invariantId: string; readonly testName: string }[],
+): readonly GeneratedSource[] {
+  if (coverage.length === 0) return tests;
+
+  return tests.map((file) => {
+    const lines = file.content.split("\n");
+    const annotated: string[] = [];
+
+    for (const line of lines) {
+      const declared = /^(\s*)function\s+([A-Za-z0-9_$]+)\s*\(/.exec(line);
+      const claims =
+        declared === null
+          ? []
+          : coverage
+              .filter((entry) => entry.testName === declared[2])
+              .filter((entry) => !annotated.some((written) => written.includes(`Invariant: ${entry.invariantId}`)))
+              .map((entry) => `${declared[1] ?? ""}/// Invariant: ${entry.invariantId}`);
+
+      annotated.push(...claims, line);
+    }
+
+    return { path: file.path, content: annotated.join("\n") };
+  });
+}
+
 function asSources(raw: RawSources, expect: "contracts" | "test"): readonly GeneratedSource[] {
-  const files = raw.files.filter((file) => file.path.startsWith(`${expect}/`));
+  /*
+   * Not Solidity is not a threat; it is not a source.
+   *
+   * A path that climbs out of the workspace is refused below and always will be. A file that
+   * is simply not Solidity is a different thing, and refusing the answer over one cost SIMPLE
+   * — the plainest market in the benchmark — its launch: the model returned its coverage
+   * mapping a second time as `test/coverage.json` beside four perfectly good test files, and
+   * the build ended on "generated source paths must be normalized Solidity paths".
+   *
+   * Nothing is lost by leaving it out. A JSON file under test/ is never compiled, never run
+   * and never deployed, so dropping it writes exactly what would have been written anyway —
+   * and if that leaves no Solidity at all, the empty-answer complaint below still fires.
+   */
+  const files = raw.files.filter(
+    (file) => file.path.startsWith(`${expect}/`) && file.path.endsWith(".sol"),
+  );
+
   const unsafe = files.filter((file) => {
     const segments = file.path.split("/");
-    return (
-      segments.some((segment) => segment === "" || segment === "." || segment === "..") ||
-      !file.path.endsWith(".sol")
-    );
+    return segments.some((segment) => segment === "" || segment === "." || segment === "..");
   });
 
   if (files.length === 0) {
     throw new ArtefactError(
       expect === "contracts" ? "contract generation" : "test generation",
-      [`no files under ${expect}/ were returned`],
+      [`no Solidity files under ${expect}/ were returned`],
       JSON.stringify(raw).slice(0, 2_000),
     );
   }
@@ -2450,7 +2911,7 @@ function asSources(raw: RawSources, expect: "contracts" | "test"): readonly Gene
     throw new ArtefactError(
       expect === "contracts" ? "contract generation" : "test generation",
       [
-        ...unsafe.map((file) => `${file.path}: generated source paths must be normalized Solidity paths`),
+        ...unsafe.map((file) => `${file.path}: generated source paths must be normalized`),
         ...(new Set(files.map((file) => file.path)).size === files.length
           ? []
           : ["generated source paths must be unique"]),
@@ -2562,6 +3023,55 @@ function deploymentBrief(deployed: DeployedComponent, spec: DeploymentSpecificat
             "field at zero for the life of the market, and the build is stopped for it.",
         ];
 
+  // Wiring this component has to do for a neighbour, because the launch cannot.
+  //
+  // Agen's `FeeVault` refuses `credit` until `setHook` names the caller allowed to pay in,
+  // and a design may leave that call to whichever component holds both addresses instead of
+  // declaring it. Two benchmark markets were lost because the design said so and the code did
+  // not: both accounting contracts stored the hook and never passed it on, so the vault
+  // rejected the first fee. Saying it here is cheaper than catching it afterwards, and it is
+  // caught afterwards too.
+  const forwarding = spec.components.flatMap((sibling) => {
+    if (sibling.componentId === deployed.componentId) return [];
+
+    const held = [
+      ...deployed.constructorArguments.map((argument) => argument.source),
+      ...deployed.wiring.map((call) => call.argument),
+    ].map((reference) => parseRef(reference));
+
+    const holds = (componentId: string): boolean =>
+      held.some((parsed) => parsed?.kind === "component" && parsed.componentId === componentId);
+
+    if (!holds(sibling.componentId)) return [];
+
+    return preludeActivations()
+      .filter((activation) => activation.contractName === sibling.contractName)
+      .filter(
+        (activation) =>
+          !sibling.wiring.some((call) => call.functionName === activation.functionName),
+      )
+      .map((activation) => {
+        const caller = spec.components.find(
+          (other) => other.componentId !== sibling.componentId && holds(other.componentId),
+        );
+
+        return (
+          `  ${sibling.contractName} ignores ${activation.gated.join("/")} until ` +
+          `${activation.functionName} names the address allowed to call them, and the launch ` +
+          `does not call it — you do, because you are what holds both addresses. Call ` +
+          `${activation.functionName} on the ${sibling.contractName} from the wiring function ` +
+          `that receives ${caller === undefined ? "the address it needs" : caller.contractName}` +
+          `'s address, in the same call, so the two arrive together. Without it this market ` +
+          `deploys and reverts on the first fee.`
+        );
+      });
+  });
+
+  const forwards =
+    forwarding.length === 0
+      ? []
+      : ["", "Wiring only this contract can do, from inside your own wiring:", "", ...forwarding];
+
   const ownership =
     deployed.controller === null
       ? []
@@ -2584,7 +3094,7 @@ function deploymentBrief(deployed: DeployedComponent, spec: DeploymentSpecificat
       "at zero while the market quietly did nothing.",
   ];
 
-  return [...constructor, ...wiring, ...ownership, ...configuration].join("\n");
+  return [...constructor, ...wiring, ...forwards, ...ownership, ...configuration].join("\n");
 }
 
 /**
@@ -2854,25 +3364,52 @@ export async function generateTests(
     sources,
     context,
     testEnvironment,
+    core = [],
     validationProblems,
+    previous = [],
     timeoutMs = STAGE_TIMEOUTS.generateTests,
   }: {
     readonly specification: MarketSpecification;
     readonly sources: readonly GeneratedSource[];
     readonly context: CuratedContext;
     readonly testEnvironment?: { readonly guidance: string };
+    /**
+     * The suite Agen wrote for this market, which runs alongside the generated one.
+     *
+     * Read-only, and here so it can be cited rather than repeated. EMBR is why: three of its
+     * five invariants were the sell rate, the buy rate and the fee ceiling — the three things
+     * the core suite proves outright — and the build was refused, twice, for a suite that had
+     * no separate test naming them. The model was being asked to duplicate Agen's own tests
+     * and the market was lost when it sensibly did not.
+     */
+    readonly core?: readonly GeneratedSource[];
     readonly validationProblems?: readonly string[];
+    /**
+     * The suite the last attempt returned, when there was one.
+     *
+     * A retry used to be a fresh roll: the complaint was carried over, the work was not, and
+     * the model wrote a whole new suite in which the old problem might be fixed and two new
+     * ones invented. That is a stage whose outcome depends on luck twice over, and TYPO was
+     * refused twice for a different missing invariant each time. Correcting an answer is a
+     * much smaller job than writing one, and it is the same job every time.
+     */
+    readonly previous?: readonly GeneratedSource[];
     readonly timeoutMs?: number;
   },
-): Promise<StageOutput<readonly GeneratedSource[]>> {
-  const output = await ask<RawSources>(provider, {
+): Promise<StageOutput<TestSuite>> {
+  const output = await ask<RawTestSuite>(provider, {
     stage: "test_generation",
     instructions:
       (validationProblems === undefined
         ? ""
         : "A previous test suite was rejected before compilation for these structural reasons:\n" +
           validationProblems.map((problem) => `  - ${problem}`).join("\n") +
-          "\nReturn a fresh suite that fixes every one of them.\n\n") +
+          (previous.length === 0
+            ? "\nReturn a fresh suite that fixes every one of them.\n\n"
+            : "\nThat suite is included below. Correct it: keep every test that was not " +
+              "complained about, exactly as it is, and change only what the complaints name. " +
+              "Return the complete corrected set of files, and the coverage field for all of " +
+              "them.\n\n")) +
       "Write a forge test suite under test/ for these contracts. Derive the cases from the " +
       "specification, and cover at least: that the market initialises into the state the " +
       "specification describes; that each rule fires when its conditions hold; that each rule " +
@@ -2880,9 +3417,11 @@ export async function generateTests(
       "be irreversible; that any accumulated value is conserved rather than created or lost; " +
       "and the boundary of every threshold — the trade one unit below it as well as one above. " +
       "For every invariant in the specification write a fuzz or invariant test that stands " +
-      "behind it, and say which one it is: either name the test for the invariant's id, or put " +
-      "\"Invariant: <id>\" in the comment directly above the test. An invariant no test claims " +
-      "is treated as unproven and blocks deployment. Include adversarial sequences: a trader " +
+      "behind it, and list which test proves which invariant in the coverage field. Give the " +
+      "test's name exactly as you declared it. An invariant nothing in that list proves is " +
+      "treated as unproven and blocks deployment; Agen writes the annotation into the file " +
+      "from your list, so you do not need to name the test after the invariant or comment it. " +
+      "Include adversarial sequences: a trader " +
       "repeating an action to farm a reward, a sequence straddling a phase transition, a rule " +
       "fired twice in one block.\n\n" +
       "Write adversarial tests as well as correctness ones. For every externally callable " +
@@ -2906,36 +3445,129 @@ export async function generateTests(
       // A live build read a five-rule market, tested the accounting contract to death
       // and gave the hook — which held the entire mechanic — a file it called a sanity
       // check, leaving two of three invariants with no test at all.
-      "Every one of these invariants needs a passing test that claims it, by name or by the " +
-        "comment directly above it:",
+      "Every one of these invariants needs a passing test, and an entry in the coverage " +
+        "field naming that test:",
       specification.invariants.map((invariant) => `  ${invariant.id}: ${invariant.statement}`).join("\n"),
       "",
+      ...(core.length === 0
+        ? []
+        : [
+            "Agen has already written the suite below, and it runs against this market alongside " +
+              "yours. Do not rewrite it, do not copy its tests, and do not put its files in your " +
+              "answer. Where one of its tests already proves an invariant above, name that test " +
+              "in the coverage field and spend your own on something it does not cover. In " +
+              "particular do not write your own version of a fee rate this suite already checks: " +
+              "STREAK's suite did, misread which amount the fee is a percentage of, and failed a " +
+              "market whose rate the core test proved correct in the same run. Not writing a test " +
+              "is not the same as not covering the invariant: every invariant still needs an " +
+              "entry, so the ones this suite proves need one naming its test. SIMPLE and POT were " +
+              "both lost by leaving those entries out:",
+            core.map((file) => `--- ${file.path} (Agen's, read-only) ---\n${file.content}`).join("\n\n"),
+            "",
+          ]),
+      ...(previous.length === 0
+        ? []
+        : [
+            "Your previous answer, which was rejected for the problems listed above:",
+            previous.map((file) => `--- ${file.path} ---\n${file.content}`).join("\n\n"),
+            "",
+          ]),
       "The contracts under test:",
       sources.map((source) => `--- ${source.path} ---\n${source.content}`).join("\n\n"),
     ].join("\n"),
     schemaName: "generated_tests",
-    schema: sourcesSchema,
+    schema: testSuiteSchema,
     timeoutMs,
     effort: STAGE_EFFORT.generateTests,
     role: STAGE_ROLES.generateTests,
   });
 
-  const tests = asSources(output.value, "test");
+  // Anything the model returned at a path Agen owns is dropped rather than trusted. It was
+  // told the core suite is read-only; a copy of it coming back would otherwise overwrite the
+  // one test file in the project that is not up for negotiation.
+  const returned = asSources(output.value, "test").filter(
+    (file) => !core.some((mine) => mine.path === file.path),
+  );
+  /*
+   * A claim names a test; how it spells it is not the point.
+   *
+   * PULSE cited both of the core tests that prove its invariants, exactly as intended, and
+   * wrote them the way Solidity and forge do — `MarketCoreTest.testFuzz_core_fee_never_exceeds
+   * _the_ceiling`. Matched against bare declarations both citations looked invented, the
+   * invariants came back unproven, and a build that had done everything asked of it was
+   * refused over a qualifier and a pair of parentheses.
+   */
+  const claimed = (output.value.coverage ?? []).map((entry) => ({
+    ...entry,
+    testName: (entry.testName.split(".").pop() ?? entry.testName).replace(/\s*\(.*$/, "").trim(),
+  }));
+
+  const declared = (files: readonly GeneratedSource[]): Set<string> =>
+    new Set(
+      files.flatMap((file) =>
+        [...file.content.matchAll(/\bfunction\s+([A-Za-z0-9_$]+)\s*\(/g)].map((match) => match[1]!),
+      ),
+    );
+
+  const declaredTests = declared(returned);
+  const declaredCore = declared(core);
+
+  // The claims that name a test that exists. Agen writes those into the files; the rest are
+  // reported below, where the complaint can list what the suite actually declares. A claim
+  // against the core suite annotates the core suite, because that is where the proof is and
+  // the gate reads coverage from the files rather than from this list.
+  const placeable = claimed.filter(
+    (entry) => declaredTests.has(entry.testName) || declaredCore.has(entry.testName),
+  );
+  const annotated = annotateCoverage(returned, placeable);
+  const annotatedCore = annotateCoverage(core, placeable);
+
+  /*
+   * One unusable file is not a reason to lose the market.
+   *
+   * EMBR was refused here, on both attempts, because one of its files — a security test —
+   * declared its own `PoolKey` and called the hook's callback directly. Its other tests were
+   * fine and Agen's core suite was untouched, but the whole suite went back and the build
+   * ended. The market was never in question.
+   *
+   * So the file goes and the market stays, on one condition: every invariant the
+   * specification declares still has a test standing behind it afterwards. That is what stops
+   * this being a way to launder a suite that proves nothing — drop the file that misuses the
+   * fixture, keep the proof, and if the proof does not survive then this is a real complaint
+   * and the model is asked again. The drop is reported, not silent; see `TestSuite.discarded`.
+   */
+  const offenders = manualInfrastructureByFile(annotated);
+  const survivors = annotated.filter((file) => !offenders.has(file.path));
+  const proofSurvives =
+    survivors.length > 0 && uncovered(specification, [...annotatedCore, ...survivors]).length === 0;
+
+  const tests = proofSurvives ? survivors : annotated;
+  const discarded = proofSurvives
+    ? [...offenders].map(([path, problems]) => ({ path, why: problems.join("; ") }))
+    : [];
+
+  const invented = claimed
+    .filter((entry) => !declaredTests.has(entry.testName) && !declaredCore.has(entry.testName))
+    .map(
+      (entry) =>
+        `the coverage entry for "${entry.invariantId}" names a test called ${entry.testName}, ` +
+        `which none of your files declare`,
+    );
 
   // Checked here rather than at the deployment gate that will check it again. The gate
   // is the authority and stays where it is, but it runs after compilation, execution,
   // repair and deep validation, so a suite that never tested the mechanic costs a build
   // several minutes before anyone says so. Here it costs one call, and the complaint
   // names the invariants instead of arriving as a verdict.
-  const untested = uncovered(specification, tests);
+  const untested = uncovered(specification, [...annotatedCore, ...tests], annotatedCore);
   const infrastructure =
     testEnvironment === undefined ? [] : manualTestInfrastructureProblems(tests);
-  const problems = [...untested, ...infrastructure];
+  const problems = [...invented, ...untested, ...infrastructure];
   if (problems.length > 0) {
-    throw new ArtefactError("test generation", problems, output.raw);
+    throw new ArtefactError("test generation", problems, output.raw, tests);
   }
 
-  return { ...output, value: tests };
+  return { ...output, value: { files: tests, core: annotatedCore, discarded } };
 }
 
 /**
@@ -2949,11 +3581,27 @@ export async function generateTests(
 function uncovered(
   specification: MarketSpecification,
   tests: readonly GeneratedSource[],
+  core: readonly GeneratedSource[] = [],
 ): readonly string[] {
   const coverage = invariantCoverage({
     invariantIds: specification.invariants.map((invariant) => invariant.id),
     sources: tests,
   });
+
+  // The core suite's tests, offered by name. The instructions tell the model not to write its
+  // own version of what this suite already proves, and this complaint used to answer that with
+  // "write one" — the two together are a contradiction, and it cost SIMPLE and POT a launch
+  // each on invariants Agen's own suite was proving in the same workspace. Naming the option
+  // is not a weakening: the citation is still checked against real test names, and an invariant
+  // no test stands behind is still refused.
+  const citable = [...core.flatMap((file) => [...file.content.matchAll(TEST_FUNCTION)])]
+    .map((match) => match[1] ?? "")
+    .filter((name) => name !== "");
+  const alternative =
+    citable.length === 0
+      ? ""
+      : ` If one of the read-only core tests already proves it, do not write a second one — ` +
+        `name that test here instead: ${citable.join(", ")}.`;
 
   return specification.invariants
     .filter((invariant) => (coverage.get(invariant.id) ?? []).length === 0)
@@ -2961,10 +3609,13 @@ function uncovered(
       (invariant) =>
         `no test stands behind the invariant "${invariant.id}" (${invariant.statement}). Write ` +
         `one, exercising the contract that implements it rather than the one that is easiest ` +
-        `to test, and either name it for the invariant or put "Invariant: ${invariant.id}" in ` +
-        `the comment directly above it.`,
+        `to test, and add { invariantId: "${invariant.id}", testName: "<your test>" } to the ` +
+        `coverage field.${alternative}`,
     );
 }
+
+/** A Solidity test function's name, for offering the core suite's tests by name. */
+const TEST_FUNCTION = /function\s+(test(?:Fuzz)?_[A-Za-z0-9_]*)\s*\(/g;
 
 /**
  * The sources a repair actually needs to see.
@@ -3435,6 +4086,7 @@ export async function repairTests(
     tactic = Tactic.TargetedRepair,
     editableContracts = true,
     placement = [],
+    core = [],
     timeoutMs = STAGE_TIMEOUTS.repair,
   }: {
     readonly specification: MarketSpecification;
@@ -3450,6 +4102,15 @@ export async function repairTests(
      * question the fixture was being requested for.
      */
     readonly placement?: readonly string[];
+    /**
+     * Agen's own assertions, shown as evidence and never returned.
+     *
+     * These follow from the locked specification rather than from a judgement, so when one
+     * of them fails the market is wrong — but a repair that cannot read the assertion has to
+     * infer what it checked from the failure message alone, which is how a correct diagnosis
+     * turns into a guess. Shown, and filtered out of whatever comes back.
+     */
+    readonly core?: readonly GeneratedSource[];
     readonly failures: readonly TestOutcome[];
     readonly attempt: number;
     /** The known fix, where this failure has been met before. See `playbook.ts`. */
@@ -3462,9 +4123,12 @@ export async function repairTests(
   },
 ): Promise<StageOutput<Repair>> {
   const targeted = tactic === Tactic.TargetedRepair;
-  const shownTests = targeted ? failing(tests, failures) : tests;
+  const available = [...core, ...tests];
+  const shownTests = targeted ? failing(available, failures) : available;
   const shownSources = targeted ? exercised(sources, shownTests) : sources;
   const guidance = tacticGuidance(tactic);
+  const corePaths = new Set(core.map((file) => file.path));
+  const coreFailed = shownTests.some((file) => corePaths.has(file.path));
 
   const output = await ask<RawRepair>(provider, {
     stage: "test_repair",
@@ -3478,11 +4142,23 @@ export async function repairTests(
       "Never weaken a test merely to make it pass — a market that ships because its invariant " +
       "test was deleted is the worst outcome this pipeline can produce. Return complete corrected " +
       "files for the editable side, or set giveUp with your diagnosis.\n\n" +
+      "Keep every `/// Invariant: <id>` comment on the test it sits above. Those are the record " +
+      "of which specification promise each test stands behind, and an invariant that loses its " +
+      "test is treated as unproven and blocks the launch. If you rename or replace such a test, " +
+      "carry the comment across to whatever replaces it.\n\n" +
       `Agen's own contracts — ${PRELUDE_CONTRACTS.join(", ")} — are fixed and correct and are ` +
       "never the answer. When a compiler error names one, the fault is in whatever inherits " +
       "from it: Solidity reports a redeclared identifier at the base, so a test helper " +
       "declaring an error or event a base already declares is reported in the base file. " +
       "Rename it in the test." +
+      (coreFailed
+        ? "\n\n" +
+          `${[...corePaths].join(", ")} is written by Agen from the specification the ` +
+          "creator approved, not by a model, and it is read-only here — a file returned at " +
+          "that path is discarded. It asserts only what the specification states, so if one " +
+          "of its assertions failed, the contract does not do what the market promises and " +
+          "the contract is what changes. Do not reason about whether that assertion is fair."
+        : "") +
       (guidance === "" ? "" : `\n\n${guidance}`),
     input: [
       `This is repair attempt ${String(attempt)}.`,
@@ -3538,7 +4214,8 @@ export async function repairTests(
       diagnosis: output.value.diagnosis,
       files: output.value.files
         .map((file) => normalisePinnedV4Api({ path: file.path, content: file.content }))
-        .filter((file) => editableContracts || file.path.startsWith("test/")),
+        .filter((file) => editableContracts || file.path.startsWith("test/"))
+        .filter((file) => !corePaths.has(file.path)),
       giveUp: output.value.giveUp,
     },
   };

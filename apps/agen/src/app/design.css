@@ -373,6 +373,20 @@ body:has(.ax-page) {
   color: rgb(255 255 255 / 78%);
 }
 
+/* The band is white type on a dark ground, where a default blue link is both illegible
+   and the only unstyled thing on the page. */
+.ax-bloom-in p a {
+  color: #fff;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: opacity 0.16s var(--ax-ease);
+}
+
+.ax-bloom-in p a:hover {
+  opacity: 0.72;
+}
+
 /* ---------------------------------------------------------------- floating nav */
 
 .ax-navpill {
@@ -2217,6 +2231,7 @@ span.ax-pager-arrow {
   font-weight: 500;
   letter-spacing: -0.013em;
   color: #fff;
+  text-decoration: none;
   background: var(--ax-ink);
   border: 0;
   border-radius: 999px;
@@ -5824,3 +5839,70 @@ span.ax-pager-arrow {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ---------------------------------------------------------------- agents */
+
+/*
+ * What is left of the agents pages on this side of the line.
+ *
+ * `/agents` is its own environment now, with its own stylesheet under `.ag-root`, so the
+ * directory, the profile and the create form that used to be described here have gone
+ * with them. These two remain because they are launchpad surfaces that happen to mention
+ * an agent: the attribution line under a market's creator, and the pointer on the profile
+ * page towards the other product.
+ */
+
+.ax-agent-label {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 0.72rem;
+  font-style: normal;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ax-muted);
+}
+
+.ax-tk-maker a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.ax-tk-maker a:hover {
+  color: var(--ax-ink);
+}
+
+.ax-profile-agents {
+  margin-top: 46px;
+}
+
+.ax-profile-agents .ax-invite-note {
+  margin: 18px 0;
+  max-width: 60ch;
+}
+
+.ax-docs {
+  max-width: 72ch;
+  padding: 8px 0 64px;
+}
+
+.ax-docs h2 {
+  margin: 36px 0 10px;
+  font-size: 1.15rem;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+
+.ax-docs pre {
+  padding: 16px 18px;
+  overflow: auto;
+  background: var(--ax-panel);
+  border: 1px solid var(--ax-line);
+  border-radius: var(--ax-r-md);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.ax-docs code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+

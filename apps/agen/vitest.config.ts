@@ -10,6 +10,17 @@ export default defineConfig({
     root: dirname(fileURLToPath(import.meta.url)),
     include: ["src/**/*.test.ts"],
     environment: "node",
+    /*
+     * Above the default five seconds, which was never a claim about these tests.
+     *
+     * Nothing here waits on anything slow by design — the network is stubbed and the timing is
+     * mocked — but the suite now also launches markets onto a forked chain, and under that much
+     * load a stubbed-fetch test can miss five seconds on scheduling alone. `instant-feed`
+     * failed exactly that way, twice, on assertions about arithmetic. A timeout that fires on a
+     * busy machine reports a fault in the wrong file, and the reader has no way to tell it from
+     * a real one; tests that genuinely need longer still say so individually.
+     */
+    testTimeout: 30_000,
     // A configured deployment, because that is what the tests are about.
     //
     // `validate` refuses to launch a build with no public address, since an Instant token
@@ -17,7 +28,10 @@ export default defineConfig({
     // token whose picture nobody can ever load. Without this, every validation test would
     // be asserting against a build that is held for a reason none of them are testing —
     // and the guard itself is covered directly, by overriding this.
-    env: { NEXT_PUBLIC_SITE_URL: "https://agen.space" },
+    env: {
+      NEXT_PUBLIC_SITE_URL: "https://agen.space",
+      AGENT_WALLET_MASTER_KEY: "aa".repeat(32),
+    },
   },
   // The same JSX transform Next compiles with. Without it esbuild emits calls to a
   // `React` binding that nothing in this app imports, and any test that renders a

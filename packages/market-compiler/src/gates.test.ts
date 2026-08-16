@@ -213,6 +213,51 @@ contract Generated {
 
     expect(result.findings).toEqual([]);
   });
+
+  /**
+   * Three markets in one benchmark run — SIMPLE, TESTC and SHIFT — were refused as unsafe
+   * with every test passing, for inline assembly none of them contained. It was in
+   * `MarketTestBase`, which Agen writes: the hook miner searches in scratch space because
+   * doing it in Solidity ran the fixture out of memory.
+   *
+   * A test is deployed nowhere and called by nobody, so it can never be the reason a market
+   * is unsafe. The shape here is the fixture's own — assembly in a file under test/.
+   */
+  it("does not judge a market by the tests, including the ones Agen wrote", async () => {
+    workspace = await createWorkspace({ vendorRoot: VENDOR });
+    await workspace.write([
+      {
+        path: "src/Generated.sol",
+        content: contract(`    uint256 public total;
+
+    function accrue(uint256 amount) external {
+        total += amount;
+    }`),
+      },
+      {
+        path: "test/MarketTestBase.sol",
+        content: contract(`    function findSalt(bytes32 seed) internal pure returns (bytes32 salt) {
+        assembly {
+            mstore(0x00, seed)
+            salt := keccak256(0x00, 0x20)
+        }
+    }`).replace("contract Generated", "contract MarketTestBase"),
+      },
+    ]);
+
+    const { stdout } = await run("forge", ["build", "--force", "--json"], {
+      cwd: workspace.root,
+      maxBuffer: 64 * 1024 * 1024,
+    }).catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? "{}" }));
+
+    const result = await analyseGenerated({
+      root: workspace.root,
+      buildOutput: JSON.parse(stdout),
+    });
+
+    expect(result.findings.filter((f) => f.code === "GATE_INLINE_ASSEMBLY")).toEqual([]);
+    expect(result.passed).toBe(true);
+  }, 120_000);
 });
 
 describe("an unguarded hook", () => {

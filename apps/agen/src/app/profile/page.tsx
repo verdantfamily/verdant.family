@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { Bloom } from "../bloom";
 import { SiteFooter } from "../footer";
@@ -40,6 +41,25 @@ export default async function Profile() {
 
       <main className="ax-wrap">
         <Claims />
+
+        {/*
+          A pointer rather than a second copy of the desk. Creating and running an agent
+          happens on the agents page now, next to the directory of them, and having the
+          same form on two screens is two places for it to drift.
+        */}
+        <section className="ax-section ax-profile-agents">
+          <div className="ax-section-head">
+            <h2>Agents</h2>
+          </div>
+          <p className="ax-invite-note">
+            Agents launch markets on their own, inside limits you set. Yours are created
+            and managed on the agents page.
+          </p>
+          <Link className="ax-cta" href="/agents">
+            Create or manage an agent
+          </Link>
+        </section>
+
         <Portfolio markets={markets} now={now} usdPerEth={usdPerEth} />
 
         <SiteFooter />

@@ -360,6 +360,21 @@ export const PLAYBOOK: readonly PlaybookEntry[] = [
   },
 
   {
+    id: "unbounded_fuzz_size",
+    title: "Fuzzed a trade the market cannot contain",
+    blame: Blame.Test,
+    matches: [/sell size exceeds what this market can supply/i, /clamp the fuzzed amount/i],
+    remedy:
+      "A uint128 fuzz parameter is up to 3.4e38 and no market holds that many tokens, so " +
+      "the sale asked for cannot happen and nothing about the fee it would have paid can be " +
+      "asserted. Clamp the size before trading and assert against what was traded: buy first " +
+      "with _tradeSize(size, MIN_TRADE, MAX_TRADE), sell what that bought, and compute the " +
+      "expected fee from lastSellTokens rather than from the fuzzed input. This is what the " +
+      "read-only core suite does; copy it. Do not use vm.assume to discard the large cases — " +
+      "it rejects almost every run and the fuzzer gives up.",
+  },
+
+  {
     id: "insufficient_balance",
     title: "Traded with an account holding nothing",
     blame: Blame.Test,

@@ -354,6 +354,53 @@ contract ShiftTest is MarketTestBase {
     expect(problems.length).toBeGreaterThan(0);
   });
 
+  /**
+   * The same statements, written as proof that they are not allowed.
+   *
+   * SIMPLE was refused here twice — its whole suite, on both attempts — because the only test
+   * standing behind "the configured fee receiver is never the zero address" proved it the way
+   * anyone would: by calling the setter and expecting a revert. Read as an attempt to wire the
+   * market by hand, that cost a market whose contracts were never in question.
+   */
+  it.each([
+    ["a guarded setter", "vm.expectRevert();\n    hook.setFeeReceiver(address(0));"],
+    ["guarded ownership", "vm.expectRevert();\n    token.transferOwnership(TRADER);"],
+    ["a guarded callback", "vm.expectRevert();\n    hook.beforeSwap(TRADER, key, params, bytes(\"\"));"],
+    ["an expectation on one line", 'vm.expectRevert("nope"); vault.setHook(address(1));'],
+  ])("accepts %s asserted to revert", (_label, statement) => {
+    expect(
+      manualTestInfrastructureProblems([
+        {
+          path: "test/Shift.t.sol",
+          content: `import {MarketTestBase} from "./MarketTestBase.sol";
+contract ShiftTest is MarketTestBase {
+  function test_guard() public {
+    ${statement}
+  }
+}`,
+        },
+      ]),
+    ).toEqual([]);
+  });
+
+  /** A revert expectation does not make deploying infrastructure sensible, and does not excuse it. */
+  it("still refuses infrastructure a test only claims will revert", () => {
+    const problems = manualTestInfrastructureProblems([
+      {
+        path: "test/Shift.t.sol",
+        content: `import {MarketTestBase} from "./MarketTestBase.sol";
+contract ShiftTest is MarketTestBase {
+  function test_guard() public {
+    vm.expectRevert();
+    deployPoolManager();
+  }
+}`,
+      },
+    ]);
+
+    expect(problems.length).toBeGreaterThan(0);
+  });
+
   it("accepts behavior-only tests inheriting the canonical base", () => {
     expect(
       manualTestInfrastructureProblems([
@@ -694,11 +741,34 @@ contract CanonicalBehaviorTest is MarketTestBase {
         assertEq(tokenBalance(TRADER), amountOut);
     }
 
-    /// A fuzzed sell needs no set-up and cannot exceed what the seller holds.
-    function testFuzz_sells_never_exceed_the_balance(uint128 amountIn) public {
-        sell(amountIn);
+    /// A fuzzed sell needs no set-up, clamped the way a generated suite is told to clamp it.
+    function testFuzz_sells_exactly_what_the_buy_produced(uint128 amountIn) public {
+        uint256 bought = buy(_tradeSize(amountIn, MIN_TRADE, MAX_TRADE));
 
-        assertGe(tokenBalance(TRADER), 0);
+        sell(uint128(bought));
+
+        assertEq(lastSellTokens, uint128(bought));
+    }
+
+    /// And a sale this market cannot supply stops here rather than selling something else.
+    ///
+    /// HRBR was refused over the difference: an unbounded uint128 asked to sell 1.9e36 tokens
+    /// of a market that does not contain them, the helper sold what there was, and the market
+    /// answered for a fee that was 1% of a trade nobody made.
+    /// Through one external hop, because vm.expectRevert watches the next call and the sell
+    /// helper buys before it sells.
+    function sellForTest(uint128 amountIn) external {
+        sell(amountIn);
+    }
+
+    function test_an_impossible_sell_stops_rather_than_selling_something_else() public {
+        vm.expectRevert(
+            bytes(
+                "sell size exceeds what this market can supply; clamp the fuzzed amount and assert against lastSellTokens"
+            )
+        );
+
+        this.sellForTest(type(uint128).max);
     }
 
     /// A seller holding nothing still sells the whole amount it asked for.
@@ -720,14 +790,14 @@ contract CanonicalBehaviorTest is MarketTestBase {
 
         sell(wanted);
 
-        assertEq(lastSellAmount, wanted);
+        assertEq(lastSellTokens, wanted);
     }
 
     /// Exact in the other direction too: a small sell is not rounded up to a floor.
     function test_a_small_sell_is_not_rounded_up() public {
         sell(100);
 
-        assertEq(lastSellAmount, 100);
+        assertEq(lastSellTokens, 100);
     }
 }
 `,
@@ -739,13 +809,13 @@ contract CanonicalBehaviorTest is MarketTestBase {
       const result = await forgeTest({ root: workspace.root, depth: "all" });
       expect(result.buildFailure).toBeNull();
       expect(result.failed).toBe(0);
-      expect(result.passed).toBe(7);
+      expect(result.passed).toBe(8);
 
       // Actually fuzzed, rather than executed once and counted as a pass.
       const fuzzed = result.outcomes.filter((outcome) => (outcome.runs ?? 0) > 1);
       expect(fuzzed.map((outcome) => outcome.name).sort()).toEqual([
         "testFuzz_buys_always_move_tokens(uint128)",
-        "testFuzz_sells_never_exceed_the_balance(uint128)",
+        "testFuzz_sells_exactly_what_the_buy_produced(uint128)",
       ]);
     },
     180_000,

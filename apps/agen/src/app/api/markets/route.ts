@@ -9,6 +9,7 @@
 import { NextResponse } from "next/server";
 
 import { modelStatus, startBuild } from "../../lib/builds";
+import { tooManyBuilds, visitorOf } from "../../lib/throttle";
 
 /** The compiler shells out to `forge` and writes to disk; neither survives the edge. */
 export const runtime = "nodejs";
@@ -67,6 +68,13 @@ export async function POST(request: Request): Promise<NextResponse> {
   const problem = problemWith(body);
   if (problem !== null) {
     return NextResponse.json({ error: problem }, { status: 400 });
+  }
+
+  // Checked after the body, so a malformed request costs nobody their allowance, and before
+  // the build, because the point is the spend it would start. See `throttle`.
+  const throttled = tooManyBuilds(visitorOf(request));
+  if (throttled !== null) {
+    return NextResponse.json({ error: throttled }, { status: 429 });
   }
 
   const started = await startBuild({

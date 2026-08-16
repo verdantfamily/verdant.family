@@ -1443,6 +1443,59 @@ export function wiredApi(): string {
     .trim();
 }
 
+/**
+ * A contract Agen ships that does nothing until the deployment tells it who to trust.
+ *
+ * `FeeVault.credit` reverts `NotHook` until `setHook` has been called, so a vault deployed
+ * without that wiring call is a vault no hook can ever pay into. That is not a matter of
+ * taste in the design — it is a property of a file nobody in a build may edit — and it has
+ * cost a whole build: a live SIMPLE launch declared a vault, wrote a hook that credited it,
+ * compiled, deployed, and then failed every behaviour test with `NotHook(hook)`, at test
+ * repair, where the only honest repair was to change the deployment.
+ *
+ * Read out of the sources rather than listed beside them, so a new prelude contract with a
+ * one-time wiring setter is covered the day it is written.
+ */
+export interface PreludeActivation {
+  readonly contractName: string;
+  /** The setter the deployment must call. */
+  readonly functionName: string;
+  /** The field it sets, so a complaint can say what stays empty without it. */
+  readonly field: string;
+  /** The members that revert until it has been called. */
+  readonly gated: readonly string[];
+}
+
+export function preludeActivations(): readonly PreludeActivation[] {
+  const activations: PreludeActivation[] = [];
+
+  for (const { path, content: file } of preludeSources()) {
+    const name = path.split("/").pop()?.replace(/\.sol$/, "") ?? "";
+    const body = bodyOf(file, name);
+    const functions = [...body.matchAll(/^ {4}function\s+(\w+)\(([^)]*)\)[^{;]*\{([^}]*)/gm)];
+
+    for (const [, functionName, parameters, block] of functions) {
+      const parameter = /^address\s+(\w+)$/.exec(parameters!.trim())?.[1];
+      // A setter that may only be called once is a deployment step; one that may be called
+      // again is the contract's own business and not the launch's to complete.
+      if (parameter === undefined || !/revert\s+AlreadyWired/.test(block!)) continue;
+
+      const field = new RegExp(`(\\w+)\\s*=\\s*${parameter};`).exec(block!)?.[1];
+      if (field === undefined) continue;
+
+      const gated = functions
+        .filter(([, , , guarded]) => new RegExp(`msg\\.sender\\s*!=\\s*${field}\\b`).test(guarded!))
+        .map(([, guarded]) => guarded!);
+
+      if (gated.length > 0) {
+        activations.push({ contractName: name, functionName: functionName!, field, gated });
+      }
+    }
+  }
+
+  return activations;
+}
+
 /** The names a generated market must not reuse, since the prelude already defines them. */
 export const PRELUDE_CONTRACTS: readonly string[] = [
   "AgenBaseHook",

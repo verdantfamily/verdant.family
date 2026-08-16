@@ -299,6 +299,16 @@ export function canonicalTestEnvironment(
     renderWiring(intent, wiringIndex, index),
   );
 
+  // The launch's own parties first, so a market that pays a wallet directly is covered
+  // whether or not it deploys anything to hold the money.
+  const accountExpressions = [
+    "FEE_RECEIVER",
+    "CREATOR",
+    ...ordered
+      .filter((component) => component.role !== "token" && component.role !== "hook")
+      .map((component) => `address(${fields.get(component.id)!})`),
+  ];
+
   const declarations = ordered.map(
     (component) => `    ${component.contractName} internal ${fields.get(component.id)!};`,
   );
@@ -440,9 +450,13 @@ abstract contract MarketTestBase is AgenTest {
         return amount;
     }
 
-    /// How many tokens the last sell actually moved. Equal to what was asked for,
-    /// except where the launch liquidity could not supply that many.
-    uint128 internal lastSellAmount;
+    /// The number of tokens the last sell put into the pool: its input, never its proceeds.
+    ///
+    /// Named for the unit because the ambiguity cost a launch. STREAK's suite read it as "the
+    /// output delivered to the trader after the hook fee", reconstructed a gross amount from
+    /// it, and asserted a 0.5% fee against a base that was never the base — on a market that
+    /// charges exactly 0.5%, which Agen's own core test proved in the same run.
+    uint128 internal lastSellTokens;
 
     PositionManager internal positionManager;
     AgenRouter internal agenRouter;
@@ -578,9 +592,9 @@ ${wiring.join("\n")}
      * market was charging its fee properly, on the dust the seller had been left with.
      *
      * So the shortfall is bought first, escalating because the price moves as it does.
-     * Selling more than the launch liquidity can ever supply is still capped by the
-     * balance, because there is no honest alternative; every attainable amount, which is
-     * every amount a market's rules are actually about, sells exactly.
+     * Every attainable amount, which is every amount a market's rules are actually about,
+     * sells exactly — and an unattainable one now fails here rather than selling something
+     * else, which is the last place this trap was still open. See _acquireForSale.
      */
     function sellAsWith(
         address trader,
@@ -589,13 +603,26 @@ ${wiring.join("\n")}
         bytes memory hookData
     ) internal returns (uint256 amountOut) {
         uint128 size = _acquireForSale(trader, amountIn);
-        lastSellAmount = size;
+        lastSellTokens = size;
 
         vm.prank(trader);
         return agenRouter.swap(key, false, size, minAmountOut, hookData);
     }
 
-    /// Buy until the seller holds what it is about to be asked to sell.
+    /**
+     * Buy until the seller holds what it is about to be asked to sell.
+     *
+     * A request this market cannot supply stops the test instead of selling a smaller amount.
+     * Silently shrinking it is how HRBR was lost — "1% fee on every sell, buys are free", a
+     * market that charged exactly that. Its suite fuzzed an unbounded uint128, asked to sell
+     * 1.9e36 tokens of a market that does not contain them, and asserted the fee was 1% of
+     * that. The fee it got was 1% of what could actually be sold, the assertion failed, and
+     * deep validation reported that the market breaks under search. The market was right; the
+     * trade never happened.
+     *
+     * The message names the fix, because it is the one a repair has to make: clamp the fuzzed
+     * size before trading, the way Agen's own core suite does.
+     */
     function _acquireForSale(address trader, uint128 wanted) private returns (uint128) {
         uint128 target = wanted == 0 ? 1 : wanted;
         uint128 spend = MIN_TRADE;
@@ -606,12 +633,46 @@ ${wiring.join("\n")}
             spend = spend > MAX_TRADE / 4 ? MAX_TRADE : spend * 4;
         }
 
-        uint128 held = uint128(tokenBalance(trader));
-        return target <= held ? target : held;
+        require(
+            target <= tokenBalance(trader),
+            "sell size exceeds what this market can supply; clamp the fuzzed amount and assert against lastSellTokens"
+        );
+
+        return target;
     }
 
     function tokenBalance(address account) internal view returns (uint256) {
         return IERC20(launchedMarket.token).balanceOf(account);
+    }
+
+    /**
+     * Every account a fee may legitimately end up in.
+     *
+     * This market's own contracts, minus the token and the hook, plus the parties the
+     * launch names. The hook is left out deliberately: a hook holding value is a finding
+     * rather than a destination, and a sum that included it would report a market that
+     * cannot pay anybody as one that collected correctly.
+     *
+     * Summing rather than naming one address is what makes a test of "the fee was taken"
+     * survive a change of architecture. Whether a sell fee lands in a vault, in an
+     * accounting contract or straight in the receiver's wallet is the design's business;
+     * that it left the trader and arrived somewhere this market controls is not.
+     */
+    function _marketAccounts() internal view returns (address[] memory accounts) {
+        accounts = new address[](${String(accountExpressions.length)});
+${accountExpressions.map((expression, at) => `        accounts[${String(at)}] = ${expression};`).join("\n")}
+    }
+
+    /// This market's total token holdings, across every account a fee can reach.
+    function _collectedTokens() internal view returns (uint256 total) {
+        address[] memory accounts = _marketAccounts();
+        for (uint256 at = 0; at < accounts.length; at++) total += tokenBalance(accounts[at]);
+    }
+
+    /// The same, in ether, for a market that takes its fee on the currency in.
+    function _collectedEther() internal view returns (uint256 total) {
+        address[] memory accounts = _marketAccounts();
+        for (uint256 at = 0; at < accounts.length; at++) total += accounts[at].balance;
     }
 
     function _approveRouter(address account) private {
@@ -691,8 +752,16 @@ the trader is funded for it. Outside that band the amount is moved to the neares
 so do not compute an expected result from an n you did not keep inside it; a buy of one
 wei is not a trade any market has an opinion about.
 
-Fuzz freely. Take a raw uint128 and pass it straight to buy or sell: a fuzzed amount is
-never zero, never dust, and never more than the launch can supply.
+Fuzz freely on the buy side. A raw uint128 can go straight into buy: it is never zero and
+never dust by the time it trades.
+
+A sell is different, because tokens have to exist before they can be sold. Sell what a buy
+produced — sell(uint128(buy(_tradeSize(size, MIN_TRADE, MAX_TRADE)))) — and compute what
+you expect from lastSellTokens, which is the number of tokens that sell put into the pool —
+its input, not the ether the trader received back. Asking to sell more
+than this market can supply stops the test rather than selling a smaller amount, so a raw
+uint128 passed straight to sell will fail: 3.4e38 tokens is more than any market holds, and
+nothing can be asserted about a fee on a trade that cannot happen.
 
 Never reject a fuzz input. Do not use vm.assume and do not skip a case with an early
 return — a fuzz test that throws inputs away either exhausts the fuzzer's rejection
@@ -876,7 +945,27 @@ function renderWiring(
   ];
 }
 
-const MANUAL_INFRASTRUCTURE: readonly { readonly pattern: RegExp; readonly message: string }[] = [
+/**
+ * One forbidden shape, and whether a revert expectation excuses it.
+ *
+ * `provable` marks the actions a test legitimately performs in order to prove it is not
+ * allowed to. A suite standing behind "the fee receiver is never the zero address" writes
+ * `vm.expectRevert(); hook.setFeeReceiver(address(0));` — that call is the proof the guard
+ * exists, and reading it as an attempt to wire the market by hand refused SIMPLE's entire
+ * suite twice over the only test covering that invariant. The same is true of the ordinary
+ * security test that a hook callback rejects every caller but the pool manager.
+ *
+ * Nothing else is excused. Deploying a PoolManager or mining an address is not made sensible
+ * by expecting it to revert, so those keep matching wherever they appear.
+ */
+interface ForbiddenShape {
+  readonly pattern: RegExp;
+  readonly message: string;
+  /** Whether the same call under a revert expectation is a proof rather than a misuse. */
+  readonly provable?: boolean;
+}
+
+const MANUAL_INFRASTRUCTURE: readonly ForbiddenShape[] = [
   { pattern: /\bfunction\s+setUp\s*\(/, message: "declares setUp instead of inheriting the canonical launch" },
   { pattern: /\bconstructor\s*\(/, message: "declares constructor setup in a generated test" },
   { pattern: /\bis\b[^{]*\bAgenTest\b/, message: "inherits AgenTest directly instead of MarketTestBase" },
@@ -912,6 +1001,7 @@ const MANUAL_INFRASTRUCTURE: readonly { readonly pattern: RegExp; readonly messa
     pattern:
       /\.\s*(?:set|bind)(?:Hook|Vault|PoolId|Controller|Accounting|Router|FeeReceiver|Owner|Treasury|Beneficiary|Recipient|Installer)\s*\(/,
     message: "wires a deployment component manually",
+    provable: true,
   },
   {
     pattern: /\bvm\s*\.\s*assume\s*\(/,
@@ -928,10 +1018,22 @@ const MANUAL_INFRASTRUCTURE: readonly { readonly pattern: RegExp; readonly messa
   },
   { pattern: /\b(?:makeAddr|makeAddrAndKey)\s*\(/, message: "constructs an actor address manually" },
   { pattern: /\b(?:Create2|HookMiner)\s*\./, message: "mines or predicts a deployment address manually" },
-  { pattern: /\.\s*approve\s*\(/, message: "manages a router allowance manually" },
-  { pattern: /\btoken\s*\.\s*transfer(?:From)?\s*\(/, message: "moves launch supply manually" },
-  { pattern: /\.\s*(?:transferOwnership|renounceOwnership)\s*\(/, message: "changes launch ownership manually" },
-  { pattern: /\.\s*(?:before|after)Swap\s*\(/, message: "calls a hook callback directly" },
+  { pattern: /\.\s*approve\s*\(/, message: "manages a router allowance manually", provable: true },
+  {
+    pattern: /\btoken\s*\.\s*transfer(?:From)?\s*\(/,
+    message: "moves launch supply manually",
+    provable: true,
+  },
+  {
+    pattern: /\.\s*(?:transferOwnership|renounceOwnership)\s*\(/,
+    message: "changes launch ownership manually",
+    provable: true,
+  },
+  {
+    pattern: /\.\s*(?:before|after)Swap\s*\(/,
+    message: "calls a hook callback directly",
+    provable: true,
+  },
   {
     pattern: /\b(?:factory|agenDeployer)\s*\.\s*(?:deployMarket|deploy|computeAddress|poolKeyFor)\s*\(/,
     message: "reconstructs canonical component deployment manually",
@@ -952,14 +1054,39 @@ export function manualTestInfrastructureProblems(
     problems.push("generated test sources contain no executable behavior test");
   }
 
+  for (const [path, found] of manualInfrastructureByFile(tests)) {
+    problems.push(...found.map((problem) => `${path}: ${problem}`));
+  }
+
+  return problems;
+}
+
+/**
+ * The same judgement, kept per file.
+ *
+ * Because one bad file in a suite of four is not a reason to lose a market. EMBR's suite was
+ * refused entirely — twice, once per retry — because a single security test declared its own
+ * `PoolKey` and poked the hook's callback directly. The other files were fine, Agen's core
+ * suite was authoritative, and the market itself was never in question.
+ *
+ * The suite-wide checks stay in `manualTestInfrastructureProblems`: "nothing here inherits
+ * MarketTestBase" is a property of the whole answer and has no file to blame.
+ */
+export function manualInfrastructureByFile(
+  tests: readonly GeneratedSource[],
+): ReadonlyMap<string, readonly string[]> {
+  const byFile = new Map<string, readonly string[]>();
+
   for (const test of tests) {
+    const problems: string[] = [];
     const normalizedPath = test.path.replaceAll("\\", "/").toLowerCase();
+
     if (
       normalizedPath === CANONICAL_TEST_BASE.toLowerCase() ||
       normalizedPath === CANONICAL_TEST_SMOKE.toLowerCase() ||
       normalizedPath === "test/agentest.sol"
     ) {
-      problems.push(`${test.path}: attempts to replace canonical test infrastructure`);
+      byFile.set(test.path, ["attempts to replace canonical test infrastructure"]);
       continue;
     }
 
@@ -967,20 +1094,52 @@ export function manualTestInfrastructureProblems(
     for (const header of code.matchAll(/\bcontract\s+([A-Za-z_]\w*)\s*([^{};]*)\{/g)) {
       const [, contractName, inheritance = ""] = header;
       if (contractName === "MarketTestBase") {
-        problems.push(`${test.path}: shadows the canonical MarketTestBase contract`);
+        problems.push("shadows the canonical MarketTestBase contract");
       } else if (!/\bis\b[^{};]*\bMarketTestBase\b/.test(inheritance)) {
-        problems.push(`${test.path}: contract ${contractName ?? "unknown"} does not inherit MarketTestBase`);
+        problems.push(`contract ${contractName ?? "unknown"} does not inherit MarketTestBase`);
       }
     }
 
+    // A call a revert expectation covers is an assertion about a guard, not an attempt to
+    // build infrastructure; see `ForbiddenShape.provable`.
+    const proving = withoutGuardedCalls(code);
     for (const forbidden of MANUAL_INFRASTRUCTURE) {
-      if (forbidden.pattern.test(code)) {
-        problems.push(`${test.path}: ${forbidden.message}`);
-      }
+      const subject = forbidden.provable === true ? proving : code;
+      if (forbidden.pattern.test(subject)) problems.push(forbidden.message);
+    }
+
+    if (problems.length > 0) byFile.set(test.path, problems);
+  }
+
+  return byFile;
+}
+
+/**
+ * The code with every call a revert expectation covers removed.
+ *
+ * Foundry's `vm.expectRevert` applies to the next call, so the line carrying the expectation
+ * and the line after it are what a negative test is made of. Removing both leaves the code a
+ * test would have if it only ever did what it is allowed to do, which is what the `provable`
+ * shapes are matched against.
+ */
+function withoutGuardedCalls(code: string): string {
+  const lines = code.split("\n");
+  const kept = [...lines];
+
+  for (const [index, line] of lines.entries()) {
+    if (!/\bvm\s*\.\s*expectRevert\b/.test(line)) continue;
+
+    // The expectation itself, which may carry the call on the same line.
+    kept[index] = "";
+
+    for (let next = index + 1; next < lines.length; next += 1) {
+      if (lines[next]?.trim() === "") continue;
+      kept[next] = "";
+      break;
     }
   }
 
-  return problems;
+  return kept.join("\n");
 }
 
 function solidityCode(source: string): string {

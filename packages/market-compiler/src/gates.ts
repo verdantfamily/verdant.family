@@ -39,6 +39,7 @@ import { realpath } from "node:fs/promises";
 import { join, relative } from "node:path";
 
 import { PRELUDE_CONTRACTS, PRELUDE_GUARDS } from "./prelude.js";
+import { LAYOUT } from "./workspace.js";
 
 /**
  * How much a finding matters.
@@ -244,6 +245,25 @@ export async function generatedSources(input: AnalysisInput): Promise<readonly S
     // because that is how you send ether to a wallet — and would push generators away
     // from the primitives towards writing their own, which is the opposite of the point.
     if (isPrelude(path)) continue;
+
+    /*
+     * Tests are not the market either.
+     *
+     * Everything read through here judges what will be deployed: the safety rules, the
+     * deployment agreement, the fee mode the pool must open at, whether the hook supports a
+     * dev buy. A test file is deployed nowhere, is called by nobody, and is gone when the
+     * build finishes, so it cannot be evidence for any of them — and it can be evidence
+     * against, because Agen writes tests too.
+     *
+     * That is not hypothetical. SIMPLE, TESTC and SHIFT were all refused in one benchmark
+     * run, every test passing, with "this market cannot be deployed safely: it uses inline
+     * assembly and nothing fuzzed it". None of the three markets contained a line of
+     * assembly. It was in `MarketTestBase`, where Agen's hook miner searches in scratch
+     * space because doing it in Solidity ran the fixture out of memory — so Agen's own
+     * fixture blocked three creators' launches for a property of their contracts, citing a
+     * file they never wrote.
+     */
+    if (path.startsWith(`${LAYOUT.tests}/`)) continue;
 
     // Each entry is a list of compilation units; the AST is the same either way.
     const first = Array.isArray(payload) ? payload[0] : payload;

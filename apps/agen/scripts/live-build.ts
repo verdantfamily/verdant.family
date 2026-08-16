@@ -22,6 +22,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import {
+  anthropicProvider,
   fileJobStore,
   materialAssumptions,
   openAiProvider,
@@ -57,7 +58,17 @@ const symbol = process.argv[4] ?? "CNPY";
 const model = process.env["AGEN_MODEL"] ?? "gpt-5";
 const fastModel = process.env["AGEN_MODEL_FAST"] ?? "gpt-5-mini";
 
+// The rung the repair ladder climbs to when the first vendor has answered the same way
+// twice. Absent without a key, which is the ordinary case and costs nothing.
+const escalationKey = process.env["ANTHROPIC_API_KEY"];
+const escalationModel = process.env["AGEN_ESCALATION_MODEL"] ?? "claude-sonnet-4-5";
+const escalation =
+  escalationKey === undefined || escalationKey.length === 0
+    ? null
+    : anthropicProvider({ apiKey: escalationKey, model: escalationModel });
+
 console.log(`model:  ${model} (fast: ${fastModel})`);
+console.log(`escalation: ${escalation === null ? "none configured" : escalationModel}`);
 console.log(`market: ${name} ($${symbol})`);
 console.log(`prompt: ${prompt.slice(0, 100)}…\n`);
 
@@ -72,6 +83,7 @@ const job = await runBuild(
   { prompt, name, symbol },
   {
     provider: openAiProvider({ apiKey, model, fastModel }),
+    ...(escalation === null ? {} : { escalationProvider: escalation }),
     store: fileJobStore(resolve(GENERATED_ROOT, "_jobs")),
     vendorRoot: resolve(REPO_ROOT, "packages/contracts/vendor"),
     generatedRoot: GENERATED_ROOT,

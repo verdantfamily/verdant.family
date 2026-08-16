@@ -142,7 +142,14 @@ export function apiFromAbi({
 
 // --- reading a source file, for the pass where nothing has compiled --------
 
-const CONTRACT = /(?:contract|interface|abstract\s+contract)\s+([A-Za-z_][A-Za-z0-9_]*)/g;
+/**
+ * A declaration, rather than the word "contract" in a sentence.
+ *
+ * Anchored to the start of a line because these files are heavily commented and prose about
+ * "a contract that must be told an address" otherwise parses as a contract named `that`,
+ * which then appears in a prompt as a real type a model may use.
+ */
+const CONTRACT = /^\s*(?:abstract\s+)?(?:contract|interface)\s+([A-Za-z_][A-Za-z0-9_]*)/gm;
 
 /**
  * A rough API read out of Solidity text.

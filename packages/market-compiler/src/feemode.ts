@@ -64,6 +64,21 @@ export interface FeeRequirement {
    * no manifest is produced and nothing reaches a launch screen.
    */
   readonly problem: string | null;
+  /**
+   * Whether the hook actually said this, or whether it said nothing and this is a default.
+   *
+   * The distinction is the difference between a fact and a guess, and conflating the two
+   * cost a live FLOWTEST replay. A hook that takes its fee as a `beforeSwap` delta has no
+   * opinion about `PoolKey.fee` at all — that is an ordinary, correct design, and the
+   * market's architecture had declared a fixed 3000 ppm pool for it. Because silence was
+   * reported with `problem: null` and the dynamic sentinel, the validator read it as "the
+   * hook requires a dynamic pool", contradicted the declaration, and rewrote the hook twice
+   * trying to satisfy a requirement nothing had made.
+   *
+   * So a requirement is only a requirement when it was read out of a guard. Where the hook
+   * is silent, the declared deployment decides — which is what declaring it was for.
+   */
+  readonly stated: boolean;
 }
 
 /** The callbacks a hook can refuse a pool in. Both spellings of each. */
@@ -74,12 +89,19 @@ const INITIALIZE_CALLBACKS: readonly string[] = [
   "_afterInitialize",
 ];
 
-/** A market whose hook says nothing opens dynamic, which is what it always did. */
+/**
+ * The answer when the hook has no opinion.
+ *
+ * Kept as the shape every early return spreads, and marked `stated: false` so nothing
+ * downstream mistakes it for something the contract said. `poolFee` is what turns it into
+ * the fee a pool is actually opened with.
+ */
 const DEFAULT: FeeRequirement = {
   mode: "dynamic",
   lpFee: DYNAMIC_FEE_FLAG,
-  reason: "The hook places no constraint on the pool's fee, so it sets the fee per swap.",
+  reason: "The hook places no constraint on the pool's fee.",
   problem: null,
+  stated: false,
 };
 
 /** What a guard says about one value of `key.fee`. */
@@ -126,6 +148,7 @@ export async function requiredFeeMode(
 
   const constraints: Constraint[] = [];
   const unreadable: string[] = [];
+  const constants = constantDeclarations(sources);
 
   for (const member of (hook["nodes"] as AstNode[] | undefined) ?? []) {
     if (member.nodeType !== "FunctionDefinition") continue;
@@ -136,7 +159,7 @@ export async function requiredFeeMode(
     const key = poolKeyParameter(member);
     if (key === null) continue;
 
-    read({ callback, body: member["body"], keyId: key, constraints, unreadable });
+    read({ callback, body: member["body"], keyId: key, constraints, unreadable, constants });
   }
 
   /**
@@ -155,15 +178,7 @@ export async function requiredFeeMode(
    * The genuinely unsatisfiable cases below stay refusals. No pool can be opened two
    * ways at once, and running the launch would only confirm it more slowly.
    */
-  if (unreadable.length > 0) {
-    return {
-      ...DEFAULT,
-      reason:
-        `Agen could not read the fee guard in ${input.hookContractName} ` +
-        `(${[...new Set(unreadable)].join("; ")}), so the pool was opened dynamic and the ` +
-        `canonical launch was run to confirm the hook accepts it.`,
-    };
-  }
+  const unread = [...new Set(unreadable)];
 
   const required = [...new Set(constraints.filter((c) => c.kind === "requires").map((c) => c.value))];
   const forbidden = new Set(constraints.filter((c) => c.kind === "forbids").map((c) => c.value));
@@ -205,6 +220,31 @@ export async function requiredFeeMode(
       lpFee,
       reason: `${input.hookContractName}.${where} requires ${describe(lpFee)}.`,
       problem: null,
+      stated: true,
+    };
+  }
+
+  /**
+   * Nothing was read, and something was mentioned.
+   *
+   * Answered by trying it rather than refused, which is the older decision and still the right
+   * one: the pool is opened with exactly this fee inside the canonical fixture, in Foundry,
+   * before anything reaches a chain, so an unreadable guard costs a build that fails loudly
+   * rather than a launch that fails expensively.
+   *
+   * What moved is where this sits. It used to run before the constraints were resolved, so a
+   * single mention the reader could not decompose discarded every requirement it had read
+   * perfectly well — and a hook naming the fee in its own error, `if (key.fee != BASE_FEE)
+   * revert InvalidPoolFee(key.fee)`, mentions it exactly once more than it states it. Both EMBR
+   * and SPEC were written that way and both read as hooks with no opinion about their own pool.
+   */
+  if (unread.length > 0) {
+    return {
+      ...DEFAULT,
+      reason:
+        `Agen could not read the fee guard in ${input.hookContractName} ` +
+        `(${unread.join("; ")}), so the pool was opened dynamic and the ` +
+        `canonical launch was run to confirm the hook accepts it.`,
     };
   }
 
@@ -220,6 +260,41 @@ export async function requiredFeeMode(
   }
 
   return DEFAULT;
+}
+
+/**
+ * The fee this market's pool is opened with, given what the hook requires and what the
+ * architecture declared.
+ *
+ * One of the two is authoritative and which one depends entirely on whether the hook spoke.
+ * A hook that guards `key.fee` has stated a fact about the only pool it will accept, and no
+ * declaration can overrule it — a pool opened otherwise reverts inside `initialize` with the
+ * hook's own error, after every contract has been deployed. A hook that says nothing has
+ * left the choice open, and the declared deployment is where that choice was made.
+ *
+ * What this replaces is the version with no third option, where silence resolved to the
+ * dynamic sentinel and then behaved like a requirement. Every market whose hook takes its
+ * fee as a swap delta — which is most of them — was therefore in permanent disagreement
+ * with any architecture that declared a fixed pool fee, and the disagreement named the hook
+ * as the thing to change.
+ */
+export function poolFee({
+  required,
+  declaredLpFee,
+}: {
+  readonly required: FeeRequirement;
+  /** `DeploymentSpecification.pool.lpFee`, as the architecture declared it. */
+  readonly declaredLpFee: number;
+}): FeeRequirement {
+  if (required.problem !== null || required.stated) return required;
+
+  return {
+    mode: modeOf(declaredLpFee),
+    lpFee: declaredLpFee,
+    reason: `${required.reason} The pool is opened with ${describe(declaredLpFee)}, as the deployment declares.`,
+    problem: null,
+    stated: false,
+  };
 }
 
 /**
@@ -254,12 +329,14 @@ function read({
   keyId,
   constraints,
   unreadable,
+  constants,
 }: {
   readonly callback: string;
   readonly body: unknown;
   readonly keyId: number;
   readonly constraints: Constraint[];
   readonly unreadable: string[];
+  readonly constants: ReadonlyMap<number, AstNode>;
 }): void {
   /** Every mention of `key.fee` in this callback, so unhandled ones can be counted. */
   const mentions = new Set<AstNode>();
@@ -274,14 +351,32 @@ function read({
   walk(body, (node) => {
     if (node.nodeType === "IfStatement" && reverts(node["trueBody"])) {
       // The condition must be false for the call to survive.
-      collect({ condition: node["condition"], mustHold: false, callback, keyId, constraints, claimed, unreadable });
+      collect({
+        condition: node["condition"],
+        mustHold: false,
+        callback,
+        keyId,
+        constraints,
+        claimed,
+        unreadable,
+        constants,
+      });
       return;
     }
 
     if (node.nodeType === "FunctionCall" && (node.expression as AstNode | undefined)?.name === "require") {
       const [condition] = (node["arguments"] as AstNode[] | undefined) ?? [];
       if (condition !== undefined) {
-        collect({ condition, mustHold: true, callback, keyId, constraints, claimed, unreadable });
+        collect({
+          condition,
+          mustHold: true,
+          callback,
+          keyId,
+          constraints,
+          claimed,
+          unreadable,
+          constants,
+        });
       }
     }
   });
@@ -314,6 +409,7 @@ function collect({
   constraints,
   claimed,
   unreadable,
+  constants,
 }: {
   readonly condition: unknown;
   readonly mustHold: boolean;
@@ -322,6 +418,7 @@ function collect({
   readonly constraints: Constraint[];
   readonly claimed: Set<AstNode>;
   readonly unreadable: string[];
+  readonly constants: ReadonlyMap<number, AstNode>;
 }): void {
   const node = condition as AstNode | undefined;
   if (node === undefined || node === null) return;
@@ -335,6 +432,7 @@ function collect({
       constraints,
       claimed,
       unreadable,
+      constants,
     });
     return;
   }
@@ -342,7 +440,7 @@ function collect({
   if (node.nodeType === "TupleExpression") {
     const [inner] = (node["components"] as AstNode[] | undefined) ?? [];
     if (inner !== undefined) {
-      collect({ condition: inner, mustHold, callback, keyId, constraints, claimed, unreadable });
+      collect({ condition: inner, mustHold, callback, keyId, constraints, claimed, unreadable, constants });
     }
     return;
   }
@@ -369,7 +467,7 @@ function collect({
     }
 
     for (const part of parts) {
-      collect({ condition: part, mustHold, callback, keyId, constraints, claimed, unreadable });
+      collect({ condition: part, mustHold, callback, keyId, constraints, claimed, unreadable, constants });
     }
     return;
   }
@@ -382,7 +480,7 @@ function collect({
     if (fee === null) return;
 
     const other = fee === left ? right : left;
-    const value = constantValue(other);
+    const value = constantValue(other, constants);
 
     claimed.add(fee);
 
@@ -437,12 +535,19 @@ function mentionsPoolFee(node: unknown, keyId: number): boolean {
  * without executing the contract, and a constant folded wrongly here is a pool opened at
  * a fee nobody chose.
  */
-function constantValue(node: unknown): number | null {
+function constantValue(
+  node: unknown,
+  constants: ReadonlyMap<number, AstNode> = new Map(),
+  depth = 0,
+): number | null {
   const shaped = node as AstNode | undefined;
   if (shaped === undefined || shaped === null) return null;
 
   if (shaped.nodeType === "Literal" && typeof shaped["value"] === "string") {
-    const parsed = Number(shaped["value"]);
+    // Underscores stripped, because solc keeps the literal as it was written and `3_000` is
+    // how a person writes three thousand parts per million. `Number("3_000")` is NaN, which
+    // this read as "unresolvable" and then as a hook with no opinion about its own pool.
+    const parsed = Number(shaped["value"].replaceAll("_", ""));
     return Number.isFinite(parsed) ? parsed : null;
   }
 
@@ -454,7 +559,76 @@ function constantValue(node: unknown): number | null {
     return DYNAMIC_FEE_FLAG;
   }
 
+  /*
+   * A named constant, followed to its declaration.
+   *
+   * `if (key.fee != 3000) revert` and `if (key.fee != BASE_LP_FEE_PPM) revert` are the same
+   * sentence, and only the first used to be legible. The second read as silence, so the pool
+   * opened at whatever the architecture had predicted — and EMBR and SPEC were both lost
+   * exactly there in one run, each hook stating its requirement plainly against a
+   * `uint24 public constant` set to a literal, each pool opened at zero, each launch reverting
+   * `InvalidPoolFee(0)` inside `initialize` with every contract already deployed.
+   *
+   * Which spelling a model reaches for is not a fact about the market, so a pipeline where it
+   * decides whether the market launches is a pipeline that flips on a coin.
+   *
+   * Bounded, because a constant may be defined in terms of another and a cycle is a compile
+   * error this does not need to rediscover.
+   */
+  if (depth < 4 && (shaped.nodeType === "Identifier" || shaped.nodeType === "MemberAccess")) {
+    const referenced = shaped["referencedDeclaration"];
+    const declaration = typeof referenced === "number" ? constants.get(referenced) : undefined;
+    if (declaration !== undefined) {
+      return constantValue(declaration["value"], constants, depth + 1);
+    }
+  }
+
+  // Arithmetic over things already resolvable, which is how a ceiling is usually written.
+  if (depth < 4 && shaped.nodeType === "BinaryOperation") {
+    const left = constantValue(shaped["leftExpression"], constants, depth + 1);
+    const right = constantValue(shaped["rightExpression"], constants, depth + 1);
+    if (left === null || right === null) return null;
+
+    switch (shaped["operator"]) {
+      case "+":
+        return left + right;
+      case "-":
+        return left - right;
+      case "*":
+        return left * right;
+      case "/":
+        return right === 0 ? null : Math.trunc(left / right);
+      default:
+        return null;
+    }
+  }
+
   return null;
+}
+
+/**
+ * Every compile-time constant in the build, by declaration id.
+ *
+ * Collected across all sources rather than the hook alone: a hook comparing against a constant
+ * its own library declares is as ordinary as one declaring it itself, and both are the same
+ * statement about the pool.
+ */
+function constantDeclarations(sources: readonly { readonly ast: AstNode }[]): Map<number, AstNode> {
+  const found = new Map<number, AstNode>();
+
+  for (const source of sources) {
+    walk(source.ast, (node) => {
+      if (node.nodeType !== "VariableDeclaration") return;
+      if (node["mutability"] !== "constant" && node["constant"] !== true) return;
+
+      const id = node["id"];
+      if (typeof id === "number" && node["value"] !== undefined && node["value"] !== null) {
+        found.set(id, node);
+      }
+    });
+  }
+
+  return found;
 }
 
 /** Whether taking this branch ends the call. */

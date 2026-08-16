@@ -34,6 +34,7 @@ import type { Address } from "viem";
 
 import { jobStore, publicView } from "./builds";
 import { INSTANT_ADDRESSES } from "./chain";
+import { isDelisted } from "./delisted";
 import { fetchMarketStats, type CandleSeries, type MarketStats } from "./feed";
 import { fetchInstantCandles, fetchInstantStats, fetchInstantTrades } from "./instant-feed";
 import { readInstantMarket, readInstantMarkets, type InstantMarket } from "./instant-markets";
@@ -672,6 +673,11 @@ export function instantSource(): MarketSource {
  * that will not answer both degrade to an empty list, because a catalogue missing half of
  * itself is better than a catalogue that 500s — and on a deployment with no Instant
  * contracts configured, the Instant half is *always* empty and that is not an error.
+ *
+ * Delisting is applied here rather than in either half, so that `instantSource` stays a
+ * plain reading of the registry and the editorial decision lives at the seam the website
+ * looks through. A delisted market reads as one that does not exist: it is absent from
+ * every shelf and its page is a 404.
  */
 export function marketSource(): MarketSource {
   const builds = buildStoreSource();
@@ -684,16 +690,22 @@ export function marketSource(): MarketSource {
         instant.list().catch(() => [] as readonly MarketSummary[]),
       ]);
 
-      return [...fromChain, ...fromBuilds].sort((left, right) => right.createdAt - left.createdAt);
+      return [...fromChain, ...fromBuilds]
+        .filter((market) => !isDelisted(market.id))
+        .sort((left, right) => right.createdAt - left.createdAt);
     },
 
     read: async (id) =>
-      looksLikeAddress(id)
-        ? await instant.read(id).catch(() => null)
-        : await builds.read(id).catch(() => null),
+      isDelisted(id)
+        ? null
+        : looksLikeAddress(id)
+          ? await instant.read(id).catch(() => null)
+          : await builds.read(id).catch(() => null),
 
-    trades: async (id) => (looksLikeAddress(id) ? instant.trades(id) : builds.trades(id)),
-    state: async (id) => (looksLikeAddress(id) ? instant.state(id) : builds.state(id)),
+    trades: async (id) =>
+      isDelisted(id) ? [] : looksLikeAddress(id) ? instant.trades(id) : builds.trades(id),
+    state: async (id) =>
+      isDelisted(id) ? [] : looksLikeAddress(id) ? instant.state(id) : builds.state(id),
   };
 }
 

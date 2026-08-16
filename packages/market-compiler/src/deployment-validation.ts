@@ -88,6 +88,7 @@ export async function deploymentInconsistencies(
     input.deployment.components.map((component) => [component.contractName, component]),
   );
 
+  found.push(...installersTakenFromTheDeployer({ sources, deployment: input.deployment }));
   found.push(...unwiredInstallerSetters({ sources, deployment: input.deployment }));
   found.push(...unmadeForwardingCalls({ sources, deployment: input.deployment }));
   found.push(...unusedComponentDependencies({ sources, deployment: input.deployment }));
@@ -95,6 +96,74 @@ export async function deploymentInconsistencies(
   found.push(...poolDisagreements(input));
   found.push(...permissionDisagreements({ sources, deployment: input.deployment }));
   found.push(...undeclaredDeltaReturns({ sources, deployment: input.deployment }));
+
+  return found;
+}
+
+/**
+ * A component that decided for itself who would wire it, and got it wrong.
+ *
+ * `AgenWired(msg.sender)` reads as "whoever deploys me may wire me", which is how ownership is
+ * usually written and is wrong here for a reason nothing in the file shows: components are
+ * created by `AgenDeployer` through CREATE2, so `msg.sender` in a constructor is the deployer.
+ * The factory then makes every wiring call itself and is refused by the contract it just
+ * deployed. POT died exactly there — `constructor() AgenWired(msg.sender) {}` on its vault,
+ * `WiringFailed(1, NotInstaller(...))` inside `setUp`, after everything had compiled.
+ *
+ * Caught here because the alternative is a revert inside a launch, which is where it used to be
+ * caught: the contract is one argument away from correct, the deployment record already knows
+ * which address the launch will wire from, and a repair aimed at this component fixes it. The
+ * installer has to arrive as a declared constructor argument, so that the record and the
+ * contract agree on it in advance rather than at the first call.
+ */
+export function installersTakenFromTheDeployer({
+  sources,
+  deployment,
+}: {
+  readonly sources: readonly { readonly ast: AstNode }[];
+  readonly deployment: DeploymentSpecification;
+}): readonly DeploymentInconsistency[] {
+  const components = new Map(
+    deployment.components.map((component) => [component.contractName, component]),
+  );
+  const found: DeploymentInconsistency[] = [];
+
+  for (const source of sources) {
+    walk(source.ast, (node) => {
+      if (node.nodeType !== "ContractDefinition" || typeof node.name !== "string") return;
+      const contractName = node.name;
+      const component = components.get(contractName);
+      if (component === undefined) return;
+
+      for (const member of (node["nodes"] as AstNode[] | undefined) ?? []) {
+        if (member.nodeType !== "FunctionDefinition" || member["kind"] !== "constructor") continue;
+
+        for (const invocation of (member["modifiers"] as AstNode[] | undefined) ?? []) {
+          const named = invocation["modifierName"] as AstNode | undefined;
+          const base = named?.name ?? (named?.["pathNode"] as AstNode | undefined)?.name;
+          if (base !== "AgenWired") continue;
+
+          const passed = ((invocation["arguments"] as AstNode[] | undefined) ?? [])[0];
+          const fromSender =
+            passed?.nodeType === "MemberAccess" &&
+            passed["memberName"] === "sender" &&
+            (passed["expression"] as AstNode | undefined)?.name === "msg";
+
+          if (!fromSender) continue;
+
+          found.push({
+            contractName,
+            detail:
+              `${contractName} passes msg.sender to AgenWired, which makes AgenDeployer its ` +
+              `installer: components are created through CREATE2 by the deployer, so a ` +
+              `constructor never sees the factory. The factory makes every wiring call itself ` +
+              `and would be refused by NotInstaller. Take the installer as a constructor ` +
+              `argument and declare it INFRA:INSTALLER in the deployment.`,
+          });
+        }
+      }
+    });
+  }
 
   return found;
 }

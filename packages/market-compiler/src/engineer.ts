@@ -3247,7 +3247,10 @@ export async function generateComponent(
 
   return {
     ...output,
-    value: { path: `contracts/${component.contractName}.sol`, content: `${content}\n` },
+    value: normalisePinnedV4Api({
+      path: `contracts/${component.contractName}.sol`,
+      content: `${content}\n`,
+    }),
   };
 }
 
@@ -3485,9 +3488,9 @@ export async function generateTests(
   // Anything the model returned at a path Agen owns is dropped rather than trusted. It was
   // told the core suite is read-only; a copy of it coming back would otherwise overwrite the
   // one test file in the project that is not up for negotiation.
-  const returned = asSources(output.value, "test").filter(
-    (file) => !core.some((mine) => mine.path === file.path),
-  );
+  const returned = asSources(output.value, "test")
+    .filter((file) => !core.some((mine) => mine.path === file.path))
+    .map((file) => normalisePinnedV4Api(file));
   /*
    * A claim names a test; how it spells it is not the point.
    *
@@ -3732,11 +3735,13 @@ interface RawRepair {
  * not a repair decision about market behavior.
  */
 export function normalisePinnedV4Api(source: GeneratedSource): GeneratedSource {
+  const withImports = { ...source, content: normaliseVendoredImports(source.content) };
+
   const wrong = "BeforeSwapDeltaLibrary.toBeforeSwapDelta";
-  if (!source.content.includes(wrong)) return source;
+  if (!withImports.content.includes(wrong)) return withImports;
 
   let foundImport = false;
-  const content = source.content
+  const content = withImports.content
     .replace(
       /import\s*\{([^}]*)\}\s*from\s*(["'])([^"']*v4-core\/src\/types\/BeforeSwapDelta\.sol)\2\s*;/g,
       (statement: string, names: string, quote: string, path: string) => {
@@ -3747,7 +3752,29 @@ export function normalisePinnedV4Api(source: GeneratedSource): GeneratedSource {
     )
     .replaceAll(wrong, "toBeforeSwapDelta");
 
-  return foundImport ? { ...source, content } : source;
+  return foundImport ? { ...withImports, content } : withImports;
+}
+
+/**
+ * Put the `src/` back into an import of the vendored Uniswap.
+ *
+ * The remapping points `v4-core/` at the repository, and every file in it lives under that
+ * repository's `src/`. So `v4-core/src/types/PoolKey.sol` resolves and `v4-core/types/PoolKey.sol`
+ * does not, and which one gets written is a coin flip: the prelude spells it correctly on every
+ * line a model can see, and a SIMPLE build still lost its whole test budget to five imports
+ * missing one path segment, with each round's diagnosis arriving further from the cause — the
+ * last one concluded the compiler was searching the wrong directory.
+ *
+ * Mechanical, and therefore Agen's job rather than a model's. There is exactly one file the
+ * short path could mean, the segment is not a decision about the market, and nothing else in a
+ * generated file is allowed to be rewritten here.
+ */
+function normaliseVendoredImports(content: string): string {
+  return content.replace(
+    /(["'])(v4-core|v4-periphery)\/(?!src\/|lib\/)([^"']+\.sol)\1/g,
+    (_statement: string, quote: string, packageName: string, rest: string) =>
+      `${quote}${packageName}/src/${rest}${quote}`,
+  );
 }
 
 /**
@@ -4087,11 +4114,23 @@ export async function repairTests(
     editableContracts = true,
     placement = [],
     core = [],
+    fixture = null,
     timeoutMs = STAGE_TIMEOUTS.repair,
   }: {
     readonly specification: MarketSpecification;
     readonly sources: readonly GeneratedSource[];
     readonly tests: readonly GeneratedSource[];
+    /**
+     * What the fixture a test inherits from actually declares.
+     *
+     * The generation stage is given this and the repair stage was not, which is how a test
+     * naming a field that does not exist became four rounds of guessing. HRBR asked for
+     * `vault`, then `components.vault`, then `vault.credited()`, against a base declaring
+     * `component_feeVault`; every round diagnosed the problem correctly — a name that is not
+     * there — and none of them could see the name that is. Solidity's "Undeclared identifier"
+     * does not list the alternatives, so nothing in the prompt did either.
+     */
+    readonly fixture?: string | null;
     /**
      * How the market under test was deployed. See `describePlacement`.
      *
@@ -4171,6 +4210,9 @@ export async function repairTests(
       // this call spends most of its reasoning on. Given first, so the rest is read in
       // the light of it.
       ...(remedy === null ? [] : ["", remedy]),
+      ...(fixture === null
+        ? []
+        : ["", "What the base your tests inherit declares, in full:", fixture]),
       "",
       // The rules and invariants rather than the whole document. This call decides
       // whether the contract or the test is wrong, and that is answered by what the

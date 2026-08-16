@@ -1436,11 +1436,28 @@ function bodyOf(file: string, name: string): string {
  * never existed.
  */
 export function wiredApi(): string {
-  return WIRED.split("\n")
+  const quoted = WIRED.split("\n")
     .filter((line) => !line.trim().startsWith("///") && !line.trim().startsWith("//"))
     .join("\n")
     .replace(/^\s*\n/gm, "")
     .trim();
+
+  /*
+   * The one thing the quoted source cannot show.
+   *
+   * `AgenWired(msg.sender)` is how ownership is written everywhere else and is always wrong
+   * here: components are created by AgenDeployer through CREATE2, so a constructor's
+   * `msg.sender` is the deployer, while every wiring call is made by the factory. POT wrote it
+   * and lost the market to `NotInstaller` inside its launch, with nothing in the base's own
+   * text to warn it.
+   */
+  return (
+    `${quoted}\n\n` +
+    "The installer is the factory, and a constructor cannot discover it: your contract is " +
+    "created by AgenDeployer with CREATE2, so msg.sender in your constructor is the deployer " +
+    "and never the factory. Take the installer as a constructor parameter and pass that " +
+    "parameter to AgenWired. Never pass msg.sender, address(this) or a literal."
+  );
 }
 
 /**

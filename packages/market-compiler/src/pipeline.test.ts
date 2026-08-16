@@ -946,6 +946,65 @@ describe("the test repair loop", () => {
   });
 
   /**
+   * A reserved keyword must not cost the same as a defect.
+   *
+   * TESTC had four rounds and spent two of them on nothing: a local variable named `after`,
+   * then a helper called with two arguments instead of three. The third round reached the real
+   * problem — a hook accruing a fee it never credited to the vault — diagnosed it correctly,
+   * mistyped the fix, and the market ended holding a compiler error, reported as a test suite
+   * that would not compile about a file that is not a test.
+   *
+   * A suite that does not compile has not run, so a round spent on it has said nothing about
+   * the market and cannot be charged to the budget for what the market does. Here two compile
+   * rounds and two behaviour rounds are five answers in total, which the old single budget cut
+   * off one short of the fix.
+   */
+  it("does not spend the behaviour budget on a suite that never compiled", async () => {
+    const otherwiseUncompilable = GOOD_TESTS.replace(
+      "assertEq(hook.consecutiveBuys(), 0);",
+      "assertEq(hook.noSuchAccessor(), 0);",
+    );
+    const failingDifferently = GOOD_TESTS.replace(
+      "assertEq(hook.consecutiveBuys(), 0);",
+      'assertEq(uint256(1), uint256(2), "the second wrong answer");',
+    );
+
+    const repair = (content: string) => ({
+      diagnosis: "tried again",
+      files: [{ path: "test/StreakHook.t.sol", content }],
+      giveUp: false,
+    });
+
+    const { options, provider } = pipeline([
+      ...interpretationAnswers(),
+      matchAnswer(),
+      planAnswer(),
+      sources(GOOD_HOOK),
+      tests(UNCOMPILABLE_TESTS),
+      // Two rounds that only get it to compile, each failing in its own way so the stall
+      // check has nothing to recognise.
+      repair(otherwiseUncompilable),
+      repair(FAILING_TESTS),
+      // Two rounds on what the market does, the second of which fixes it.
+      repair(failingDifferently),
+      repair(GOOD_TESTS),
+    ]);
+
+    const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
+
+    expect(job.failure).toBeNull();
+    expect(job.stage).toBe(Stage.DeploymentReady);
+
+    // Four rounds where a single budget of three would have stopped one short of the fix,
+    // and the two kinds are visible apart: getting it to compile is not the same work as
+    // deciding what the market does.
+    const gettingItToCompile = provider.calls.filter((call) => call.stage === "compilation_repair");
+    const whatTheMarketDoes = provider.calls.filter((call) => call.stage === "test_repair");
+    expect(gettingItToCompile).toHaveLength(2);
+    expect(whatTheMarketDoes).toHaveLength(2);
+  }, 360_000);
+
+  /**
    * A generated test broken in a way Agen has seen before is dropped, not argued with.
    *
    * Only with evidence: the playbook has to recognise the failure and attribute it to the

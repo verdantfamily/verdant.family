@@ -157,6 +157,29 @@ describe("what a test repair is shown", () => {
 
     expect(provider.seen[0]!.instructions).toContain("Do not edit it again");
   });
+
+  /**
+   * A name that is not there, answered with the names that are.
+   *
+   * HRBR spent four rounds asking for `vault`, `components.vault` and `vault.credited()` against
+   * a fixture declaring `component_feeVault`. Every diagnosis was right about the problem, and
+   * none of them could see the answer: the fixture is Agen's, is not editable, and was not in
+   * the prompt, while Solidity's "Undeclared identifier" never lists the alternatives.
+   */
+  it("says what the fixture declares, so a missing name has somewhere to be found", async () => {
+    const provider = recorder();
+
+    await repairTests(provider, {
+      specification: SPECIFICATION,
+      sources: SOURCES,
+      tests: TESTS,
+      failures: FAILURES,
+      attempt: 1,
+      fixture: "Available market state:\n  key, launchedMarket\n  component_feeVault: FeeVault",
+    });
+
+    expect(provider.seen[0]!.input).toContain("component_feeVault: FeeVault");
+  });
 });
 
 describe("pinned v4 API normalization", () => {
@@ -176,6 +199,39 @@ contract FeeHook {
     );
     expect(corrected.content).toContain("return toBeforeSwapDelta(1, 0);");
     expect(corrected.content).not.toContain("BeforeSwapDeltaLibrary.toBeforeSwapDelta");
+  });
+
+  /**
+   * The segment that decides whether a market compiles.
+   *
+   * `v4-core/` is remapped to the vendored repository and everything in it lives under that
+   * repository's `src/`, so the short path resolves to nothing. A SIMPLE build spent its entire
+   * test budget on five imports missing it, each round's diagnosis landing further from the
+   * cause — the last concluded the compiler was searching the wrong directory.
+   */
+  it("puts the src segment back into a vendored import", () => {
+    const corrected = normalisePinnedV4Api({
+      path: "contracts/FeeHook.sol",
+      content: `import {PoolKey} from "v4-core/types/PoolKey.sol";
+import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+import {IPositionManager} from "v4-periphery/interfaces/IPositionManager.sol";
+contract FeeHook {}`,
+    });
+
+    expect(corrected.content).toContain('from "v4-core/src/types/PoolKey.sol"');
+    expect(corrected.content).toContain('from "v4-core/src/interfaces/IPoolManager.sol"');
+    expect(corrected.content).toContain('from "v4-periphery/src/interfaces/IPositionManager.sol"');
+  });
+
+  it("leaves an import that already resolves alone", () => {
+    const already = `import {PoolKey} from "v4-core/src/types/PoolKey.sol";
+import {MarketTestBase} from "./MarketTestBase.sol";
+import {Test} from "forge-std/Test.sol";
+contract FeeHook {}`;
+
+    expect(normalisePinnedV4Api({ path: "contracts/FeeHook.sol", content: already }).content).toBe(
+      already,
+    );
   });
 });
 

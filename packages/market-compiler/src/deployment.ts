@@ -259,6 +259,24 @@ export function materializeDeployment({
  * Wiring is checked the same way: a declared call must exist, take one argument, and take
  * it in the type the reference resolves to.
  */
+/**
+ * Whether two names for the same argument are the same name.
+ *
+ * Modulo the underscore, which in Solidity is punctuation rather than meaning: `token_` is the
+ * ordinary way to write a constructor parameter that would otherwise shadow the state variable
+ * it initialises, and `_token` is the same habit with the same reason. CNPY was refused outright
+ * because its record said `token` and its constructor said `token_` — a market lost, after every
+ * contract compiled, over a character a convention put there.
+ *
+ * A genuine disagreement still counts. A record calling the second argument `feeReceiver` when
+ * the contract calls it `treasury` is a document that misleads whoever reads it next, which is
+ * the whole reason this check exists.
+ */
+function sameName(actual: string | undefined, declared: string): boolean {
+  const plain = (name: string): string => name.replaceAll("_", "").toLowerCase();
+  return plain(actual ?? "") === plain(declared);
+}
+
 export function deploymentParityProblems({
   spec,
   artifacts,
@@ -310,7 +328,7 @@ export function deploymentParityProblems({
         continue;
       }
 
-      if (input.name !== declared.name) {
+      if (!sameName(input.name, declared.name)) {
         problems.push(
           `${component.contractName}: argument ${String(position + 1)} is declared ` +
             `\`${declared.name}\` and the contract calls it \`${input.name ?? "(unnamed)"}\`. ` +

@@ -1867,9 +1867,7 @@ export async function runBuild(
         });
       }
 
-      const contractRepairs = repair.files.filter((file) =>
-        file.path.startsWith(`${LAYOUT.contracts}/`),
-      );
+      const contractRepairs = repair.files.filter((file) => isModelContract(file.path));
       sources = mergeSources(sources, contractRepairs);
       await workspace.write(contractRepairs);
       job = { ...job, sources };
@@ -2017,6 +2015,7 @@ export async function runBuild(
           failures: [],
           attempt: 0,
           remedy: apiBrief(missing),
+          fixture: testEnvironment.guidance,
         });
 
         diagnostics = withRepair(diagnostics, {
@@ -2442,6 +2441,9 @@ export async function runBuild(
                 attempt: round,
                 remedy: remedyBrief(recogniseAll(tested.buildFailure)),
                 tactic,
+                // An undeclared identifier in a test is a name the fixture does not have,
+                // and Solidity does not say which names it does. See `repairTests.fixture`.
+                notes: [testEnvironment.guidance],
               })
             : await repairTests(provider, {
                 specification,
@@ -2454,6 +2456,7 @@ export async function runBuild(
                 editableContracts,
                 placement: testEnvironment.placement,
                 core: [core.source],
+                fixture: testEnvironment.guidance,
               });
         repair = output.value;
         job = remember(job, Stage.TestRepair, output);
@@ -2493,7 +2496,7 @@ export async function runBuild(
       }
 
       const contractRepairs = editableContracts
-        ? repair.files.filter((file) => file.path.startsWith(`${LAYOUT.contracts}/`))
+        ? repair.files.filter((file) => isModelContract(file.path))
         : [];
       const testRepairs = repair.files.filter((file) => isModelTest(file.path));
       const nextTests = mergeSources(tests, testRepairs);
@@ -2689,6 +2692,86 @@ export async function runBuild(
         deep = await runSuite({ depth: "deep" });
         diagnostics = withTestAttempt(diagnostics, testAttemptFrom(deep, testAttempt + 1, now()));
         await flushDiagnostics();
+      }
+    }
+
+    /*
+     * One round to answer the search, where the failure is not a recognised test fault.
+     *
+     * Every other stage that runs tests gets to say something back. This one used to end the
+     * build outright: PULSE was refused on a single model-authored invariant asserting that its
+     * streak equalled the number of buys, which is not what its own specification says happens
+     * after ten, and no round existed in which anyone could say so. Either the contract is
+     * wrong or the assertion is, and both are worth one attempt to establish.
+     *
+     * Once, and re-searched at the same depth afterwards, so nothing is accepted on the strength
+     * of the shallower run that preceded it. The repair is bound as everywhere else — an
+     * invariant may not lose its test, the core suite is read-only, and a market that ships
+     * because its proof was relaxed is the worst outcome available here.
+     */
+    if (!deep.ok && deep.buildFailure === null && deep.outcomes.length > 0) {
+      const searched = deep.outcomes.filter((outcome) => !outcome.passed);
+
+      job = await save(beginStage(job, Stage.TestRepair, now()));
+
+      try {
+        const output = await repairTests(provider, {
+          specification,
+          sources,
+          tests,
+          failures: searched,
+          attempt: round + 1,
+          remedy: remedyBrief(recogniseAll([], searched)),
+          // The contracts are frozen, and this is the reason the round is narrow. The creator
+          // has already been shown this market; a contract quietly rewritten now is a launch of
+          // something they never reviewed. So either the assertion was wrong about the
+          // specification, or the market really does break under search and must not ship.
+          editableContracts: false,
+          placement: testEnvironment.placement,
+          core: [core.source],
+          fixture: testEnvironment.guidance,
+        });
+
+        job = remember(job, Stage.TestRepair, output);
+
+        const testRepairs = output.value.files.filter((file) => isModelTest(file.path));
+
+        if (!output.value.giveUp && testRepairs.length > 0) {
+          tests = mergeSources(tests, testRepairs);
+          await workspace.write(testRepairs);
+          job = { ...job, tests };
+
+          diagnostics = withRepair(diagnostics, {
+            attempt: round + 1,
+            at: now(),
+            kind: "test",
+            diagnosis: output.value.diagnosis,
+            files: testRepairs.map((file) => file.path),
+            gaveUp: false,
+            category: FailureCategory.TestFailure,
+            blame: Blame.Test,
+          });
+          await flushDiagnostics();
+
+          job = await save(
+            endStage(job, { status: "succeeded", detail: output.value.diagnosis, now: now() }),
+          );
+          job = await save(beginStage(job, Stage.DeepValidation, now()));
+          deep = await runSuite({ depth: "deep" });
+          diagnostics = withTestAttempt(diagnostics, testAttemptFrom(deep, round + 1, now()));
+          await flushDiagnostics();
+        } else {
+          job = await save(
+            endStage(job, {
+              status: "failed",
+              detail: output.value.diagnosis,
+              now: now(),
+            }),
+          );
+          job = await save(beginStage(job, Stage.DeepValidation, now()));
+        }
+      } catch (error) {
+        return await fail(failureFor(error, Stage.DeepValidation));
       }
     }
 
@@ -3022,9 +3105,7 @@ export async function runBuild(
 
       if (repair.giveUp) break;
 
-      const contractRepairs = repair.files.filter((file) =>
-        file.path.startsWith(`${LAYOUT.contracts}/`),
-      );
+      const contractRepairs = repair.files.filter((file) => isModelContract(file.path));
       sources = mergeSources(sources, contractRepairs);
       await workspace.write(contractRepairs);
       job = { ...job, sources };
@@ -3333,6 +3414,25 @@ function isModelTest(path: string): boolean {
     path !== CANONICAL_TEST_BASE &&
     path !== CANONICAL_TEST_SMOKE &&
     path !== CORE_TEST_PATH
+  );
+}
+
+/**
+ * The same rule for contracts: a market's own, and not Agen's.
+ *
+ * `contracts/` holds both. The generated components belong to the build and a repair may
+ * rewrite them; the prelude — `FeeVault`, `AgenBaseHook` and the rest — is Agen's, is fixed,
+ * and is what every generated hook inherits from. Every repair prompt says so, and until now
+ * nothing enforced it: an EMBR build was lost when a repair rewrote `FeeVault.sol` and left it
+ * not compiling, which is a file no round afterwards was even allowed to look at.
+ *
+ * Dropped silently rather than refused. A model returning a file it should not have is the
+ * ordinary cost of asking for whole files back, and the accompanying edits are usually right.
+ */
+function isModelContract(path: string): boolean {
+  return (
+    path.startsWith(`${LAYOUT.contracts}/`) &&
+    !PRELUDE_CONTRACTS.some((name) => path === `${LAYOUT.contracts}/${name}.sol`)
   );
 }
 

@@ -424,6 +424,26 @@ describe("the contracts against the deployment they were written to", () => {
     expect(found.join("\n")).toMatch(/declared `recipient` and the contract calls it `mintTo`/);
   });
 
+  /**
+   * The underscore is punctuation, not meaning.
+   *
+   * `recipient_` is the ordinary way to write a constructor parameter that would otherwise
+   * shadow the state variable it initialises. CNPY was refused outright for exactly this — its
+   * record said `token`, its constructor said `token_` — after every contract had compiled and
+   * the deployment graph had been proven materializable.
+   */
+  it.each(["recipient_", "_recipient"])("accepts %s as the name the record calls recipient", (name) => {
+    expect(
+      deploymentParityProblems({
+        spec: deployment(),
+        artifacts: [
+          artifact("PulseToken", [constructorOf([{ name, type: "address" }])]),
+          ...artifacts().slice(1),
+        ],
+      }),
+    ).toEqual([]);
+  });
+
   it("catches a wiring call the contract does not have", () => {
     const wired = deployment({
       components: deployment().components.map((component) =>

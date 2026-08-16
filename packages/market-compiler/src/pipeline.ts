@@ -78,7 +78,7 @@ import { recogniseAll, remedyBrief } from "./playbook.js";
 import { classify, FailureCategory, tacticFor, Tactic } from "./recovery.js";
 import { Blame } from "./playbook.js";
 import { explainRevert, selectorsOf } from "./revert.js";
-import { apiBrief, unknownMembers } from "./testapi.js";
+import { apiBrief, receiverBrief, unknownMembers, unknownReceivers } from "./testapi.js";
 import {
   CANONICAL_TEST_BASE,
   CANONICAL_TEST_SMOKE,
@@ -2003,8 +2003,16 @@ export async function runBuild(
     // repair is handed the actual members and has nothing left to guess at. One pass,
     // before the loop, so a wrong reading costs a single call and never recurs.
     const missing = unknownMembers([...preludeSources(), ...sources, testEnvironment.source], tests);
+    // And the same question one level up: does it call on something that is not there at all?
+    // A member that does not exist is a name misremembered; a receiver that does not exist is a
+    // market the test never reached. See `unknownReceivers`.
+    const strangers = unknownReceivers({ tests, fixture: testEnvironment.source });
+    const brief = [
+      ...(missing.length === 0 ? [] : [apiBrief(missing)]),
+      ...(strangers.length === 0 ? [] : [receiverBrief(strangers)]),
+    ].join("\n\n");
 
-    if (missing.length > 0) {
+    if (missing.length > 0 || strangers.length > 0) {
       job = await save(beginStage(job, Stage.TestRepair, now()));
 
       try {
@@ -2014,7 +2022,7 @@ export async function runBuild(
           tests,
           failures: [],
           attempt: 0,
-          remedy: apiBrief(missing),
+          remedy: brief,
           fixture: testEnvironment.guidance,
         });
 
@@ -2050,7 +2058,7 @@ export async function runBuild(
       }
 
       job = await save(
-        endStage({ ...job, tests }, { status: "succeeded", detail: apiBrief(missing), now: now() }),
+        endStage({ ...job, tests }, { status: "succeeded", detail: brief, now: now() }),
       );
     }
 

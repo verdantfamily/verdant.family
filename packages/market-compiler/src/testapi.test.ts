@@ -9,7 +9,13 @@
 
 import { describe, expect, it } from "vitest";
 
-import { apiBrief, apiIndex, unknownMembers } from "./testapi";
+import {
+  apiBrief,
+  apiIndex,
+  receiverBrief,
+  unknownMembers,
+  unknownReceivers,
+} from "./testapi";
 import { preludeApi, preludeSources, publicGetters } from "./prelude";
 import { recognise, Blame } from "./playbook";
 import { classify, FailureCategory } from "./recovery";
@@ -258,5 +264,82 @@ describe("what the reader refuses to guess about", () => {
 
     expect(index.get("A")?.bases).toEqual(["B", "C"]);
     expect(index.get("A")?.own.has("f")).toBe(true);
+  });
+});
+
+/**
+ * A name a test reaches the market through that the fixture never declared.
+ *
+ * Three of one run's fifteen markets died here, all with correct contracts: HRBR asked for
+ * `vault`, then `components.vault`, then `vault.credited()`, against a fixture declaring
+ * `component_feeVault`. Solidity says "Undeclared identifier" and lists nothing, so every round
+ * guessed a different plausible name until the budget ran out.
+ */
+describe("the names a fixture actually declares", () => {
+  const FIXTURE: GeneratedSource = {
+    path: "test/MarketTestBase.sol",
+    content: `contract MarketTestBase {
+    PoolKey internal key;
+    HarbourToken internal token;
+    FeeVault internal component_feeVault;
+    HarbourHook internal hook;
+
+    // A sell fee can land in a vault, or in an accounting contract.
+    function buy(uint128 amountIn) internal returns (uint256) {}
+}`,
+  };
+
+  const suite = (body: string): readonly GeneratedSource[] => [
+    { path: "test/Harbour.t.sol", content: `contract HarbourTest is MarketTestBase {\n${body}\n}` },
+  ];
+
+  it("reports a receiver nothing declares, and says what there is instead", () => {
+    const found = unknownReceivers({
+      tests: suite(`    function test_x() public { vault.credited(address(token)); }`),
+      fixture: FIXTURE,
+    });
+
+    expect(found).toHaveLength(1);
+    expect(found[0]?.receiver).toBe("vault");
+    expect(found[0]?.available).toContain("component_feeVault");
+    expect(receiverBrief(found)).toContain("component_feeVault");
+  });
+
+  it("says nothing about the fields the fixture does declare", () => {
+    expect(
+      unknownReceivers({
+        tests: suite(`    function test_x() public {
+        component_feeVault.credited(address(token));
+        hook.consecutiveBuys();
+        token.balanceOf(address(this));
+    }`),
+        fixture: FIXTURE,
+      }),
+    ).toEqual([]);
+  });
+
+  it("says nothing about a variable the test declared itself, or about a cheatcode", () => {
+    expect(
+      unknownReceivers({
+        tests: suite(`    function test_x() public {
+        IERC20 quote = IERC20(address(1));
+        quote.balanceOf(address(this));
+        vm.expectRevert();
+        uint256[] memory amounts = new uint256[](1);
+        amounts.length;
+    }`),
+        fixture: FIXTURE,
+      }),
+    ).toEqual([]);
+  });
+
+  /** A name mentioned anywhere in the fixture is given the benefit of the doubt. */
+  it("stays quiet when the fixture is not understood", () => {
+    expect(
+      unknownReceivers({
+        tests: suite(`    function test_x() public { vault.credited(0); }`),
+        fixture: { path: "test/MarketTestBase.sol", content: "contract MarketTestBase {}" },
+      }),
+    ).toEqual([]);
   });
 });

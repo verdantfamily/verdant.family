@@ -14,6 +14,12 @@ export {
 } from "./claim.js";
 
 export {
+  buildInstantClaimPlatformSweep,
+  readInstantPlatformOwed,
+  type PlatformOwed,
+} from "./sweep.js";
+
+export {
   BOOST_DEAD_ADDRESS,
   boostContributions,
   buildBoostContribute,

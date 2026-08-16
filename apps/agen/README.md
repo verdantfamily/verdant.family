@@ -15,7 +15,7 @@ is to exist should not be able to fail for anyone else's reason.
 pnpm --filter @verdant/agen dev        # http://localhost:3000
 pnpm --filter @verdant/agen build      # writes out/
 pnpm --filter @verdant/agen preview    # serves out/ at http://127.0.0.1:4321
-pnpm --filter @verdant/agen brand      # regenerates mark.png, icon.png, og.jpg
+pnpm --filter @verdant/agen brand      # regenerates mark.png, icon.png, the icons
 ```
 
 ## The typeface
@@ -65,19 +65,29 @@ above it.
 
 ## The card and the icons
 
-`pnpm --filter @verdant/agen brand` writes all five shipped images from the one piece of
-artwork in `brand-source/`. `og.jpg` is the link card, composited at 1200 x 630 — exactly
-the 1.91:1 X crops to, so nothing is lost — with the same two soft masses and the same
-vignette as the page behind it, because a card that is flat black next to a page that is
-lit reads as a different product. It is set in Helvetica rather than Aeonik: sharp renders
-it on whoever's laptop runs the script, and a webfont is not available there.
+`pnpm --filter @verdant/agen brand` writes the four shipped icons from the one piece of
+artwork in `brand-source/`.
+
+The link card is not among them. It is `src/app/opengraph-image.tsx`, drawn per request at
+1200 x 630 — exactly the 1.91:1 X crops to, so nothing is lost — from the front page's own
+photograph and the front page's own headline, so a shared link looks like the thing it opens.
+`/markets/[id]` overrides it with the token's own card; every other route inherits this one.
+
+It is a route rather than a file for a reason worth keeping: the card used to be composited
+into `public/og.jpg` by the brand script, which put the artwork in one place, the copy in an
+SVG string inside a build step, and the cache-busting in a hand-bumped `?v=` counter in
+`layout.tsx`. The result shipped a pre-launch teaser — "coming august 12" — for weeks after
+launch, because nothing regenerated it and nothing pointed at it. Rendering it means the copy
+sits beside the page's copy, the typeface is the real Aeonik rather than whatever Helvetica
+sharp found on the machine, and Next hashes the URL from the content, so a changed card is a
+changed address with no counter to remember.
+
+Nothing in `layout.tsx` declares `openGraph.images`, deliberately: a config-declared array
+beside a file-based card is two answers to one question, and the loser is invisible until
+somebody shares a link.
 
 `twitter:card` is `summary_large_image`. Without it X falls back to `summary`, which crops
-the same file to a small square beside the text and discards the composition.
-
-The image URL carries `?v=2`. X, Slack and iMessage cache a card against its URL with no
-way to ask them not to, so replacing the artwork without changing the path means the old
-one keeps appearing for days. Bump it in `layout.tsx` whenever the card changes.
+the same image to a small square beside the text and discards the composition.
 
 The icons are the mark on an opaque black plate, which it needs: the artwork is light grey
 and light grey on transparency disappears into a light tab strip. Note that the plate is

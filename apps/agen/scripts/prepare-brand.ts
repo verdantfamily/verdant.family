@@ -162,72 +162,6 @@ function packIco(images: readonly { size: number; png: Buffer }[]): Buffer {
   return Buffer.concat([header, ...entries, ...images.map((image) => image.png)]);
 }
 
-/**
- * The card's backdrop.
- *
- * The same two soft masses and the same vignette as the page, because a link card that is
- * flat black next to a page that is lit reads as a different product. Gradients rather
- * than a blurred bitmap: librsvg resolves these at full resolution, and there is no
- * banding to hide at 1200 x 630.
- */
-const CARD_BACKDROP = `<svg width="1200" height="630" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <radialGradient id="mass-a">
-      <stop offset="0%" stop-color="#e4e6ec" stop-opacity="0.17"/>
-      <stop offset="42%" stop-color="#969ca8" stop-opacity="0.08"/>
-      <stop offset="70%" stop-color="#1e2026" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="mass-b">
-      <stop offset="0%" stop-color="#d6cec6" stop-opacity="0.12"/>
-      <stop offset="45%" stop-color="#7e7a78" stop-opacity="0.06"/>
-      <stop offset="72%" stop-color="#18181a" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="0.35">
-      <stop offset="34%" stop-color="#ffffff" stop-opacity="0"/>
-      <stop offset="50%" stop-color="#ffffff" stop-opacity="0.035"/>
-      <stop offset="66%" stop-color="#ffffff" stop-opacity="0"/>
-    </linearGradient>
-    <radialGradient id="vignette" cx="0.5" cy="0.46" r="0.78">
-      <stop offset="0%" stop-color="#000000" stop-opacity="0"/>
-      <stop offset="66%" stop-color="#000000" stop-opacity="0.5"/>
-      <stop offset="100%" stop-color="#000000" stop-opacity="1"/>
-    </radialGradient>
-  </defs>
-  <rect width="1200" height="630" fill="#000000"/>
-  <ellipse cx="205" cy="120" rx="690" ry="560" fill="url(#mass-a)"/>
-  <ellipse cx="1010" cy="560" rx="560" ry="470" fill="url(#mass-b)"/>
-  <rect width="1200" height="630" fill="url(#sheen)"/>
-  <!-- On the rect, not an ellipse: a gradient that stops short of the corners leaves the
-       masses lighting them, which is the one place a card must not be brighter. -->
-  <rect width="1200" height="630" fill="url(#vignette)"/>
-</svg>`;
-
-/**
- * Set in Helvetica rather than the page's own face because this is rendered by sharp on
- * whatever machine runs the script, and a webfont is not available to it. The card is a
- * still frame of the page, not the page.
- */
-const CARD_TEXT = `<svg width="1200" height="630" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="chrome" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="32%" stop-color="#b9bcc4"/>
-      <stop offset="46%" stop-color="#fdfdfe"/>
-      <stop offset="54%" stop-color="#7e828c"/>
-      <stop offset="78%" stop-color="#d8dae0"/>
-      <stop offset="100%" stop-color="#9a9ea8"/>
-    </linearGradient>
-  </defs>
-  <g font-family="Helvetica Neue, Helvetica, Arial, sans-serif" text-anchor="middle">
-    <text x="600" y="428" fill="#f4f4f5" font-size="56" font-weight="500"
-          letter-spacing="-1.8">the operator is gone.</text>
-    <text x="600" y="478" fill="url(#chrome)" font-size="33"
-          letter-spacing="-0.9">the system is still running.</text>
-    <text x="600" y="546" fill="#4a4a50" font-size="21"
-          letter-spacing="0.4">the agentic launchpad — coming august 12</text>
-  </g>
-</svg>`;
-
 async function main(): Promise<void> {
   const flat = await sharp(source)
     .trim({ background: "#000000", threshold: TRIM_THRESHOLD })
@@ -299,23 +233,13 @@ async function main(): Promise<void> {
   );
   await writeFile(resolve(publicDir, "favicon.ico"), ico);
 
-  // The card a pasted link shows. Composited here rather than rendered at request time
-  // because this site is a static export and has no server to render one.
-  const mark = await sharp(cutout)
-    .resize({ width: 190, height: 190, fit: "contain", background: "#00000000" })
-    .toBuffer();
-
-  await sharp(Buffer.from(CARD_BACKDROP))
-    .composite([
-      { input: mark, top: 150, left: 505 },
-      { input: Buffer.from(CARD_TEXT), top: 0, left: 0 },
-    ])
-    // 4:4:4 because the type is thin and light on black, and the chroma averaging JPEG
-    // does by default is exactly the thing that turns that into coloured fringing.
-    .jpeg({ quality: 92, chromaSubsampling: "4:4:4" })
-    .toFile(resolve(publicDir, "og.jpg"));
-
-  console.log("wrote mark.png, icon.png, apple-icon.png, favicon.ico, og.jpg");
+  // The share card is deliberately not written here. It used to be — composited onto this
+  // script's own black backdrop, set in Helvetica because sharp reads fonts from the system
+  // and not from `public/fonts`, and cache-busted by hand with a `?v=` counter in the
+  // layout. It outlived its own copy by weeks as a result, still announcing a launch date
+  // that had passed, because a file nothing regenerates is a file nobody notices. It is now
+  // `src/app/opengraph-image.tsx`, rendered per request in the real typeface.
+  console.log("wrote mark.png, icon.png, apple-icon.png, favicon.ico");
 }
 
 await main();

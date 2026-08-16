@@ -56,14 +56,13 @@ function readSiteUrl(): string {
 }
 
 /**
- * The filename carries a version because X, Slack and iMessage all cache a card against
- * its URL and none of them offer a way to ask nicely. Changing the artwork without
- * changing the path means the old one keeps appearing for days. Bump the number whenever
- * `pnpm brand` produces something different.
+ * The card itself is `opengraph-image.tsx`, beside this file, and is deliberately not named
+ * here: a config-declared `images` array next to a file-based card is two answers to one
+ * question, and the one that loses is invisible until somebody shares a link. Next fills in
+ * `og:image` and `twitter:image` from that route, at a URL it hashes from the content —
+ * which is also the end of the hand-bumped `?v=` counter the old static card needed to
+ * escape X's and iMessage's caches.
  */
-const CARD = "/og.jpg?v=2";
-const CARD_ALT = "agen.space — describe your market, agen builds it";
-
 export const metadata: Metadata = {
   title: TITLE,
   description: DESCRIPTION,
@@ -76,7 +75,6 @@ export const metadata: Metadata = {
     siteName: "agen.space",
     url: SITE_URL,
     type: "website",
-    images: [{ url: CARD, width: 1200, height: 630, alt: CARD_ALT, type: "image/jpeg" }],
   },
   twitter: {
     // The only card type that shows the image at full width. Without it X falls back to
@@ -87,7 +85,6 @@ export const metadata: Metadata = {
     description: DESCRIPTION,
     site: "@agendotspace",
     creator: "@agendotspace",
-    images: [{ url: CARD, alt: CARD_ALT }],
   },
   icons: {
     // `/favicon.ico` is requested by path regardless of what the markup says, so it is

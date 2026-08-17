@@ -182,6 +182,7 @@ packages/
   sdk/          TypeScript twins of the on-chain math, generated ABIs, the read layer
   config/       Chains, addresses, bounds, models. Data only
   ui/           Formatting: integers to strings, never through a float
+  agen-mcp/     A Model Context Protocol server over the Instant launch API, for AI agents
 apps/
   web/          The interface
   indexer/      Ponder indexer and the API the interface reads

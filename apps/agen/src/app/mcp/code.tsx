@@ -35,8 +35,8 @@ export function CodePanel({ tabs }: { readonly tabs: readonly CodeTab[] }) {
   if (shown === undefined) return null;
 
   return (
-    <div className="cx-panel">
-      <div className="cx-panel-top" role="tablist" aria-label="examples">
+    <div className="mx-panel">
+      <div className="mx-panel-top" role="tablist" aria-label="examples">
         {tabs.map((tab) => (
           <button
             key={tab.id}
@@ -45,7 +45,7 @@ export function CodePanel({ tabs }: { readonly tabs: readonly CodeTab[] }) {
             id={`${group}-${tab.id}`}
             aria-selected={tab.id === shown.id}
             aria-controls={`${group}-${tab.id}-panel`}
-            className={tab.id === shown.id ? "cx-tab cx-tab-on" : "cx-tab"}
+            className={tab.id === shown.id ? "mx-tab mx-tab-on" : "mx-tab"}
             onClick={() => {
               setActive(tab.id);
             }}
@@ -56,7 +56,7 @@ export function CodePanel({ tabs }: { readonly tabs: readonly CodeTab[] }) {
       </div>
 
       <div
-        className="cx-panel-body"
+        className="mx-panel-body"
         role="tabpanel"
         id={`${group}-${shown.id}-panel`}
         aria-labelledby={`${group}-${shown.id}`}
@@ -67,7 +67,7 @@ export function CodePanel({ tabs }: { readonly tabs: readonly CodeTab[] }) {
         </pre>
       </div>
 
-      {shown.note === undefined ? null : <p className="cx-panel-foot">{shown.note}</p>}
+      {shown.note === undefined ? null : <p className="mx-panel-foot">{shown.note}</p>}
     </div>
   );
 }
@@ -84,7 +84,7 @@ function Copy({ text }: { readonly text: string }) {
   return (
     <button
       type="button"
-      className="cx-copy"
+      className="mx-copy"
       aria-label="Copy this example"
       onClick={() => {
         void navigator.clipboard.writeText(text).then(
@@ -145,21 +145,21 @@ function highlight(code: string, lang: CodeTab["lang"]): ReactNode {
 function paint(match: RegExpExecArray, lang: CodeTab["lang"]): ReactNode {
   if (lang === "bash") {
     const [, comment, string, variable] = match;
-    if (comment !== undefined) return <span className="cx-c">{comment}</span>;
-    if (string !== undefined) return <span className="cx-s">{string}</span>;
-    return <span className="cx-n">{variable}</span>;
+    if (comment !== undefined) return <span className="mx-c">{comment}</span>;
+    if (string !== undefined) return <span className="mx-s">{string}</span>;
+    return <span className="mx-n">{variable}</span>;
   }
 
   const [, key, colon, string, comment, literal] = match;
   if (key !== undefined) {
     return (
       <>
-        <span className="cx-k">{key}</span>
+        <span className="mx-k">{key}</span>
         {colon}
       </>
     );
   }
-  if (string !== undefined) return <span className="cx-s">{string}</span>;
-  if (comment !== undefined) return <span className="cx-c">{comment}</span>;
-  return <span className="cx-n">{literal}</span>;
+  if (string !== undefined) return <span className="mx-s">{string}</span>;
+  if (comment !== undefined) return <span className="mx-c">{comment}</span>;
+  return <span className="mx-n">{literal}</span>;
 }

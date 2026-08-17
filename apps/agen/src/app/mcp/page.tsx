@@ -2,12 +2,12 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
+import { Bloom } from "../bloom";
+import { SiteFooter } from "../footer";
 import { count, eth } from "../lib/format";
 import { fetchInstantMetrics } from "../lib/instant-feed";
 import { marketSource } from "../lib/markets";
-import { AsciiTorus, BlockBars, SpiralType } from "./art";
 import { CodePanel, type CodeTab } from "./code";
-import { DocNav, type DocSection } from "./nav";
 import "./mcp.css";
 
 export const dynamic = "force-dynamic";
@@ -25,19 +25,6 @@ export const metadata: Metadata = {
     type: "website",
   },
 };
-
-/** The index, and the order the page is written in. */
-const SECTIONS: readonly DocSection[] = [
-  { id: "overview", label: "Overview" },
-  { id: "start", label: "Quick start" },
-  { id: "config", label: "Configuration" },
-  { id: "tools", label: "Tool reference" },
-  { id: "flow", label: "How a launch travels" },
-  { id: "session", label: "Example session" },
-  { id: "custody", label: "Custody" },
-  { id: "data", label: "Live data" },
-  { id: "faq", label: "Questions" },
-];
 
 /* ------------------------------------------------------------------ content */
 
@@ -102,22 +89,30 @@ const KIND_LABEL: Readonly<Record<"read" | "prepare" | "spend", string>> = {
 };
 
 /** The four things worth knowing before the reference starts. */
-const CLAIMS: readonly { readonly title: string; readonly body: string }[] = [
+const CLAIMS: readonly {
+  readonly title: string;
+  readonly body: string;
+  readonly icon: ReactNode;
+}[] = [
   {
     title: "Quoted against the chain",
-    body: "Not a bonding curve reimplemented in TypeScript. The real create call is encoded and simulated with eth_call against the deployed factory, so the tokens received come out of the contract's own return value.",
+    body: "The real create call is encoded and simulated with eth_call against the deployed factory, so the tokens received come out of the contract's own return value.",
+    icon: <Wave />,
   },
   {
     title: "Prepared, not custodied",
-    body: "Launch calldata comes back unsigned, marked prepared, and says twice more that it needs a signature and a broadcast. Your wallet is the only thing that can turn it into a market.",
+    body: "Launch calldata comes back unsigned and marked prepared. Your wallet is the only thing that can turn it into a market.",
+    icon: <Lock />,
   },
   {
     title: "The whole market, readable",
-    body: "Tokens, pools, launch status, discovery by volume or recency, and ecosystem totals — straight from the Instant indexer, with nulls and reasons instead of estimates.",
+    body: "Tokens, pools, launch status, discovery by volume or recency, and ecosystem totals — straight from the Instant indexer.",
+    icon: <Layers />,
   },
   {
     title: "One engine underneath",
-    body: "No second quote path and no fee table copied for agents. Every figure an agent reads is computed by the code that computes it for the site you are on.",
+    body: "No second quote path and no fee table copied for agents. Every figure an agent reads is computed by the code that computes it here.",
+    icon: <Cog />,
   },
 ];
 
@@ -151,7 +146,11 @@ const VARS: readonly {
     note: "The HTTP transport has no authentication of its own, so exposing it is an explicit decision.",
   },
   { name: "AGEN_MCP_PORT", fallback: "8848", note: "POST /mcp, and GET /healthz." },
-  { name: "AGEN_MCP_TIMEOUT_MS", fallback: "15000", note: "Per read. Launches get their own, 120000." },
+  {
+    name: "AGEN_MCP_TIMEOUT_MS",
+    fallback: "15000",
+    note: "Per read. Launches get their own, 120000.",
+  },
   { name: "AGEN_MCP_MAX_RETRIES", fallback: "2", note: "Safe requests only. A launch is never retried." },
   {
     name: "AGEN_MCP_LOG_LEVEL",
@@ -458,15 +457,19 @@ const CALL_EXAMPLES: readonly CodeTab[] = [
 /**
  * Agen MCP, documented.
  *
- * Somebody arriving here has already decided they want to connect an agent, so the page is
- * a reference before it is anything else: an index in the margin, one measure of text, the
- * config file, the tool list, and a straight answer about who holds the keys. The hero
- * exists to say what this is in one line, not to sell it twice.
+ * ## Why this looks like the rest of the site rather than like a docs site
+ *
+ * Because it is part of the site. The band, the white sheet, the sections and their
+ * hairlines, the cards, the pills and the footer are the launchpad's own — the same
+ * components Explore, Create and Metrics are built from — and the page-specific pieces
+ * below are made of the same tokens. A second design language would have said that this is
+ * a different product, which is the opposite of what it is: it is the engine the rest of
+ * the site runs on, addressed by a machine instead of by a form.
  *
  * The figures in "Live data" are real — the same ones `/metrics` renders, read from the
  * Instant indexer at request time, with the chart bucketed from actual creation timestamps.
- * When the feed is not answering the section says so rather than falling back to a shape.
- * A chart of invented activity would be a strange thing to put on the page offering
+ * When the feed is not answering the section says so rather than falling back to a shape. A
+ * chart of invented activity would be a strange thing to put on the page offering
  * programmatic access to real activity.
  */
 export default async function McpDocs() {
@@ -480,459 +483,327 @@ export default async function McpDocs() {
   const weeks = weeklyLaunches(markets.filter((market) => market.kind === "instant"));
 
   return (
-    <div className="cx">
-      <header className="cx-wrap">
-        <div className="cx-bar-top">
-          <Link className="cx-brand" href="/">
-            {/* Not next/image: an 18px brand mark already sized, with nothing to optimise. */}
-            <img src="/mark.png" width={18} height={18} alt="" aria-hidden="true" />
-            Agen <span>/ MCP</span>
-          </Link>
+    <div className="ax-page mx-page">
+      <Bloom active="docs" photo="mcpbg" centred>
+        <h1>MCP</h1>
+        <p>
+          Connect an AI agent to Agen Instant. Quote a launch against the live factory, prepare the
+          transaction your wallet signs, and read every token, pool and market — over the Model
+          Context Protocol.
+        </p>
 
-          <nav className="cx-bar-links" aria-label="page">
-            <a href="#tools">Tools</a>
-            <a href="#flow">Flow</a>
-            <a href="#custody">Custody</a>
-            <a href="#faq">FAQ</a>
-            <Link href="/">agen.space ↗</Link>
-          </nav>
+        <div className="ax-acts">
+          <a className="ax-btn ax-btn-dark" href="#start">
+            Quick start
+          </a>
+          <a className="ax-btn ax-btn-light" href="#tools">
+            The eight tools
+          </a>
         </div>
-      </header>
+      </Bloom>
 
-      <div className="cx-wrap">
-        <section className="cx-hero">
-          <div className="cx-hero-say">
-            <p className="cx-eyebrow">Built for agentic launches.</p>
-
-            <h1 className="cx-title">The launchpad your agent can drive.</h1>
-
-            <p>
-              Agen Instant deploys a token, opens a Uniswap v4 pool, locks the position, wires the
-              fee vault and executes the first buy — in one transaction. Agen MCP puts that engine
-              behind eight typed tools, over the Model Context Protocol, and holds no keys while
-              doing it.
-            </p>
-
-            <div className="cx-acts">
-              <a className="cx-go" href="#start">
-                Quick start
-              </a>
-              <a className="cx-go cx-go-line" href="#tools">
-                <span className="cx-dot" aria-hidden="true" />
-                Read the tools
-              </a>
-            </div>
-
-            <div className="cx-strip">
-              <div>
-                <span>Tools</span>
-                <b>8 typed</b>
-              </div>
-              <div>
-                <span>Read-only</span>
-                <b>6 of 8</b>
-              </div>
-              <div>
-                <span>Private keys</span>
-                <b>0</b>
-              </div>
-              <div>
-                <span>Chain</span>
-                <b>4663</b>
-              </div>
-              <div>
-                <span>Transport</span>
-                <b>stdio · http</b>
-              </div>
-              <div>
-                <span>Quotes</span>
-                <b>eth_call</b>
-              </div>
-              <div>
-                <span>Custody</span>
-                <b>none</b>
-              </div>
-              <div>
-                <span>Fee</span>
-                <b>1.5% fixed</b>
-              </div>
-            </div>
+      <main className="ax-wrap">
+        <section className="ax-section ax-reveal" id="overview">
+          <div className="ax-section-head">
+            <h2>Overview</h2>
+            <span className="ax-tag">8 tools · 6 read-only</span>
           </div>
 
-          <div className="cx-plate">
-            <SpiralType phrase="AGEN INSTANT MCP" />
-            <span className="cx-plate-tag">model context protocol · 2026</span>
+          <p className="mx-lede" style={{ marginTop: "22px" }}>
+            A thin, typed interface over the engine that is already running. There is no second
+            quote path here, no second launch path and no fee table reimplemented for agents.
+          </p>
+
+          <p className="mx-say">
+            Every number an agent reads is computed by the same code that computes it for{" "}
+            <Link href="/">agen.space</Link>. Where a figure could not be obtained from the existing
+            system it comes back as <code>null</code> with a reason, rather than estimated. Six
+            tools only read. One prepares a transaction and hands it back unsigned. One spends an
+            authorised agent&rsquo;s own treasury, inside caps its owner set — and that distinction
+            is visible in the tool names.
+          </p>
+
+          <div className="mx-cards">
+            {CLAIMS.map((claim) => (
+              <div className="mx-card" key={claim.title}>
+                {claim.icon}
+                <strong>{claim.title}</strong>
+                <span>{claim.body}</span>
+              </div>
+            ))}
           </div>
         </section>
 
-        <main className="cx-body">
-          <DocNav sections={SECTIONS} />
+        <section className="ax-section ax-reveal" id="start">
+          <div className="ax-section-head">
+            <h2>Quick start</h2>
+            <span className="ax-tag">about a minute</span>
+          </div>
 
-          <article className="cx-doc">
-            <section className="cx-sec" id="overview">
-              <p className="cx-kicker">
-                001 <b>Overview</b>
-              </p>
-              <h2>A thin, honest interface over production.</h2>
-
-              <p>
-                There is no second quote engine here, no second launch path and no fee table
-                reimplemented: every number an agent reads is computed by the same code that
-                computes it for <Link href="/">agen.space</Link>. Where a figure could not be
-                obtained from the existing system it comes back as <code>null</code> with a reason,
-                rather than estimated.
-              </p>
-
-              <p>
-                Six tools only read. One prepares a transaction and hands it back unsigned. One
-                spends an authorised agent&rsquo;s own treasury, inside caps its owner set. That
-                distinction is the whole design, and it is visible in the tool names.
-              </p>
-
-              <div className="cx-invert cx-up">
-                <div className="cx-art">
-                  <AsciiTorus />
-                </div>
-
-                <div className="cx-in">
-                  <p className="cx-kicker">
-                    Why <b>this</b> and not an HTTP client
-                  </p>
-                  <h2>Decisions already made, so the agent does not invent them.</h2>
-                  <p>
-                    An agent given a REST endpoint and a fee table will model the curve, guess the
-                    supply and confidently report a number nobody computed. Here the shapes are
-                    typed, the constants are constants, and the one call that spends money is the
-                    one call that says so.
-                  </p>
-
-                  <div className="cx-blocks">
-                    {CLAIMS.map((claim, index) => (
-                      <div className="cx-block" key={claim.title}>
-                        <strong>
-                          {String(index + 1).padStart(3, "0")} / {claim.title}
-                        </strong>
-                        <em>{claim.body}</em>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section className="cx-sec cx-up" id="start">
-              <p className="cx-kicker">
-                002 <b>Quick start</b>
-              </p>
-              <h2>Running in about a minute.</h2>
-              <p>
-                Build the package, point your client at <code>dist/index.js</code>, give it a key.
-                The read-only tools work without one; quoting and launching answer{" "}
-                <code>UNAUTHORIZED</code> until there is one. Keys are created by an agent&rsquo;s
-                owner on <Link href="/profile">your profile</Link> and shown once.
-              </p>
-
-              <CodePanel tabs={SETUP_EXAMPLES} />
-            </section>
-
-            <section className="cx-sec cx-up" id="config">
-              <p className="cx-kicker">
-                003 <b>Configuration</b>
-              </p>
-              <h2>Every setting is an environment variable.</h2>
-              <p>
-                Validated at boot, so a bad value is a startup failure listing every problem rather
-                than a surprise on the first tool call. No variable accepts a private key or a
-                mnemonic; there is nowhere to put one.
-              </p>
-
-              <div className="cx-scroll">
-                <table className="cx-table">
-                  <thead>
-                    <tr>
-                      <th>Variable</th>
-                      <th>Default</th>
-                      <th>Notes</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {VARS.map((variable) => (
-                      <tr key={variable.name}>
-                        <td>{variable.name}</td>
-                        <td>{variable.fallback}</td>
-                        <td>{variable.note}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            <section className="cx-sec cx-up" id="tools">
-              <p className="cx-kicker">
-                004 <b>Tool reference</b>
-              </p>
-              <h2>Eight tools. Six read, one prepares, one spends.</h2>
-              <p>
-                Reading, preparing and spending carry three different annotations, so a client can
-                auto-approve the first and prompt for the other two. Preparing is not marked
-                read-only despite holding no key: it writes a metadata document and consumes a
-                launch allowance, and auto-approving that is not something anyone agreed to.
-              </p>
-
-              <div className="cx-invert cx-in">
-                <p className="cx-kicker">
-                  <b>tools/list</b>
-                </p>
-
-                <ol className="cx-list">
-                  {TOOLS.map((tool, index) => (
-                    <li className="cx-row" key={tool.name}>
-                      <span className="cx-row-n">{String(index + 1).padStart(3, "0")}</span>
-                      <span className="cx-row-name">{tool.name}</span>
-                      <span
-                        className={
-                          tool.kind === "spend" ? "cx-row-kind cx-row-kind-spend" : "cx-row-kind"
-                        }
-                      >
-                        {KIND_LABEL[tool.kind]}
-                      </span>
-                      <p className="cx-row-what">{tool.what}</p>
-                    </li>
-                  ))}
-                </ol>
-
-                <p className="cx-total">
-                  <span>8 tools · 6 read-only</span>
-                  <span>1 spends</span>
-                </p>
-              </div>
-
-              <h3>The fixed terms of every Instant launch</h3>
-              <p>
-                Worth knowing before reading the tools, because several parameters an agent might
-                expect are not parameters at all.
-              </p>
-
-              <div className="cx-strip">
-                <div>
-                  <span>Supply</span>
-                  <b>1,000,000,000</b>
-                </div>
-                <div>
-                  <span>Decimals</span>
-                  <b>18</b>
-                </div>
-                <div>
-                  <span>Opening valuation</span>
-                  <b>1.5 ETH</b>
-                </div>
-                <div>
-                  <span>Creator allocation</span>
-                  <b>none</b>
-                </div>
-                <div>
-                  <span>Trade fee</span>
-                  <b>1.5%</b>
-                </div>
-                <div>
-                  <span>To creator</span>
-                  <b>1%</b>
-                </div>
-                <div>
-                  <span>To platform</span>
-                  <b>0.5%</b>
-                </div>
-                <div>
-                  <span>Liquidity</span>
-                  <b>locked</b>
-                </div>
-              </div>
-            </section>
-
-            <section className="cx-sec cx-up" id="flow">
-              <p className="cx-kicker">
-                005 <b>How a launch travels</b>
-              </p>
-              <h2>From a sentence to a live market.</h2>
-              <p>
-                Six steps, and the two in the middle are the ones worth understanding: the agent
-                prepares, and your wallet is what makes it real.
-              </p>
-
-              <ol className="cx-steps">
-                {STEPS.map((step) => (
-                  <li
-                    className={step.you === true ? "cx-step cx-step-you" : "cx-step"}
-                    key={step.title}
-                  >
-                    <strong>{step.title}</strong>
-                    <p>{step.body}</p>
-                    <span>{step.who}</span>
-                  </li>
-                ))}
-              </ol>
-
-              <p>
-                An agent launching from its own Agen treasury replaces steps three to five with a
-                single <code>launch_instant_from_agent_treasury</code> call, which returns{" "}
-                <code>execution_status: &quot;confirmed&quot;</code> and a transaction hash
-                directly. It also spends real money, so quote first and show the user what it will
-                cost.
-              </p>
-            </section>
-
-            <section className="cx-sec cx-up" id="session">
-              <p className="cx-kicker">
-                006 <b>Example session</b>
-              </p>
-              <h2>Quote, prepare, sign, confirm.</h2>
-              <p>One launch, as the calls and responses actually travel.</p>
-
-              <CodePanel tabs={CALL_EXAMPLES} />
-            </section>
-
-            <section className="cx-sec cx-up" id="custody">
-              <p className="cx-kicker">
-                007 <b>Custody</b>
-              </p>
-              <h2>Two signers, and they are two different tools.</h2>
-              <p>
-                The difference between them is who holds the key, and that belongs in a tool list
-                rather than buried in a parameter&rsquo;s description. There is no third path, and
-                no mode switch that turns one into the other.
-              </p>
-
-              <div className="cx-keys">
-                <div className="cx-key">
-                  <code>prepare_instant_launch</code>
-                  <strong>Nobody signs.</strong>
-                  <p>
-                    The server returns calldata and says so three times over. Your wallet signs and
-                    broadcasts it, or nothing happens. Nothing is spent, and the fee receiver may be
-                    any address you like — you are the one paying for the transaction that names it.
-                  </p>
-                  <dl>
-                    <dt>Keys held</dt>
-                    <dd>none</dd>
-                    <dt>Spends</dt>
-                    <dd>nothing</dd>
-                    <dt>Signed by</dt>
-                    <dd>caller_wallet</dd>
-                  </dl>
-                </div>
-
-                <div className="cx-key cx-key-spend">
-                  <code>launch_instant_from_agent_treasury</code>
-                  <strong>The agent&rsquo;s treasury signs.</strong>
-                  <p>
-                    An Agen agent&rsquo;s own isolated wallet, under the permissions its owner
-                    configured: a per-launch ETH ceiling, launches per day, a creator-buy cap and a
-                    reserve. Fees accrue to that agent. It refuses a fee receiver or a signer rather
-                    than dropping one.
-                  </p>
-                  <dl>
-                    <dt>Keys held</dt>
-                    <dd>none — Agen signs</dd>
-                    <dt>Spends</dt>
-                    <dd>the agent&rsquo;s treasury</dd>
-                    <dt>Bounded by</dt>
-                    <dd>owner permissions</dd>
-                  </dl>
-                </div>
-              </div>
-
-              <ul className="cx-guards">
-                <Guard n="01">
-                  <b>No key can reach it.</b> No environment variable and no tool parameter accepts
-                  a private key or mnemonic, and a test asserts that against the schema.
-                </Guard>
-                <Guard n="02">
-                  <b>A launch is never retried.</b> Only idempotent reads retry. A timeout means
-                  find out what happened, not try again.
-                </Guard>
-                <Guard n="03">
-                  <b>Every address is validated</b> against a 20-byte hex pattern, with EIP-55 mixed
-                  case preserved rather than lower-cased.
-                </Guard>
-                <Guard n="04">
-                  <b>Logs are structured JSON on stderr</b>, with keys and bearer tokens redacted by
-                  key and by value. Never stdout — on stdio, stdout is the protocol.
-                </Guard>
-                <Guard n="05">
-                  <b>No admin route is reachable.</b> The server calls eight backend routes and no
-                  others.
-                </Guard>
-                <Guard n="06">
-                  <b>HTTP binds to loopback</b> and warns loudly at startup if it is pointed
-                  anywhere else. That port has no authentication of its own.
-                </Guard>
-              </ul>
-            </section>
-
-            <Ecosystem metrics={metrics} weeks={weeks} />
-
-            <section className="cx-sec cx-up" id="faq">
-              <p className="cx-kicker">
-                009 <b>Questions</b>
-              </p>
-              <h2>Answered before you have to ask.</h2>
-
-              <div className="cx-faq">
-                {FAQ.map((entry, index) => (
-                  <details className="cx-q" key={entry.q}>
-                    <summary>
-                      <b>Q.{String(index + 1).padStart(3, "0")}</b>
-                      <em>{entry.q}</em>
-                      <i aria-hidden="true" />
-                    </summary>
-                    <p>{entry.a}</p>
-                  </details>
-                ))}
-              </div>
-            </section>
-          </article>
-        </main>
-
-        <section className="cx-close">
-          <h2>Give your agent a market to build in.</h2>
-          <p>
-            Start with a quote. It costs nothing, it is simulated against the live factory, and it
-            is the fastest way to see what the rest of it does.
+          <p className="mx-say">
+            Build the package, point your client at <code>dist/index.js</code>, give it a key. The
+            read-only tools work without one; quoting and launching answer <code>UNAUTHORIZED</code>{" "}
+            until there is one. Keys are created by an agent&rsquo;s owner on{" "}
+            <Link href="/profile">your profile</Link> and shown once.
           </p>
 
-          <div className="cx-acts">
-            <a className="cx-go" href="#start">
+          <CodePanel tabs={SETUP_EXAMPLES} />
+        </section>
+
+        <section className="ax-section ax-reveal" id="config">
+          <div className="ax-section-head">
+            <h2>Configuration</h2>
+            <span className="ax-tag">environment only</span>
+          </div>
+
+          <p className="mx-say">
+            Validated at boot, so a bad value is a startup failure listing every problem rather than
+            a surprise on the first tool call. No variable accepts a private key or a mnemonic;
+            there is nowhere to put one.
+          </p>
+
+          <div className="mx-scroll">
+            <table className="mx-table">
+              <thead>
+                <tr>
+                  <th>Variable</th>
+                  <th>Default</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {VARS.map((variable) => (
+                  <tr key={variable.name}>
+                    <td>
+                      <code>{variable.name}</code>
+                    </td>
+                    <td>
+                      <code>{variable.fallback}</code>
+                    </td>
+                    <td>{variable.note}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="ax-section ax-reveal" id="tools">
+          <div className="ax-section-head">
+            <h2>Tool reference</h2>
+            <span className="ax-tag">tools/list</span>
+          </div>
+
+          <p className="mx-say">
+            Reading, preparing and spending carry three different annotations, so a client can
+            auto-approve the first and prompt for the other two. Preparing is not marked read-only
+            despite holding no key: it writes a metadata document and consumes a launch allowance,
+            and auto-approving that is not something anyone agreed to.
+          </p>
+
+          <div className="mx-tools">
+            {TOOLS.map((tool) => (
+              <div className="mx-tool" key={tool.name}>
+                <code>{tool.name}</code>
+                <span className={tool.kind === "spend" ? "mx-kind mx-kind-spend" : "mx-kind"}>
+                  <i aria-hidden="true" />
+                  {KIND_LABEL[tool.kind]}
+                </span>
+                <p>{tool.what}</p>
+              </div>
+            ))}
+          </div>
+
+          <h3 className="mx-h3">The fixed terms of every Instant launch</h3>
+          <p className="mx-say" style={{ marginTop: "8px" }}>
+            Worth knowing before reading the tools, because several parameters an agent might expect
+            are not parameters at all.
+          </p>
+
+          <div className="ax-figs">
+            <span className="ax-fig">Supply 1,000,000,000</span>
+            <span className="ax-fig">18 decimals</span>
+            <span className="ax-fig">Opens at 1.5 ETH</span>
+            <span className="ax-fig">No creator allocation</span>
+            <span className="ax-fig">1.5% trade fee</span>
+            <span className="ax-fig">1% to the creator</span>
+            <span className="ax-fig">0.5% to the platform</span>
+            <span className="ax-fig">Liquidity locked</span>
+          </div>
+        </section>
+
+        <section className="ax-section ax-reveal" id="flow">
+          <div className="ax-section-head">
+            <h2>How a launch travels</h2>
+            <span className="ax-tag">one signature</span>
+          </div>
+
+          <p className="mx-say">
+            Six steps, and the two in the middle are the ones worth understanding: the agent
+            prepares, and your wallet is what makes it real.
+          </p>
+
+          <ol className="mx-flow">
+            {STEPS.map((step) => (
+              <li className={step.you === true ? "mx-step mx-step-you" : "mx-step"} key={step.title}>
+                <strong>{step.title}</strong>
+                <p>{step.body}</p>
+                <span className="mx-who">{step.who}</span>
+              </li>
+            ))}
+          </ol>
+
+          <p className="mx-say">
+            An agent launching from its own Agen treasury replaces steps three to five with a single{" "}
+            <code>launch_instant_from_agent_treasury</code> call, which returns{" "}
+            <code>execution_status: &quot;confirmed&quot;</code> and a transaction hash directly. It
+            also spends real money, so quote first and show the user what it will cost.
+          </p>
+        </section>
+
+        <section className="ax-section ax-reveal" id="session">
+          <div className="ax-section-head">
+            <h2>Example session</h2>
+            <span className="ax-tag">quote → prepare → sign → confirm</span>
+          </div>
+
+          <p className="mx-say">One launch, as the calls and responses actually travel.</p>
+
+          <CodePanel tabs={CALL_EXAMPLES} />
+        </section>
+
+        <section className="ax-section ax-reveal" id="custody">
+          <div className="ax-section-head">
+            <h2>Custody</h2>
+            <span className="ax-tag">0 private keys</span>
+          </div>
+
+          <p className="mx-say">
+            Two signers, and they are two different tools. The difference between them is who holds
+            the key, and that belongs in a tool list rather than buried in a parameter&rsquo;s
+            description. There is no third path, and no mode switch that turns one into the other.
+          </p>
+
+          <div className="mx-keys">
+            <div className="mx-key">
+              <code>prepare_instant_launch</code>
+              <strong>Nobody signs.</strong>
+              <p>
+                The server returns calldata and says so three times over. Your wallet signs and
+                broadcasts it, or nothing happens. Nothing is spent, and the fee receiver may be any
+                address you like — you are the one paying for the transaction that names it.
+              </p>
+              <dl>
+                <dt>Keys held</dt>
+                <dd>none</dd>
+                <dt>Spends</dt>
+                <dd>nothing</dd>
+                <dt>Signed by</dt>
+                <dd>caller_wallet</dd>
+              </dl>
+            </div>
+
+            <div className="mx-key mx-key-spend">
+              <code>launch_instant_from_agent_treasury</code>
+              <strong>The agent&rsquo;s treasury signs.</strong>
+              <p>
+                An Agen agent&rsquo;s own isolated wallet, under the permissions its owner
+                configured: a per-launch ETH ceiling, launches per day, a creator-buy cap and a
+                reserve. Fees accrue to that agent. It refuses a fee receiver or a signer rather
+                than dropping one.
+              </p>
+              <dl>
+                <dt>Keys held</dt>
+                <dd>none — Agen signs</dd>
+                <dt>Spends</dt>
+                <dd>the agent&rsquo;s treasury</dd>
+                <dt>Bounded by</dt>
+                <dd>owner permissions</dd>
+              </dl>
+            </div>
+          </div>
+
+          <ul className="mx-guards">
+            <Guard>
+              <b>No key can reach it.</b> No environment variable and no tool parameter accepts a
+              private key or mnemonic, and a test asserts that against the schema.
+            </Guard>
+            <Guard>
+              <b>A launch is never retried.</b> Only idempotent reads retry. A timeout means find
+              out what happened, not try again.
+            </Guard>
+            <Guard>
+              <b>Every address is validated</b> against a 20-byte hex pattern, with EIP-55 mixed
+              case preserved rather than lower-cased.
+            </Guard>
+            <Guard>
+              <b>Logs are structured JSON on stderr</b>, with keys and bearer tokens redacted by key
+              and by value. Never stdout — on stdio, stdout is the protocol.
+            </Guard>
+            <Guard>
+              <b>No admin route is reachable.</b> The server calls eight backend routes and no
+              others.
+            </Guard>
+            <Guard>
+              <b>HTTP binds to loopback</b> and warns loudly at startup if it is pointed anywhere
+              else. That port has no authentication of its own.
+            </Guard>
+          </ul>
+        </section>
+
+        <Ecosystem metrics={metrics} weeks={weeks} />
+
+        <section className="ax-section ax-reveal" id="faq">
+          <div className="ax-section-head">
+            <h2>Questions</h2>
+          </div>
+
+          <div className="mx-faq">
+            {FAQ.map((entry) => (
+              <details className="mx-q" key={entry.q}>
+                <summary>
+                  {entry.q}
+                  <i aria-hidden="true" />
+                </summary>
+                <p>{entry.a}</p>
+              </details>
+            ))}
+          </div>
+        </section>
+
+        <section className="mx-close ax-reveal">
+          <div>
+            <h2>Give your agent a market to build in.</h2>
+            <p>
+              Start with a quote. It costs nothing, it is simulated against the live factory, and it
+              is the fastest way to see what the rest of it does.
+            </p>
+          </div>
+
+          <div className="ax-acts">
+            <a className="ax-btn ax-btn-dark" href="#start">
               Quick start
             </a>
-            <Link className="cx-go cx-go-line" href="/docs/agents">
-              Agent API docs
+            <Link className="ax-btn ax-btn-light" href="/docs/agents">
+              Agent API
             </Link>
           </div>
         </section>
 
-        <footer className="cx-foot">
-          <span>© Agen · Robinhood Chain 4663</span>
-          <nav>
-            <Link href="/">Launchpad</Link>
-            <Link href="/metrics">Metrics</Link>
-            <Link href="/docs/agents">Agent API</Link>
-            <a href="https://modelcontextprotocol.io" target="_blank" rel="noreferrer">
-              MCP ↗
-            </a>
-          </nav>
-        </footer>
-      </div>
+        <SiteFooter />
+      </main>
     </div>
   );
 }
 
 /* --------------------------------------------------------------- the pieces */
 
-function Guard({ n, children }: { readonly n: string; readonly children: ReactNode }) {
+function Guard({ children }: { readonly children: ReactNode }) {
   return (
     <li>
-      <i aria-hidden="true">{n}</i>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+        <path d="M3 8.5 6.4 12 13 4.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
       <span>{children}</span>
     </li>
   );
@@ -956,29 +827,30 @@ function Ecosystem({
   const peak = weeks.reduce((high, week) => Math.max(high, week.value), 0);
 
   return (
-    <section className="cx-sec cx-up" id="data">
-      <p className="cx-kicker">
-        008 <b>Live data</b>
-      </p>
-      <h2>One call returns the whole ecosystem.</h2>
-      <p>
-        These are this deployment&rsquo;s figures, read from the Instant indexer as this page was
-        rendered — the same numbers <code>get_instant_metrics</code> puts in front of an agent, and
-        the same ones <Link href="/metrics">/metrics</Link> shows a person.
+    <section className="ax-section ax-reveal" id="data">
+      <div className="ax-section-head">
+        <h2>Live data</h2>
+        <span className="ax-tag">get_instant_metrics</span>
+      </div>
+
+      <p className="mx-say">
+        This deployment&rsquo;s figures, read from the Instant indexer as this page was rendered —
+        the same numbers an agent gets back, and the same ones <Link href="/metrics">/metrics</Link>{" "}
+        shows a person.
       </p>
 
       {metrics === null ? (
-        <p>
+        <p className="ax-empty" style={{ marginTop: "22px" }}>
           The indexer is not answering right now, so there is nothing to report here. These figures
           come from the feed rather than from this page, and a placeholder would be a guess.
         </p>
       ) : (
         <>
-          <div className="cx-figures">
-            <Figure label="Markets" value={count(metrics.markets)} field="markets" />
-            <Figure label="Creators" value={count(metrics.creators)} field="creators" />
-            <Figure label="Trades" value={count(metrics.trades)} field="trades" />
-            <Figure
+          <div className="ax-mx" style={{ marginTop: "22px" }}>
+            <Stat label="Markets" value={count(metrics.markets)} field="markets" lead />
+            <Stat label="Creators" value={count(metrics.creators)} field="creators" />
+            <Stat label="Trades" value={count(metrics.trades)} field="trades" />
+            <Stat
               label="Volume"
               value={eth(Number(metrics.volumeQuote) / 1e18)}
               field="volume.quote"
@@ -986,19 +858,36 @@ function Ecosystem({
           </div>
 
           {peak === 0 ? null : (
-            <div className="cx-chart">
-              <div className="cx-chart-head">
-                <span>Launches per week</span>
-                <span>get_launches · sort=newest</span>
-              </div>
+            <>
+              <h3 className="mx-h3">Launches per week</h3>
 
-              <BlockBars data={weeks} />
+              <div className="mx-chart">
+                <div className="mx-bars">
+                  {weeks.map((week, index) => (
+                    <div
+                      className={index >= weeks.length - 4 ? "mx-bar mx-bar-near" : "mx-bar"}
+                      key={week.label}
+                      title={`${week.label}: ${count(week.value)}`}
+                    >
+                      <i
+                        style={
+                          {
+                            "--h": `${String(Math.round((week.value / peak) * 100))}%`,
+                            "--i": String(index),
+                          } as React.CSSProperties
+                        }
+                      />
+                    </div>
+                  ))}
+                </div>
 
-              <div className="cx-chart-foot">
-                <span>12 weeks</span>
-                <span>peak {count(peak)}</span>
+                <div className="mx-axis">
+                  <span>12 weeks ago</span>
+                  <span>peak {count(peak)} in a week</span>
+                  <span>this week</span>
+                </div>
               </div>
-            </div>
+            </>
           )}
         </>
       )}
@@ -1006,21 +895,23 @@ function Ecosystem({
   );
 }
 
-/** One figure, captioned with the field it arrives in. */
-function Figure({
+/** One figure, captioned with the field of the response it arrives in. */
+function Stat({
   label,
   value,
   field,
+  lead = false,
 }: {
   readonly label: string;
   readonly value: string;
   readonly field: string;
+  readonly lead?: boolean;
 }) {
   return (
-    <div className="cx-figure">
-      <span>{label}</span>
-      <b>{value}</b>
-      <em>{field}</em>
+    <div className={lead ? "ax-mx-card ax-mx-lead" : "ax-mx-card"}>
+      <p className="ax-mx-label">{label}</p>
+      <p className="ax-mx-value ax-num">{value}</p>
+      <p className="ax-mx-note">{field}</p>
     </div>
   );
 }
@@ -1030,7 +921,7 @@ function Figure({
  *
  * Weeks rather than days because a launchpad does not launch something every day, and a
  * daily chart of a young market is mostly zeroes — which reads as a broken chart rather
- * than as a quiet week. The last bucket is the current, partial one, labelled as now.
+ * than as a quiet week. The last bucket is the current, partial one.
  */
 function weeklyLaunches(
   markets: readonly { readonly createdAt: number }[],
@@ -1049,7 +940,47 @@ function weeklyLaunches(
   }
 
   return buckets.map((value, index) => ({
-    label: index === WEEKS - 1 ? "NOW" : `W-${String(WEEKS - 1 - index)}`,
+    label: index === WEEKS - 1 ? "this week" : `${String(WEEKS - 1 - index)} weeks ago`,
     value,
   }));
+}
+
+/* ------------------------------------------------------------------- icons */
+
+function Wave() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+      <path d="M2 12c2.5 0 2.5-6 5-6s2.5 8 5 8 2.5-6 6-6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function Lock() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+      <rect x="3.75" y="8.5" width="12.5" height="8.25" rx="2.25" />
+      <path d="M6.75 8.5V6.25a3.25 3.25 0 0 1 6.5 0V8.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function Layers() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+      <path d="M10 2.75 17 6.5l-7 3.75L3 6.5z" strokeLinejoin="round" />
+      <path d="m3 10.5 7 3.75 7-3.75M3 14.25 10 18l7-3.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function Cog() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+      <circle cx="10" cy="10" r="2.75" />
+      <path
+        d="M10 2v2.2M10 15.8V18M2 10h2.2M15.8 10H18M4.4 4.4 6 6M14 14l1.6 1.6M15.6 4.4 14 6M6 14l-1.6 1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
 }

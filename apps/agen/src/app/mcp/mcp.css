@@ -1,1334 +1,756 @@
 /*
- * Agen MCP — the documentation page.
+ * Agen MCP — the page's own pieces.
  *
- * ## What this is
+ * The page is the launchpad's: `ax-page`, the bloom band, `ax-wrap`, `ax-section`,
+ * `ax-card`, `ax-btn`, the site footer. Everything here is a component the design system
+ * does not already have — a tool list, a numbered flow, two custody cards, a tabbed code
+ * panel, an accordion — and each is built out of the same tokens as everything else, so
+ * they inherit the site's greys, radii, easing and hairlines rather than declaring their
+ * own.
  *
- * The one screen on agen.space addressed to a machine and to the person configuring it,
- * so it is set the way that kind of document is set: cream paper, near-black ink, one
- * monospace running through every label, number and identifier, and figures that were
- * computed rather than drawn. The launchpad's own white-and-photograph surface is for
- * markets; this is a reference.
+ * Prefixed `mx-`, and the handful of rules that adjust a shared component — the band's
+ * photograph, the buttons in it — are scoped under `.mx-page`, which only this page wears.
+ * Nothing here can reach another screen.
  *
- * It is not a third design system. The type is the site's, the corner radii, the pill
- * buttons, the hairline discipline and the reveal-on-scroll are all the launchpad's, and
- * the two colours are one step warmer and one step softer than `--ax-page` and `--ax-ink`:
- * #F3EEE6 against #232323 instead of #FFFFFF against #0B0B0C. Put the two pages side by
- * side and they are the same hand.
- *
- * Everything is prefixed `cx-` and every rule is a descendant of `.cx`, so nothing here
- * can reach a launchpad screen.
- *
- * ## The shape
- *
- * A hero with the argument on the left and a field of type on the right. Then the
- * reference proper: a numbered index in the margin that follows the reader down, and one
- * measure of text beside it. Two sections invert to the dark ground — the tool list and
- * the flow — because the eye needs somewhere to rest on a page this long, and because a
- * black panel is where a terminal belongs.
- *
- * ## Motion
- *
- * The launchpad's three: an entrance, a reveal as a section arrives, and a response to the
- * pointer. Nothing loops. The reveals are scroll-driven inside `@supports`, so a browser
- * without `animation-timeline` shows the page at rest rather than blank.
+ * If you are looking for the cream-and-ASCII version of this page: it was a second design
+ * language on a site that already has one, and it is gone.
  */
 
-.cx {
-  --cx-paper: #f3eee6;
-  --cx-ink: #232323;
-
-  /* The ink, thinned. Alpha rather than mixed greys so the same three values work on the
-     cream and on the panels that are one step darker than it. */
-  --cx-body: rgb(35 35 35 / 74%);
-  --cx-dim: rgb(35 35 35 / 56%);
-  --cx-faint: rgb(35 35 35 / 40%);
-  --cx-line: rgb(35 35 35 / 13%);
-  --cx-line-2: rgb(35 35 35 / 26%);
-  --cx-wash: rgb(35 35 35 / 4%);
-
-  /* On the inverted sections, the same relationships the other way up. */
-  --cx-up-1: rgb(243 238 230 / 92%);
-  --cx-up-2: rgb(243 238 230 / 62%);
-  --cx-up-3: rgb(243 238 230 / 38%);
-  --cx-up-line: rgb(243 238 230 / 15%);
-
-  /* One accent, used four times on the whole page: the live dot, the tool that spends
-     money, a number in a code panel, and the marker beside the section being read. */
-  --cx-hot: #e2571e;
-
-  --cx-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-  --cx-ease: cubic-bezier(0.16, 1, 0.3, 1);
-  --cx-gutter: clamp(20px, 4vw, 54px);
-
-  position: relative;
-  min-height: 100vh;
-  background: var(--cx-paper);
-  color: var(--cx-ink);
-  font-family: var(--font-display, "Aeonik", var(--font-fallback), system-ui, sans-serif);
-  -webkit-font-smoothing: antialiased;
-  overflow: clip;
-}
-
-.cx * {
-  box-sizing: border-box;
-}
-
-/* The app's frame is a white sheet with rounded corners. This fills it rather than
-   replacing it, exactly as `/agents` does with its own ground. */
-.shell:has(.cx) {
-  background: var(--cx-paper);
-}
-
-.cx-wrap {
-  width: 100%;
-  max-width: 1280px;
-  margin-inline: auto;
-  padding-inline: var(--cx-gutter);
-}
-
-.cx-mono {
-  font-family: var(--cx-mono);
-  font-size: 0.66rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-/* ---------------------------------------------------------------- the bar */
-
-.cx-bar-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding-block: 20px;
-}
-
-.cx-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  font-family: var(--cx-mono);
-  font-size: 0.68rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--cx-ink);
-  text-decoration: none;
-}
-
-.cx-brand img {
-  width: 18px;
-  height: 18px;
-  /* The mark is drawn for a dark ground; on cream it reads as a smudge unless it is
-     inverted to the page's own ink. */
-  filter: grayscale(1) brightness(0.18);
-}
-
-.cx-brand span {
-  color: var(--cx-faint);
-}
-
-.cx-bar-links {
-  display: flex;
-  align-items: center;
-  gap: 22px;
-  font-family: var(--cx-mono);
-  font-size: 0.64rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.cx-bar-links a {
-  color: var(--cx-dim);
-  text-decoration: none;
-  transition: color 0.16s var(--cx-ease);
-}
-
-.cx-bar-links a:hover {
-  color: var(--cx-ink);
-}
-
-@media (max-width: 780px) {
-  .cx-bar-links a:not(:last-child) {
-    display: none;
-  }
-}
-
-/* ---------------------------------------------------------------- the hero */
-
-.cx-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 0.94fr);
-  align-items: stretch;
-  gap: clamp(28px, 4vw, 60px);
-  padding: clamp(26px, 5vh, 64px) 0 clamp(40px, 7vh, 82px);
-}
-
-.cx-hero-say {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding-block: clamp(10px, 3vh, 40px);
-}
-
-.cx-eyebrow {
-  margin: 0 0 26px;
-  font-family: var(--cx-mono);
-  font-size: 0.64rem;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-  color: var(--cx-dim);
-}
-
-.cx-title {
-  margin: 0;
-  font-size: clamp(2.2rem, 1.2rem + 3.6vw, 3.9rem);
-  font-weight: 500;
-  line-height: 1.03;
-  letter-spacing: -0.04em;
-  color: var(--cx-ink);
-}
-
-.cx-hero p {
-  margin: 24px 0 0;
-  max-width: 46ch;
-  font-size: 0.93rem;
-  line-height: 1.62;
-  color: var(--cx-body);
-}
-
-/* --- actions -------------------------------------------------------------- */
-
-.cx-acts {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  margin-top: 30px;
-}
-
-.cx-go {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  height: 42px;
-  padding: 0 20px;
-  font-family: var(--cx-mono);
-  font-size: 0.66rem;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-  color: var(--cx-paper);
-  background: var(--cx-ink);
-  border: 1px solid var(--cx-ink);
-  border-radius: 9px;
-  text-decoration: none;
-  transition: transform 0.18s var(--cx-ease), opacity 0.18s var(--cx-ease);
-}
-
-.cx-go:hover {
-  transform: translateY(-1.5px);
-  opacity: 0.9;
-}
-
-.cx-go:active {
-  transform: translateY(0) scale(0.99);
-}
-
-/* The second action is the same shape, unfilled. */
-.cx-go-line {
-  color: var(--cx-ink);
-  background: none;
-}
-
-.cx-go-line:hover {
-  background: var(--cx-wash);
-  opacity: 1;
-}
-
-/* The dot the reference puts on its own primary action, kept for the one thing on this
-   page that is live rather than written: the figures further down. */
-.cx-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--cx-hot);
-  flex: none;
-}
-
-/* --- the strip ------------------------------------------------------------ */
+/* -------------------------------------------------------------- the band */
 
 /*
- * The facts, as an instrument panel: four to a row, hairlines between, mono throughout.
- * These are constants of the deployment rather than measurements, so they can be typeset
- * as certainties — which is the whole reason this strip reads as a specification and not
- * as a set of statistics.
+ * A wash under the type, only on this band.
+ *
+ * The design system shows a band's photograph as it was given and pays for legibility with
+ * a shadow on the type, which works because every other photograph is foliage. This one is
+ * a pale gradient, and white on pale lilac is thin however it is shadowed. So a soft ellipse
+ * of dark sits behind the title block and nowhere else: the corners of the picture arrive
+ * untouched, and the four hundred pixels the words occupy are dark enough to read.
  */
-.cx-strip {
+.mx-page .ax-bloom-shot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(ellipse 62% 58% at 50% 52%, rgb(28 22 46 / 42%) 0%, transparent 74%);
+  pointer-events: none;
+}
+
+.mx-page .ax-bloom-in p {
+  color: rgb(255 255 255 / 88%);
+  text-shadow: 0 1px 14px rgb(24 18 40 / 42%);
+}
+
+/*
+ * Two buttons in the band, which no other page puts there.
+ *
+ * Every other band is a title over a page whose first section is the thing you came for.
+ * This one is a document, and the two things a reader wants — get it running, see the tools
+ * — are a long scroll apart, so they are offered at the top. Centred, because the band is.
+ */
+.mx-page .ax-bloom-in .ax-acts {
+  justify-content: center;
+  margin-top: 26px;
+}
+
+/* ------------------------------------------------------------------- intro */
+
+.ax-page .mx-lede {
+  max-width: 62ch;
+  margin: 0;
+  font-size: 1.02rem;
+  line-height: 1.62;
+  color: var(--ax-body);
+}
+
+.ax-page .mx-say {
+  max-width: 68ch;
+  margin: 18px 0 0;
+  font-size: 0.95rem;
+  line-height: 1.68;
+  color: var(--ax-body);
+}
+
+.ax-page .mx-say code,
+.ax-page .mx-note code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.86em;
+  color: var(--ax-ink);
+}
+
+.ax-page .mx-h3 {
+  margin: 34px 0 0;
+  font-size: 1.05rem;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--ax-ink);
+}
+
+/* --- the four things it does --------------------------------------------- */
+
+.mx-cards {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
-  margin-top: 40px;
-  background: var(--cx-line);
-  border: 1px solid var(--cx-line);
-}
-
-.cx-strip div {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 11px 13px;
-  background: var(--cx-paper);
-  font-family: var(--cx-mono);
-  font-size: 0.63rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.cx-strip span {
-  color: var(--cx-faint);
-}
-
-.cx-strip b {
-  font-weight: 400;
-  color: var(--cx-ink);
-}
-
-/* --- the figure ----------------------------------------------------------- */
-
-.cx-plate {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 420px;
-  padding: 24px;
-  background: var(--cx-ink);
-  border-radius: 12px;
-  overflow: hidden;
-}
-
-.cx-spiral {
-  width: 100%;
-  max-width: 560px;
-  height: auto;
-  fill: var(--cx-up-1);
-  font-family: var(--cx-mono);
-  letter-spacing: 0.16em;
-  /* Slow enough that it is weather rather than an animation: a full turn takes four
-     minutes, which is invisible to anyone looking straight at it. */
-  animation: cx-turn 240s linear infinite;
-  transform-origin: center;
-}
-
-@keyframes cx-turn {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.cx-plate-tag {
-  position: absolute;
-  left: 16px;
-  bottom: 14px;
-  font-family: var(--cx-mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--cx-up-3);
-}
-
-/* ---------------------------------------------------------------- the body */
-
-.cx-body {
-  display: grid;
-  grid-template-columns: 196px minmax(0, 1fr);
-  gap: clamp(26px, 4vw, 64px);
-  align-items: start;
-  padding-top: 8px;
-}
-
-/*
- * The index.
- *
- * Numbered, because the sections are a sequence — you read this page once from the top and
- * then come back to section four forever. `align-self: start` is what makes the sticky
- * work: a stretched grid item is as tall as its row and has nowhere to stick to.
- */
-.cx-side {
-  position: sticky;
-  top: 24px;
-  align-self: start;
-}
-
-.cx-side-label {
-  margin: 0 0 14px;
-  font-family: var(--cx-mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--cx-faint);
-}
-
-.cx-side nav {
-  display: flex;
-  flex-direction: column;
-}
-
-.cx-side a {
-  display: flex;
-  gap: 9px;
-  padding: 6px 0;
-  font-family: var(--cx-mono);
-  font-size: 0.66rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--cx-dim);
-  text-decoration: none;
-  transition: color 0.16s var(--cx-ease);
-}
-
-.cx-side a i {
-  font-style: normal;
-  color: var(--cx-faint);
-  transition: color 0.16s var(--cx-ease);
-}
-
-.cx-side a:hover {
-  color: var(--cx-ink);
-}
-
-.cx-side a[aria-current="true"] {
-  color: var(--cx-ink);
-}
-
-.cx-side a[aria-current="true"] i {
-  color: var(--cx-hot);
-}
-
-.cx-side-foot {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  margin-top: 22px;
-  padding-top: 15px;
-  border-top: 1px solid var(--cx-line);
-}
-
-.cx-side-foot a {
-  padding: 0;
-  font-size: 0.63rem;
-  letter-spacing: 0.1em;
-  color: var(--cx-faint);
-}
-
-.cx-side-foot a:hover {
-  color: var(--cx-ink);
-}
-
-/* --- the column ----------------------------------------------------------- */
-
-.cx-doc {
-  min-width: 0;
-  max-width: 74ch;
-}
-
-.cx-sec {
-  padding-top: clamp(52px, 7vh, 84px);
-  scroll-margin-top: 24px;
-}
-
-.cx-sec:first-child {
-  padding-top: 0;
-}
-
-.cx-kicker {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin: 0 0 14px;
-  font-family: var(--cx-mono);
-  font-size: 0.62rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--cx-faint);
-}
-
-.cx-kicker b {
-  font-weight: 400;
-  color: var(--cx-ink);
-}
-
-.cx-doc h2 {
-  margin: 0;
-  max-width: 26ch;
-  font-size: clamp(1.45rem, 1.1rem + 1.1vw, 2rem);
-  font-weight: 500;
-  line-height: 1.1;
-  letter-spacing: -0.035em;
-  color: var(--cx-ink);
-}
-
-.cx-doc h3 {
-  margin: 34px 0 0;
-  font-size: 1rem;
-  font-weight: 500;
-  letter-spacing: -0.022em;
-  color: var(--cx-ink);
-}
-
-.cx-doc p {
-  margin: 16px 0 0;
-  font-size: 0.9rem;
-  line-height: 1.68;
-  color: var(--cx-body);
-}
-
-.cx-doc a {
-  color: var(--cx-ink);
-  text-decoration: underline;
-  text-decoration-color: var(--cx-line-2);
-  text-underline-offset: 3px;
-  transition: text-decoration-color 0.16s var(--cx-ease);
-}
-
-.cx-doc a:hover {
-  text-decoration-color: var(--cx-ink);
-}
-
-.cx-doc code {
-  font-family: var(--cx-mono);
-  font-size: 0.82em;
-  color: var(--cx-ink);
-}
-
-/* ---------------------------------------------------------------- inverted */
-
-/*
- * The two sections that turn over.
- *
- * Panels in the text column rather than bands across the window. A full-bleed band would
- * have to pass under the index in the margin, and an index in dark ink on a dark ground is
- * an index nobody can read — a sticky element cannot invert itself for the few hundred
- * pixels it happens to be crossing. Inside the column the change of ground still does its
- * work, and the page keeps its table of contents the whole way down.
- */
-.cx-invert {
-  position: relative;
-  margin-block: clamp(52px, 7vh, 88px) 0;
-  background: var(--cx-ink);
-  color: var(--cx-up-1);
-  border-radius: 14px;
-  overflow: hidden;
-}
-
-.cx-in {
-  padding: clamp(26px, 3.4vw, 40px);
-}
-
-/*
- * The band the drawing sits in.
- *
- * Its own register at the top of the panel rather than a watermark behind the text. A
- * figure this fine cannot be read through a paragraph — at 22% it was a smudge and at 50%
- * it ate the words — so it gets a band of its own, cropped top and bottom, which is also
- * how the thing looks most like the instrument readout it is imitating.
- */
-.cx-art {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: clamp(190px, 24vw, 300px);
-  border-bottom: 1px solid var(--cx-up-line);
-  overflow: hidden;
-}
-
-.cx-invert .cx-kicker {
-  color: var(--cx-up-3);
-}
-
-.cx-invert .cx-kicker b {
-  color: var(--cx-up-1);
-}
-
-.cx-invert h2 {
-  max-width: 24ch;
-  margin: 0;
-  font-size: clamp(1.5rem, 1.1rem + 1.4vw, 2.15rem);
-  font-weight: 500;
-  line-height: 1.1;
-  letter-spacing: -0.035em;
-  color: var(--cx-up-1);
-}
-
-.cx-invert p {
-  margin: 16px 0 0;
-  max-width: 60ch;
-  font-size: 0.9rem;
-  line-height: 1.68;
-  color: var(--cx-up-2);
-}
-
-.cx-invert code {
-  font-family: var(--cx-mono);
-  font-size: 0.82em;
-  color: var(--cx-up-1);
-}
-
-/*
- * The torus, behind the words. It is a texture at this opacity, not a picture, which is
- * the only way a figure this busy can sit under running text.
- *
- * The four resets are not decoration: the app's base stylesheet gives every `pre` a panel
- * background, a padding, a border radius and `max-height: 26rem`, which is right for a
- * code block and turns a drawing into a grey box with its bottom third scrolled away.
- */
-.cx-ascii {
-  flex: none;
-  margin: 0;
-  padding: 0;
-  max-height: none;
-  background: none;
-  border: 0;
-  border-radius: 0;
-  overflow: visible;
-  font-family: var(--cx-mono);
-  font-size: 9px;
-  line-height: 1.05;
-  letter-spacing: 0.02em;
-  color: var(--cx-up-1);
-  opacity: 0.62;
-  pointer-events: none;
-  user-select: none;
-  white-space: pre;
-}
-
-/* --- the tool list -------------------------------------------------------- */
-
-/*
- * Eight rows, numbered, with the kind hard right.
- *
- * A reader here is looking one tool up rather than comparing eight, and a numbered list is
- * the shape an eye runs down. The leader dots between name and kind are the thing that
- * makes the two columns readable across a wide row without a rule.
- */
-.cx-list {
-  margin: 28px 0 0;
-  padding: 0;
-  list-style: none;
-  border-top: 1px solid var(--cx-up-line);
-}
-
-.cx-row {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) auto;
-  align-items: baseline;
   gap: 14px;
-  padding: 11px 0;
-  border-bottom: 1px solid var(--cx-up-line);
-  font-family: var(--cx-mono);
-  font-size: 0.74rem;
-  transition: background 0.16s var(--cx-ease);
+  margin-top: 24px;
 }
 
-.cx-row:hover {
-  background: rgb(243 238 230 / 5%);
+.mx-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 20px;
+  background: var(--ax-paper);
+  border: 1px solid var(--ax-line);
+  border-radius: var(--ax-r-lg);
+  transition: border-color 0.22s var(--ax-ease), transform 0.22s var(--ax-ease);
 }
 
-.cx-row-n {
-  color: var(--cx-up-3);
+.mx-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--ax-faint);
 }
 
-.cx-row-name {
-  color: var(--cx-up-1);
+.mx-card svg {
+  width: 19px;
+  height: 19px;
+  color: var(--ax-ink);
+}
+
+.mx-card strong {
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: -0.018em;
+}
+
+.mx-card span {
+  font-size: 0.85rem;
+  line-height: 1.58;
+  color: var(--ax-muted);
+}
+
+/* -------------------------------------------------------------- the tools */
+
+/*
+ * Eight rows rather than eight cards.
+ *
+ * A reader here is looking one tool up, not comparing eight, and a list is the shape an
+ * eye runs down. The kind sits hard right in its own colour because it is the one thing
+ * about a tool worth knowing before reading what it does: whether calling it can cost
+ * anything.
+ */
+.mx-tools {
+  margin-top: 22px;
+  border-top: 1px solid var(--ax-line);
+}
+
+.mx-tool {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 16px;
+  padding: 15px 2px;
+  border-bottom: 1px solid var(--ax-line);
+}
+
+.ax-page .mx-tool code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.83rem;
+  color: var(--ax-ink);
   overflow-wrap: anywhere;
 }
 
-.cx-row-kind {
-  font-size: 0.63rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--cx-up-3);
+.ax-page .mx-tool p {
+  grid-column: 1 / -1;
+  margin: 0;
+  max-width: 84ch;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--ax-muted);
+}
+
+.mx-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 9px;
+  font-size: 0.7rem;
+  font-weight: 450;
+  color: var(--ax-muted);
+  background: var(--ax-fill);
+  border: 1px solid var(--ax-line);
+  border-radius: 999px;
   white-space: nowrap;
 }
 
-.cx-row-kind-spend {
-  color: var(--cx-hot);
+.mx-kind i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentcolor;
+  opacity: 0.55;
 }
 
-/* Scoped for the same reason as the panel note: it is a `p` in a section that styles all
-   of them, and this one sits inside a row rather than in the flow of the prose. */
-.cx-invert .cx-row-what {
-  grid-column: 2 / -1;
-  margin: 6px 0 0;
-  padding-bottom: 2px;
-  font-family: var(--font-display, "Aeonik", var(--font-fallback), system-ui, sans-serif);
-  font-size: 0.83rem;
-  line-height: 1.6;
-  color: var(--cx-up-2);
+/* The one tool that spends money is the one tool that is not grey. */
+.mx-kind-spend {
+  color: var(--ax-down);
+  background: color-mix(in srgb, var(--ax-down) 7%, var(--ax-paper));
+  border-color: color-mix(in srgb, var(--ax-down) 22%, var(--ax-line));
 }
 
-.cx-total {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 16px;
-  font-family: var(--cx-mono);
-  font-size: 0.64rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--cx-up-3);
+.mx-kind-spend i {
+  opacity: 1;
 }
 
-/* --- numbered blocks ------------------------------------------------------ */
+/* ---------------------------------------------------------------- the flow */
 
-/*
- * The three-column argument on the dark ground. Each block is a number, a name and a
- * paragraph — the form the reference uses, and the reason it works is that the number is
- * a landmark you can refer to out loud.
- */
-.cx-blocks {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 26px 30px;
-  margin-top: 40px;
-}
-
-.cx-block strong {
-  display: block;
-  font-family: var(--cx-mono);
-  font-size: 0.63rem;
-  font-weight: 400;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-  color: var(--cx-up-1);
-}
-
-.cx-block em {
-  display: block;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--cx-up-line);
-  font-style: normal;
-  font-size: 0.85rem;
-  line-height: 1.62;
-  color: var(--cx-up-2);
-}
-
-/* --- the flow ------------------------------------------------------------- */
-
-.cx-steps {
-  margin: 34px 0 0;
+.mx-flow {
+  margin: 24px 0 0;
   padding: 0;
   list-style: none;
-  counter-reset: cx-step;
+  counter-reset: mx-step;
 }
 
-.cx-step {
+.mx-step {
   position: relative;
-  padding: 0 0 22px 42px;
-  counter-increment: cx-step;
+  padding: 0 0 24px 40px;
+  counter-increment: mx-step;
 }
 
-.cx-step:not(:last-child)::before {
+/* The line joining the steps, stopping at the last one — a rail below the final marker
+   would be pointing at nothing. */
+.mx-step:not(:last-child)::before {
   content: "";
   position: absolute;
-  top: 24px;
+  top: 26px;
   bottom: 2px;
-  left: 11px;
+  left: 10px;
   width: 1px;
-  background: var(--cx-line-2);
+  background: var(--ax-line);
 }
 
-.cx-step::after {
-  content: "00" counter(cx-step);
+.mx-step::after {
+  content: counter(mx-step);
   position: absolute;
-  top: 1px;
+  top: 0;
   left: 0;
-  font-family: var(--cx-mono);
-  font-size: 0.62rem;
-  letter-spacing: 0.06em;
-  color: var(--cx-faint);
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--ax-muted);
+  background: var(--ax-fill);
+  border: 1px solid var(--ax-line);
+  border-radius: 50%;
 }
 
 /* The two steps that are the reader's own wallet rather than the machine. */
-.cx-step-you::after {
-  color: var(--cx-hot);
+.mx-step-you::after {
+  color: var(--ax-paper);
+  background: var(--ax-ink);
+  border-color: var(--ax-ink);
 }
 
-.cx-step strong {
+.mx-step strong {
   display: block;
-  font-size: 0.94rem;
+  font-size: 0.97rem;
   font-weight: 500;
-  letter-spacing: -0.024em;
-  color: var(--cx-ink);
+  letter-spacing: -0.02em;
 }
 
-.cx-step p {
+.ax-page .mx-step p {
   margin: 6px 0 0;
-  font-size: 0.855rem;
+  max-width: 80ch;
+  font-size: 0.88rem;
   line-height: 1.62;
-  color: var(--cx-dim);
+  color: var(--ax-muted);
 }
 
-.cx-step span {
+.mx-who {
   display: inline-block;
-  margin-top: 8px;
-  font-family: var(--cx-mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--cx-faint);
+  margin-top: 9px;
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  color: var(--ax-muted);
+  background: var(--ax-fill);
+  border: 1px solid var(--ax-line);
+  border-radius: 6px;
 }
 
-/* ---------------------------------------------------------------- the panel */
+/* --------------------------------------------------------------- the panel */
 
 /*
- * The code panel: a terminal, on the page's own dark.
+ * The code panel: tabs, a dark plate, a copy button.
  *
- * Tabs across the top because there are fourteen examples here and one of them is what
- * any given reader came for. The copy button appears on hover where there is a pointer and
- * is always present where there is not — an invisible control on a touch screen is an
- * absent one.
+ * Dark on a white page because that is what the site already does with code — the token
+ * page's chart panel and the docs `pre` both sit on ink — and because fourteen examples of
+ * JSON are easier to scan light-on-dark than the reverse. The copy button appears on hover
+ * where there is a pointer and is always present where there is not; an invisible control
+ * on a touch screen is an absent one.
  */
-.cx-panel {
-  margin-top: 24px;
-  background: var(--cx-ink);
-  border-radius: 11px;
+.mx-panel {
+  margin-top: 22px;
+  background: var(--ax-ink);
+  border-radius: var(--ax-r-lg);
   overflow: hidden;
 }
 
-.cx-panel-top {
+.mx-panel-top {
   display: flex;
-  align-items: center;
   gap: 2px;
-  padding: 6px 6px 0;
-  border-bottom: 1px solid var(--cx-up-line);
+  padding: 7px 8px 0;
+  border-bottom: 1px solid rgb(255 255 255 / 9%);
   overflow-x: auto;
   scrollbar-width: none;
 }
 
-.cx-panel-top::-webkit-scrollbar {
+.mx-panel-top::-webkit-scrollbar {
   display: none;
 }
 
-.cx-tab {
+.mx-tab {
   position: relative;
   flex: none;
-  padding: 9px 12px 11px;
+  padding: 9px 13px 11px;
   font: inherit;
-  font-family: var(--cx-mono);
-  font-size: 0.63rem;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
-  color: var(--cx-up-3);
+  font-size: 0.78rem;
+  font-weight: 450;
+  color: rgb(255 255 255 / 46%);
   background: none;
   border: 0;
   cursor: pointer;
   white-space: nowrap;
-  transition: color 0.16s var(--cx-ease);
+  transition: color 0.18s var(--ax-ease);
 }
 
-.cx-tab:hover {
-  color: var(--cx-up-2);
+.mx-tab:hover {
+  color: rgb(255 255 255 / 74%);
 }
 
-.cx-tab-on {
-  color: var(--cx-up-1);
+.mx-tab-on {
+  color: #fff;
 }
 
-.cx-tab-on::after {
+.mx-tab-on::after {
   content: "";
   position: absolute;
-  left: 10px;
-  right: 10px;
+  left: 11px;
+  right: 11px;
   bottom: -1px;
   height: 1px;
-  background: var(--cx-up-1);
+  background: #fff;
 }
 
-.cx-panel-body {
+.mx-panel-body {
   position: relative;
 }
 
-/* Same reset as the drawing above, for the same reason: the base `pre` brings its own
-   panel background, radius and 26rem ceiling, and the longest example here is taller. */
-.cx-panel pre {
+.ax-page .mx-panel pre {
   margin: 0;
-  padding: 16px 18px 18px;
+  padding: 17px 19px 19px;
   max-height: none;
+  overflow-x: auto;
   background: none;
   border: 0;
   border-radius: 0;
-  overflow-x: auto;
-  font-family: var(--cx-mono);
-  font-size: 0.735rem;
-  line-height: 1.62;
-  color: var(--cx-up-1);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.76rem;
+  line-height: 1.66;
+  color: rgb(255 255 255 / 92%);
   /* The base `pre` wraps its lines. A wrapped shell command is a different command. */
   white-space: pre;
   tab-size: 2;
 }
 
-/* The code sits in a `code` inside that `pre`, and `.cx-doc code` two hundred lines up
-   paints it in the page's ink — which on this ground is black on black. */
-.cx-panel code {
+/* The code lives in a `code` inside that `pre`, which the base stylesheet would paint in
+   the page's ink — black on black. */
+.ax-page .mx-panel code {
   font: inherit;
   color: inherit;
   background: none;
 }
 
-/* Monochrome and one accent. A key is the paper colour, a value is dimmer, a number is
-   the hot one, a comment recedes — four states, which is all JSON has. */
-.cx-k {
-  color: var(--cx-up-1);
+.mx-k {
+  color: #fff;
 }
 
-.cx-s {
-  color: var(--cx-up-2);
+.mx-s {
+  color: rgb(255 255 255 / 62%);
 }
 
-.cx-n {
-  color: var(--cx-hot);
+.mx-n {
+  color: #86d3ad;
 }
 
-.cx-c {
-  color: var(--cx-up-3);
+.mx-c {
+  color: rgb(255 255 255 / 38%);
 }
 
-.cx-copy {
+.mx-copy {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 11px;
+  right: 11px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
-  padding: 0 10px;
+  height: 27px;
+  padding: 0 11px;
   font: inherit;
-  font-family: var(--cx-mono);
-  font-size: 0.58rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--cx-up-2);
-  background: var(--cx-ink);
-  border: 1px solid var(--cx-up-line);
+  font-size: 0.72rem;
+  color: rgb(255 255 255 / 66%);
+  background: rgb(255 255 255 / 8%);
+  border: 0;
   border-radius: 999px;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.16s var(--cx-ease), color 0.16s var(--cx-ease);
+  transition: opacity 0.18s var(--ax-ease), color 0.18s var(--ax-ease);
 }
 
-.cx-panel:hover .cx-copy,
-.cx-copy:focus-visible {
+.mx-panel:hover .mx-copy,
+.mx-copy:focus-visible {
   opacity: 1;
 }
 
 @media (hover: none) {
-  .cx-copy {
+  .mx-copy {
     opacity: 1;
   }
 }
 
-.cx-copy:hover {
-  color: var(--cx-up-1);
+.mx-copy:hover {
+  color: #fff;
 }
 
-.cx-copy svg {
-  width: 11px;
-  height: 11px;
+.mx-copy svg {
+  width: 12px;
+  height: 12px;
 }
 
-/* Scoped through the panel to outrank `.cx-doc p`, which would otherwise paint this
-   paragraph in the page's ink on the panel's dark ground. */
-.cx-panel .cx-panel-foot {
+.ax-page .mx-panel-foot {
   margin: 0;
-  padding: 11px 18px 13px;
-  border-top: 1px solid var(--cx-up-line);
-  font-size: 0.8rem;
-  line-height: 1.55;
-  color: var(--cx-up-2);
+  padding: 12px 19px 14px;
+  border-top: 1px solid rgb(255 255 255 / 9%);
+  font-size: 0.82rem;
+  line-height: 1.58;
+  color: rgb(255 255 255 / 62%);
 }
 
-.cx-panel-foot code {
-  font-family: var(--cx-mono);
-  font-size: 0.82em;
-  color: var(--cx-up-1);
+.ax-page .mx-panel-foot code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.86em;
+  color: rgb(255 255 255 / 92%);
 }
 
-.cx-panel-foot strong {
-  color: var(--cx-up-1);
+.ax-page .mx-panel-foot strong {
   font-weight: 500;
+  color: #fff;
 }
 
-/* ---------------------------------------------------------------- the table */
+/* --------------------------------------------------------------- the table */
 
-.cx-scroll {
-  margin-top: 24px;
+.mx-scroll {
+  margin-top: 22px;
   overflow-x: auto;
 }
 
-.cx-table {
+.mx-table {
   width: 100%;
-  min-width: 540px;
+  min-width: 560px;
   border-collapse: collapse;
-  font-size: 0.82rem;
+  font-size: 0.86rem;
 }
 
-.cx-table th {
-  padding: 0 16px 8px 0;
+.mx-table th {
+  padding: 0 16px 10px 0;
   text-align: left;
-  font-family: var(--cx-mono);
-  font-size: 0.6rem;
-  font-weight: 400;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-  color: var(--cx-faint);
-  border-bottom: 1px solid var(--cx-line-2);
+  font-size: 0.74rem;
+  font-weight: 450;
+  color: var(--ax-muted);
+  border-bottom: 1px solid var(--ax-line);
   white-space: nowrap;
 }
 
-.cx-table td {
-  padding: 10px 16px 10px 0;
-  line-height: 1.55;
-  color: var(--cx-body);
+.mx-table td {
+  padding: 11px 16px 11px 0;
+  line-height: 1.56;
+  color: var(--ax-body);
   vertical-align: top;
-  border-bottom: 1px solid var(--cx-line);
+  border-bottom: 1px solid var(--ax-line-soft);
 }
 
-.cx-table td:first-child,
-.cx-table td:nth-child(2) {
-  font-family: var(--cx-mono);
-  font-size: 0.72rem;
-  color: var(--cx-ink);
+.ax-page .mx-table code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.8rem;
+  color: var(--ax-ink);
   white-space: nowrap;
 }
 
-/* ---------------------------------------------------------------- custody */
+/* -------------------------------------------------------------- the keys */
 
-.cx-keys {
+.mx-keys {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 26px;
+  gap: 14px;
+  margin-top: 24px;
 }
 
-.cx-key {
+.mx-key {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 20px;
-  border: 1px solid var(--cx-line-2);
-  border-radius: 11px;
+  gap: 11px;
+  padding: 22px;
+  background: var(--ax-paper);
+  border: 1px solid var(--ax-line);
+  border-radius: var(--ax-r-lg);
 }
 
-/* The one card that spends money is the one card that is filled. */
-.cx-key-spend {
-  color: var(--cx-up-1);
-  background: var(--cx-ink);
-  border-color: var(--cx-ink);
+/* The card that spends is the card that is filled, which is the whole point of the pair. */
+.mx-key-spend {
+  color: rgb(255 255 255 / 74%);
+  background: var(--ax-ink);
+  border-color: var(--ax-ink);
 }
 
-.cx-key > code {
-  font-family: var(--cx-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.02em;
-  color: var(--cx-dim);
+.ax-page .mx-key > code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.78rem;
+  color: var(--ax-muted);
   overflow-wrap: anywhere;
 }
 
-.cx-key-spend > code {
-  color: var(--cx-hot);
+.ax-page .mx-key-spend > code {
+  color: rgb(255 255 255 / 62%);
 }
 
-.cx-key strong {
-  font-size: 1rem;
+.mx-key strong {
+  font-size: 1.02rem;
   font-weight: 500;
-  letter-spacing: -0.026em;
+  letter-spacing: -0.022em;
+  color: var(--ax-ink);
 }
 
-.cx-key p {
+.mx-key-spend strong {
+  color: #fff;
+}
+
+.ax-page .mx-key p {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: 0.88rem;
   line-height: 1.62;
-  color: var(--cx-dim);
+  color: var(--ax-muted);
 }
 
-.cx-key-spend p {
-  color: var(--cx-up-2);
+.ax-page .mx-key-spend p {
+  color: rgb(255 255 255 / 66%);
 }
 
-.cx-key dl {
+.mx-key dl {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 6px 14px;
-  margin: 2px 0 0;
-  padding-top: 14px;
-  border-top: 1px solid var(--cx-line);
-  font-family: var(--cx-mono);
-  font-size: 0.66rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  gap: 7px 16px;
+  margin: 3px 0 0;
+  padding-top: 15px;
+  border-top: 1px solid var(--ax-line);
+  font-size: 0.8rem;
 }
 
-.cx-key-spend dl {
-  border-top-color: var(--cx-up-line);
+.mx-key-spend dl {
+  border-top-color: rgb(255 255 255 / 12%);
 }
 
-.cx-key dt {
-  color: var(--cx-faint);
+.mx-key dt {
+  color: var(--ax-muted);
   white-space: nowrap;
 }
 
-.cx-key-spend dt {
-  color: var(--cx-up-3);
+.mx-key-spend dt {
+  color: rgb(255 255 255 / 46%);
 }
 
-.cx-key dd {
+.mx-key dd {
   margin: 0;
-  color: var(--cx-ink);
+  color: var(--ax-ink);
   overflow-wrap: anywhere;
 }
 
-.cx-key-spend dd {
-  color: var(--cx-up-1);
+.mx-key-spend dd {
+  color: #fff;
 }
 
-.cx-guards {
+/* --- the guarantees ------------------------------------------------------- */
+
+.mx-guards {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 30px;
-  margin: 30px 0 0;
+  gap: 0 32px;
+  margin: 26px 0 0;
   padding: 0;
   list-style: none;
-  border-top: 1px solid var(--cx-line);
+  border-top: 1px solid var(--ax-line);
 }
 
-.cx-guards li {
+.mx-guards li {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
-  gap: 10px;
-  padding: 13px 0;
-  border-bottom: 1px solid var(--cx-line);
-  font-size: 0.835rem;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 11px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--ax-line-soft);
+  font-size: 0.875rem;
   line-height: 1.58;
-  color: var(--cx-dim);
+  color: var(--ax-muted);
 }
 
-.cx-guards i {
-  font-style: normal;
-  font-family: var(--cx-mono);
-  font-size: 0.62rem;
-  color: var(--cx-faint);
+.mx-guards svg {
+  width: 15px;
+  height: 15px;
+  margin-top: 3px;
+  color: var(--ax-up);
 }
 
-.cx-guards b {
+.mx-guards b {
   font-weight: 500;
-  color: var(--cx-ink);
+  color: var(--ax-ink);
 }
 
-/* ---------------------------------------------------------------- figures */
+/* --------------------------------------------------------------- the chart */
 
-.cx-figures {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
-  margin-top: 26px;
-  background: var(--cx-line);
-  border: 1px solid var(--cx-line);
+.mx-chart {
+  margin-top: 16px;
+  padding: 20px 22px 16px;
+  background: var(--ax-panel);
+  border: 1px solid var(--ax-line);
+  border-radius: var(--ax-r-lg);
 }
 
-.cx-figure {
+.mx-bars {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 15px 14px 16px;
-  background: var(--cx-paper);
+  align-items: flex-end;
+  gap: 6px;
+  height: 116px;
 }
 
-.cx-figure span {
-  font-family: var(--cx-mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-  color: var(--cx-faint);
-}
-
-.cx-figure b {
-  font-size: clamp(1.2rem, 1rem + 0.7vw, 1.5rem);
-  font-weight: 500;
-  letter-spacing: -0.03em;
-  font-variant-numeric: tabular-nums;
-  color: var(--cx-ink);
-}
-
-.cx-figure em {
-  font-style: normal;
-  font-family: var(--cx-mono);
-  font-size: 0.62rem;
-  color: var(--cx-faint);
-  overflow-wrap: anywhere;
-}
-
-/* --- the block chart ------------------------------------------------------ */
-
-.cx-chart {
-  margin-top: 22px;
-  padding: 16px 18px 14px;
-  border: 1px solid var(--cx-line);
-  border-radius: 11px;
-}
-
-.cx-chart-head,
-.cx-chart-foot {
+.mx-bar {
+  flex: 1;
   display: flex;
-  justify-content: space-between;
-  gap: 14px;
-  font-family: var(--cx-mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--cx-faint);
-}
-
-.cx-chart-foot {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--cx-line);
+  align-items: flex-end;
+  height: 100%;
 }
 
 /*
- * The bars are a fixed number of characters, so their length is set by the type size
- * rather than by a percentage. The clamp is what keeps a fifty-two block row inside a
- * phone: it shrinks the whole chart rather than truncating the long bars. Every row prints
- * its own number on the right regardless, so nothing here depends on measuring a bar.
+ * The bar grows from nothing as the chart arrives, each one a beat behind the last. It is
+ * the only animation on the page that is not a fade, and it is here because a bar chart
+ * drawing itself is legible as "this is measured" in a way a static one is not.
  */
-.cx-bars {
-  margin-top: 12px;
-  font-family: var(--cx-mono);
-  font-size: clamp(0.5rem, 1.5vw, 0.7rem);
-  line-height: 1.5;
+.mx-bar i {
+  width: 100%;
+  height: var(--h);
+  min-height: 3px;
+  background: var(--ax-ink);
+  border-radius: 4px 4px 2px 2px;
+  opacity: 0.22;
+  transform-origin: bottom;
+  animation: mx-grow 0.6s var(--ax-ease) both;
+  animation-delay: calc(var(--i) * 45ms);
 }
 
-.cx-bar {
-  display: grid;
-  grid-template-columns: 62px minmax(0, 1fr) 34px;
-  gap: 10px;
-  align-items: baseline;
+/* The last four weeks are the ones anybody is actually asking about. */
+.mx-bar-near i {
+  opacity: 1;
 }
 
-.cx-bar-label {
-  color: var(--cx-faint);
-  white-space: nowrap;
+@keyframes mx-grow {
+  from {
+    transform: scaleY(0);
+  }
 }
 
-/* The track is one string of blocks and dots, so it cannot wrap into a second line and
-   cannot round to a different width than the number beside it. */
-.cx-bar-track {
-  overflow: hidden;
-  white-space: nowrap;
-  color: var(--cx-line-2);
-  letter-spacing: -0.04em;
-}
-
-.cx-bar-track b {
-  font-weight: 400;
-  color: var(--cx-ink);
-}
-
-.cx-bar-value {
-  text-align: right;
-  color: var(--cx-dim);
-  font-variant-numeric: tabular-nums;
-}
-
-/* ---------------------------------------------------------------- questions */
-
-.cx-faq {
-  margin-top: 26px;
-  border-top: 1px solid var(--cx-line-2);
-}
-
-.cx-q {
-  border-bottom: 1px solid var(--cx-line);
-}
-
-.cx-q summary {
-  display: grid;
-  grid-template-columns: 62px minmax(0, 1fr) 14px;
-  align-items: baseline;
+.mx-axis {
+  display: flex;
+  justify-content: space-between;
   gap: 12px;
-  padding: 15px 2px;
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--ax-line);
+  font-size: 0.75rem;
+  color: var(--ax-muted);
+}
+
+/* ----------------------------------------------------------------- the FAQ */
+
+.mx-faq {
+  margin-top: 22px;
+  border-top: 1px solid var(--ax-line);
+}
+
+.mx-q {
+  border-bottom: 1px solid var(--ax-line);
+}
+
+.ax-page .mx-q summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 2px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 450;
+  letter-spacing: -0.015em;
+  color: var(--ax-body);
   cursor: pointer;
   list-style: none;
-  color: var(--cx-body);
-  transition: color 0.16s var(--cx-ease);
+  transition: color 0.18s var(--ax-ease);
 }
 
-.cx-q summary::-webkit-details-marker {
+.mx-q summary::-webkit-details-marker {
   display: none;
 }
 
-.cx-q summary b {
-  font-family: var(--cx-mono);
-  font-size: 0.62rem;
-  font-weight: 400;
-  letter-spacing: 0.1em;
-  color: var(--cx-faint);
-}
-
-/* Named explicitly: a `summary` inherits the monospace the base stylesheet gives details
-   blocks, and a question is prose. */
-.cx-q summary em {
-  font-family: var(--font-display, "Aeonik", var(--font-fallback), system-ui, sans-serif);
-  font-style: normal;
-  font-size: 0.9rem;
-  font-weight: 450;
-  letter-spacing: -0.02em;
-}
-
-.cx-q summary:hover,
-.cx-q[open] summary {
-  color: var(--cx-ink);
+.mx-q summary:hover,
+.mx-q[open] summary {
+  color: var(--ax-ink);
 }
 
 /* A plus that becomes a minus: one element rotating, rather than two icons swapping. */
-.cx-q summary i {
+.mx-q summary i {
   position: relative;
-  display: block;
-  width: 11px;
-  height: 11px;
-  align-self: center;
+  flex: none;
+  width: 12px;
+  height: 12px;
 }
 
-.cx-q summary i::before,
-.cx-q summary i::after {
+.mx-q summary i::before,
+.mx-q summary i::after {
   content: "";
   position: absolute;
   inset: 50% 0 auto;
-  height: 1px;
-  background: var(--cx-dim);
-  transition: transform 0.24s var(--cx-ease);
+  height: 1.5px;
+  border-radius: 2px;
+  background: var(--ax-faint);
+  transition: transform 0.26s var(--ax-ease);
 }
 
-.cx-q summary i::after {
+.mx-q summary i::after {
   transform: rotate(90deg);
 }
 
-.cx-q[open] summary i::after {
+.mx-q[open] summary i::after {
   transform: rotate(0deg);
 }
 
-.cx-q p {
+.ax-page .mx-q p {
   margin: 0;
-  padding: 0 34px 18px 74px;
-  max-width: 70ch;
-  font-size: 0.855rem;
+  padding: 0 34px 18px 0;
+  max-width: 76ch;
+  font-size: 0.885rem;
   line-height: 1.68;
-  color: var(--cx-dim);
-  animation: cx-open 0.28s var(--cx-ease) both;
+  color: var(--ax-muted);
+  animation: mx-open 0.3s var(--ax-ease) both;
 }
 
-@keyframes cx-open {
+@keyframes mx-open {
   from {
     opacity: 0;
     transform: translateY(-3px);
@@ -1337,233 +759,76 @@
 
 /* ---------------------------------------------------------------- the close */
 
-.cx-close {
-  margin-top: clamp(60px, 9vh, 104px);
-  padding: clamp(36px, 6vw, 66px) 0;
-  border-top: 1px solid var(--cx-line-2);
-}
-
-.cx-close h2 {
-  margin: 0;
-  max-width: 20ch;
-  font-size: clamp(1.7rem, 1.2rem + 1.9vw, 2.6rem);
-  font-weight: 500;
-  line-height: 1.05;
-  letter-spacing: -0.04em;
-}
-
-.cx-close p {
-  margin: 16px 0 0;
-  max-width: 52ch;
-  font-size: 0.9rem;
-  line-height: 1.66;
-  color: var(--cx-body);
-}
-
-/* --- the foot ------------------------------------------------------------- */
-
-.cx-foot {
+.mx-close {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  padding: 20px 0 38px;
-  border-top: 1px solid var(--cx-line);
-  font-family: var(--cx-mono);
-  font-size: 0.62rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--cx-faint);
+  gap: 22px;
+  margin-top: clamp(48px, 7vh, 82px);
+  padding: clamp(28px, 4vw, 42px);
+  background: var(--ax-fill);
+  border-radius: var(--ax-plate);
 }
 
-.cx-foot nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 20px;
+.mx-close h2 {
+  margin: 0;
+  max-width: 18ch;
+  font-size: clamp(1.4rem, 1.1rem + 1.2vw, 2rem);
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
 }
 
-.cx-foot a {
-  color: var(--cx-dim);
-  text-decoration: none;
-  transition: color 0.16s var(--cx-ease);
+.ax-page .mx-close p {
+  margin: 10px 0 0;
+  max-width: 52ch;
+  font-size: 0.92rem;
+  line-height: 1.62;
+  color: var(--ax-body);
 }
 
-.cx-foot a:hover {
-  color: var(--cx-ink);
-}
-
-/* ---------------------------------------------------------------- reveals */
-
-@supports (animation-timeline: view()) {
-  .cx-up {
-    animation: cx-rise linear both;
-    animation-timeline: view();
-    animation-range: entry 0% entry 36%;
-  }
-}
-
-@keyframes cx-rise {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-/* The hero assembles once, on arrival. */
-.cx-hero-say > * {
-  animation: cx-rise 0.9s var(--cx-ease) both;
-}
-
-.cx-title {
-  animation-delay: 60ms;
-}
-
-.cx-hero-say > p {
-  animation-delay: 150ms;
-}
-
-.cx-acts {
-  animation-delay: 230ms;
-}
-
-.cx-strip {
-  animation-delay: 300ms;
-}
-
-.cx-plate {
-  animation: cx-rise 1.1s var(--cx-ease) both;
-  animation-delay: 120ms;
+.mx-close .ax-acts {
+  margin: 0;
 }
 
 /* ---------------------------------------------------------------- narrow */
 
-@media (max-width: 1080px) {
-  .cx-hero {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .cx-plate {
-    min-height: 320px;
-    order: -1;
-  }
-
-  .cx-blocks {
+@media (max-width: 1000px) {
+  .mx-cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-/*
- * The index becomes a strip of chips above the text rather than a drawer. A drawer puts
- * every navigation behind a tap and a gesture, on the one device where the reader is most
- * likely to want a single section out of nine.
- */
-@media (max-width: 900px) {
-  .cx-body {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0;
-  }
-
-  .cx-side {
-    position: static;
-    padding-bottom: 18px;
-    border-bottom: 1px solid var(--cx-line);
-  }
-
-  .cx-side-label,
-  .cx-side-foot {
-    display: none;
-  }
-
-  .cx-side nav {
-    flex-direction: row;
-    gap: 6px;
-    overflow-x: auto;
-    scrollbar-width: none;
-    /* The chips run to the edge of the screen as they scroll, which is what tells a
-       reader there are more of them. */
-    margin-inline: calc(var(--cx-gutter) * -1);
-    padding-inline: var(--cx-gutter);
-  }
-
-  .cx-side nav::-webkit-scrollbar {
-    display: none;
-  }
-
-  .cx-side a {
-    flex: none;
-    padding: 6px 11px;
-    border: 1px solid var(--cx-line);
-    border-radius: 999px;
-    white-space: nowrap;
-  }
-
-  .cx-side a[aria-current="true"] {
-    color: var(--cx-paper);
-    background: var(--cx-ink);
-    border-color: var(--cx-ink);
-  }
-
-  .cx-side a[aria-current="true"] i {
-    color: var(--cx-up-3);
-  }
-
-  .cx-doc {
-    max-width: none;
-  }
-
-  /* The drawing keeps its scale and loses its edges rather than shrinking to a texture. */
-  .cx-ascii {
-    font-size: 7px;
-  }
-}
-
-@media (max-width: 680px) {
-  .cx-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .cx-figures {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .cx-blocks,
-  .cx-keys,
-  .cx-guards {
+@media (max-width: 720px) {
+  .mx-cards,
+  .mx-keys,
+  .mx-guards {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .cx-row {
-    grid-template-columns: 30px minmax(0, 1fr);
+  .mx-tool {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .cx-row-kind {
-    grid-column: 2;
+  .mx-kind {
+    justify-self: start;
   }
 
-  .cx-q summary {
-    grid-template-columns: 50px minmax(0, 1fr) 14px;
+  .mx-bars {
+    height: 92px;
   }
 
-  .cx-q p {
-    padding-left: 62px;
-  }
-
-  .cx-bar {
-    grid-template-columns: 52px minmax(0, 1fr) 30px;
+  /* The oldest weeks go rather than the bars getting thinner: four pixels of bar is not a
+     chart, and the recent end is the end anybody reads. */
+  .mx-bar:nth-child(-n + 4) {
+    display: none;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .cx *,
-  .cx *::before,
-  .cx *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
+  .mx-bar i,
+  .ax-page .mx-q p {
+    animation: none;
   }
 }

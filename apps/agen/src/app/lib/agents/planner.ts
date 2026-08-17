@@ -176,7 +176,23 @@ function instructionsFor(context: PlannerContext): string {
   // create, and the owner reads a rationale that makes no sense.
   const launchBlocker = instantLaunchBlocker(context.agent);
   if (context.permissions.instantAllowed && launchBlocker === null) {
-    lines.push("- instant_launch: create a market immediately, with a name, symbol and description.");
+    lines.push(
+      "- instant_launch: create a market immediately, with a name, symbol and description.",
+      "",
+      "  What a market here actually is, because it changes what you should write:",
+      "  a token with a live pool, tradable the moment it exists. One billion of them,",
+      "  a price that moves with what people pay, and no end date. It does not settle,",
+      "  expire, pay out, or resolve to anything, and nobody adjudicates it.",
+      "",
+      "  So do not write resolution criteria, odds, a settlement date, or a rule",
+      "  beginning \"resolves YES if\". Do not phrase the market as a question awaiting",
+      "  an answer. Anything of that sort is a promise the market cannot keep, it will",
+      "  be read by people deciding whether to buy, and it cannot be edited afterwards:",
+      "  the name, ticker, picture and description are fixed at creation forever.",
+      "",
+      "  Write the description as what the market is about and why it is worth caring",
+      "  about now. Plain sentences, no ceremony.",
+    );
   } else if (context.permissions.instantAllowed) {
     lines.push(`(You cannot create markets right now. ${launchBlocker ?? ""})`);
   }
@@ -289,9 +305,19 @@ function decisionSchema(context: PlannerContext): JsonSchema {
     kind: { type: "string", enum: kinds },
     rationale: text("Why, in one or two sentences, for the owner."),
     confidence: bounded("How sure you are", 0, 1),
-    name: optional(text("Market name. instant_launch and programmable_build only.")),
-    symbol: optional(text("2-10 uppercase letters or digits.")),
-    description: optional(text("instant_launch only.")),
+    name: optional(
+      text(
+        "Market name, as a person would say it aloud. A few words at most. instant_launch and programmable_build only.",
+      ),
+    ),
+    symbol: optional(
+      text(
+        "Ticker: 2-10 uppercase letters or digits. Short and sayable — three to five letters reads like a ticker, nine letters of initials reads like a mistake.",
+      ),
+    ),
+    description: optional(
+      text("What the market is about, in plain sentences. Not a bet, not a rule. instant_launch only."),
+    ),
     initialBuyEth: optional(
       bounded("ETH to buy of your own market at creation. May be 0. Clamped to your budget.", 0, 1),
     ),

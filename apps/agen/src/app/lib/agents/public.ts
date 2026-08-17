@@ -12,7 +12,7 @@ import type { AgentRecord } from "./types";
 
 export async function publicCatalogue(store: AgentStore = agentStore()): Promise<readonly Record<string, unknown>[]> {
   const agents = store.listPublicAgents().filter((agent) => agent.status !== "archived");
-  return Promise.all(agents.map(async (agent) => summarise(store, agent)));
+  return Promise.all(agents.map(async (agent) => summariseAgent(store, agent)));
 }
 
 export async function publicProfile(
@@ -23,7 +23,7 @@ export async function publicProfile(
   if (agent === null || agent.status === "archived") return null;
 
   const [summary, launches, activity, revenue, treasury] = await Promise.all([
-    summarise(store, agent),
+    summariseAgent(store, agent),
     Promise.resolve(store.listLaunches(agent.id).filter((row) => row.status === "succeeded")),
     Promise.resolve(store.listActivity(agent.id, 20)),
     agentRevenue(store, agent).catch(() => ({
@@ -106,7 +106,15 @@ function publicAutonomy(store: AgentStore, agent: AgentRecord): Record<string, u
   };
 }
 
-async function summarise(store: AgentStore, agent: AgentRecord): Promise<Record<string, unknown>> {
+/**
+ * One agent, counted rather than assumed.
+ *
+ * Exported because an owner looking at their own agents should not be shown worse
+ * numbers than a stranger is: the temptation is to answer the owner's list from the
+ * record alone, since it is already in hand, and the result is a dashboard that
+ * reports nothing happened to somebody who watched it happen.
+ */
+export async function summariseAgent(store: AgentStore, agent: AgentRecord): Promise<Record<string, unknown>> {
   const launches = store.listLaunches(agent.id).filter((row) => row.status === "succeeded");
   const tokens = new Set(launches.map((row) => row.token?.toLowerCase()).filter((value): value is string => value !== undefined));
 

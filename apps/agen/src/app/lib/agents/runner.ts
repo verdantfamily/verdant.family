@@ -6,13 +6,11 @@
  * record it, and — only in `autonomous` mode, and only after every Phase 1 rule
  * has agreed — carry it out.
  *
- * Nothing in this file starts a cycle by itself. There is no timer, no interval
- * and no queue here, because deciding what drives the loop on Railway is its own
- * design problem: restart behaviour, replica count, missed slots and backpressure
- * all have to be answered together, and answering them incidentally inside a
- * feature is how a scheduler becomes something nobody can reason about. A cycle
- * happens when a caller asks for one. `next_run_at` is recorded so that a future
- * driver has something to be late for.
+ * Nothing in this file starts a cycle by itself. A cycle happens when a caller
+ * asks for one, and `scheduler.ts` is the caller that asks on a timer. Keeping
+ * the loop out of here is what lets an owner's "run now", a test, and the
+ * scheduler all take the same path: there is one way to run an agent, so there
+ * is one place where the rules about running one live.
  *
  * The ordering below is deliberate and worth keeping. Cheap refusals come before
  * expensive ones, the lease is taken before any model spend, and the treasury and
@@ -62,6 +60,25 @@ export function autonomyGloballyPaused(store: AgentStore): string | null {
     return "Autonomous agents are paused platform-wide.";
   }
   return null;
+}
+
+/** Six hours. Long enough that a broken agent costs almost nothing, short enough
+ * that a fixed one comes back the same day without anyone touching it. */
+const MAX_BACKOFF_SECONDS = 6 * 60 * 60;
+
+/**
+ * How long to wait after a cycle fails.
+ *
+ * One failure is ordinary — a flaky RPC, a model timeout — so the first retry
+ * comes at the normal interval. A run of them usually means something the next
+ * cycle will not fix either, so the wait doubles. The agent is never abandoned,
+ * only slowed, and the thing being conserved is model spend.
+ */
+export function backoffSeconds(intervalSeconds: number, consecutiveFailures: number): number {
+  const doublings = Math.min(Math.max(consecutiveFailures - 1, 0), 10);
+  // The floor matters for agents whose own interval is already longer than the
+  // cap: backing off must never schedule a failing agent sooner than a healthy one.
+  return Math.max(intervalSeconds, Math.min(intervalSeconds * 2 ** doublings, MAX_BACKOFF_SECONDS));
 }
 
 export async function runAgentCycle(
@@ -280,7 +297,7 @@ export async function runAgentCycle(
       outcome: "error",
       modelCalls,
       error: message,
-      nextRunAt,
+      nextRunAt: now + backoffSeconds(autonomy.intervalSeconds, store.consecutiveFailures(agent.id) + 1),
     });
     store.recordActivity({
       agentId: agent.id,

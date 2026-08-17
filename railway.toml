@@ -89,3 +89,17 @@ overlapSeconds = 0
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
 
+# Said out loud because every service deployed from this file is stateful in a way
+# that a second copy would corrupt rather than merely duplicate: Ponder locks a
+# schema, and the Agen app keeps its agents — wallets, spending ledgers, autonomous
+# run history — in SQLite on one volume, with one writer assumed throughout.
+#
+# Railway already refuses replicas on a service with a volume attached, so this
+# cannot currently be got wrong through the dashboard. It is written here anyway,
+# because that guarantee is a side effect of using volumes rather than a decision
+# anyone made, and the day the storage changes is the day it silently stops
+# applying. The scheduler makes the same claim a third time, in the database, where
+# a second writer would actually show up. Three layers for one requirement is not
+# excessive when the failure mode is every agent spending its owner's money twice.
+numReplicas = 1
+

@@ -19,7 +19,7 @@ import { getAddress, parseEther, type Address } from "viem";
 import { decisionFromPayload, type DecisionContext } from "./decision";
 import { AgentError } from "./errors";
 import { executeDecision, type ExecutionResult } from "./executor";
-import { assertAgentOperable } from "./permissions";
+import { assertAgentOperable, instantLaunchBlocker } from "./permissions";
 import { owned } from "./service";
 import { agentStore, type AgentStore } from "./store";
 import { readTreasury } from "./treasury";
@@ -435,6 +435,13 @@ export interface AutonomyView {
   readonly lastDecision: Record<string, unknown> | null;
   readonly pending: readonly Record<string, unknown>[];
   readonly modelCallsToday: number;
+  /**
+   * Things stopping this agent acting, that permissions and the mandate do not
+   * explain. Empty for a healthy agent. Without this an owner watching an agent
+   * decide "no action" forever has no way to find out that it simply has no
+   * picture, because nothing failed — the action was never offered.
+   */
+  readonly blockers: readonly string[];
 }
 
 export function autonomyView(store: AgentStore, agentId: string): AutonomyView {
@@ -443,6 +450,12 @@ export function autonomyView(store: AgentStore, agentId: string): AutonomyView {
   const mandate = store.getMandate(agentId);
   const last = store.lastDecision(agentId);
   const now = Math.floor(Date.now() / 1000);
+
+  const agent = store.getAgent(agentId);
+  const permissions = store.getPermissions(agentId);
+  const launchBlocker = agent === null ? null : instantLaunchBlocker(agent);
+  const blockers =
+    permissions.instantAllowed && launchBlocker !== null ? [launchBlocker] : [];
 
   return {
     enabled: autonomy.enabled,
@@ -467,6 +480,7 @@ export function autonomyView(store: AgentStore, agentId: string): AutonomyView {
     lastDecision: last === null ? null : publicDecision(last),
     pending: store.listPendingDecisions(agentId).map(publicDecision),
     modelCallsToday: store.modelUsage(agentId).calls,
+    blockers,
   };
 }
 

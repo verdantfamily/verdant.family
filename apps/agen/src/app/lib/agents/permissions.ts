@@ -75,6 +75,27 @@ export function assertAgentOperable(agent: AgentRecord): void {
   }
 }
 
+/**
+ * Why this agent could not create a market right now, in the owner's words.
+ *
+ * Separate from permissions because it is not about what the owner allowed — it is
+ * about whether the agent is equipped to do the thing at all. A market needs a
+ * picture, and an agent's own picture is the only one it may use: a model naming an
+ * image URL is an arbitrary remote fetch and arbitrary content on a market page.
+ *
+ * This exists so the answer arrives *before* a model is paid to propose a launch
+ * that cannot happen. Consulted by the planner, which then does not offer the
+ * action, and by the executor, which refuses in the same words if one arrives
+ * anyway. One sentence, one source, so an owner never sees a cycle fail for a
+ * reason nobody explained.
+ */
+export function instantLaunchBlocker(agent: AgentRecord): string | null {
+  if (agent.imageUrl === null || agent.imageUrl.trim() === "") {
+    return "This agent has no picture, and a market it created would have nothing to show. Give it one and it can launch.";
+  }
+  return null;
+}
+
 export function assertLaunchTypeAllowed(permissions: AgentPermissions, kind: LaunchKind): void {
   if (kind === "instant" && !permissions.instantAllowed) {
     throw new AgentError(

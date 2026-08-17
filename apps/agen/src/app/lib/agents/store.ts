@@ -1530,6 +1530,129 @@ export class AgentStore {
     return run;
   }
 
+  /**
+   * Agents whose next cycle is due and which nothing is currently running.
+   *
+   * Ordered oldest-due first so an agent that has been waiting longest is not
+   * starved by one whose interval is short. The lease column is checked here as
+   * well as in `acquireRun`; this one is an optimisation, that one is the rule.
+   */
+  dueAgents(now = Math.floor(Date.now() / 1000), limit = 25): readonly AgentRecord[] {
+    return this.db
+      .prepare(
+        `SELECT a.* FROM agents a
+           JOIN agent_autonomy t ON t.agent_id = a.id
+         WHERE t.enabled = 1
+           AND a.status = 'active'
+           AND t.next_run_at IS NOT NULL
+           AND t.next_run_at <= ?
+           AND (t.lease_expires_at IS NULL OR t.lease_expires_at <= ?)
+         ORDER BY t.next_run_at ASC
+         LIMIT ?`,
+      )
+      .all(now, now, limit)
+      .map((row) => agentFromRow(row as Record<string, unknown>));
+  }
+
+  /**
+   * When the next agent anywhere is due, or null if none are.
+   *
+   * The one number that answers "is the scheduler going to do anything, ever
+   * again" at a glance. A timestamp in the past means agents are due right now
+   * and something is wrong if the heartbeat is fresh.
+   */
+  nextScheduledRun(): number | null {
+    const row = this.db
+      .prepare(
+        `SELECT MIN(t.next_run_at) AS next FROM agent_autonomy t
+           JOIN agents a ON a.id = t.agent_id
+         WHERE t.enabled = 1 AND a.status = 'active' AND t.next_run_at IS NOT NULL`,
+      )
+      .get() as Record<string, unknown> | undefined;
+    const next = row?.next;
+    return next === null || next === undefined ? null : Number(next);
+  }
+
+  /**
+   * Clean up after a process that died mid-cycle.
+   *
+   * Without this an agent wedges permanently, and the way it wedges is worth
+   * spelling out. A killed cycle leaves its run row `running` and its slot
+   * consumed, but `next_run_at` was never advanced — that happens in
+   * `finishRun`, which never ran. So the agent stays due forever at a slot that
+   * is already taken, and every future attempt is refused as a duplicate.
+   *
+   * The repair is to close the run and move the schedule past the dead slot, in
+   * one transaction. The cost of a crash is therefore one interval, and the
+   * cycle that died is never retried — which is the behaviour we want, because
+   * it may have broadcast a transaction before it stopped.
+   */
+  reapAbandonedRuns(now = Math.floor(Date.now() / 1000)): readonly string[] {
+    const abandoned = this.db
+      .prepare(
+        `SELECT agent_id, interval_seconds FROM agent_autonomy
+         WHERE lease_holder IS NOT NULL AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?`,
+      )
+      .all(now) as Record<string, unknown>[];
+
+    if (abandoned.length === 0) return [];
+
+    const reaped: string[] = [];
+    this.db.exec("BEGIN IMMEDIATE;");
+    try {
+      for (const row of abandoned) {
+        const agentId = String(row.agent_id);
+        const interval = Number(row.interval_seconds);
+
+        this.db
+          .prepare(
+            `UPDATE agent_runs SET status = 'interrupted', finished_at = ?, outcome = 'error',
+               error = 'The process running this cycle stopped before it finished.'
+             WHERE agent_id = ? AND status = 'running'`,
+          )
+          .run(now, agentId);
+
+        const autonomy = this.getAutonomy(agentId);
+        this.writeAutonomy({
+          ...autonomy,
+          nextRunAt: now + interval,
+          leaseHolder: null,
+          leaseExpiresAt: null,
+          updatedAt: now,
+        });
+
+        reaped.push(agentId);
+      }
+      this.db.exec("COMMIT;");
+    } catch (error) {
+      this.db.exec("ROLLBACK;");
+      throw error;
+    }
+
+    return reaped;
+  }
+
+  /**
+   * How many cycles in a row have failed, most recent first.
+   *
+   * Feeds the scheduler's backoff. A single failure is ordinary; a run of them
+   * usually means something the next cycle will not fix either, and the point of
+   * counting is to stop paying a model to find that out every interval.
+   */
+  consecutiveFailures(agentId: string): number {
+    const rows = this.db
+      .prepare("SELECT status FROM agent_runs WHERE agent_id = ? ORDER BY started_at DESC LIMIT 20")
+      .all(agentId) as Record<string, unknown>[];
+
+    let count = 0;
+    for (const row of rows) {
+      const status = String(row.status);
+      if (status === "failed" || status === "interrupted") count += 1;
+      else break;
+    }
+    return count;
+  }
+
   getRun(id: string): AgentRun | null {
     const row = this.db.prepare("SELECT * FROM agent_runs WHERE id = ?").get(id) as
       | Record<string, unknown>
@@ -1865,7 +1988,24 @@ function sanitisePayload(payload: Record<string, unknown>): Record<string, unkno
   return clean;
 }
 
-let singleton: AgentStore | null = null;
+/**
+ * One store per process, not one per bundle.
+ *
+ * Next compiles route handlers and the instrumentation hook into separate bundles,
+ * so a plain module-level singleton is instantiated once in each — which would mean
+ * the scheduler and the API opening two SQLite connections to the same file and
+ * contending for the write lock. The whole design assumes a single writer, so the
+ * handle is parked on the global object, which is genuinely shared.
+ */
+const STORE_KEY = Symbol.for("agen.agents.store");
+
+interface StoreGlobal {
+  [STORE_KEY]?: AgentStore | null;
+}
+
+function slot(): StoreGlobal {
+  return globalThis as unknown as StoreGlobal;
+}
 
 export function defaultStorePath(): string {
   const override = process.env["AGEN_AGENT_DB"]?.trim();
@@ -1874,10 +2014,11 @@ export function defaultStorePath(): string {
 }
 
 export function agentStore(): AgentStore {
-  singleton ??= new AgentStore(defaultStorePath());
-  return singleton;
+  const shared = slot();
+  shared[STORE_KEY] ??= new AgentStore(defaultStorePath());
+  return shared[STORE_KEY];
 }
 
 export function resetAgentStoreForTests(store: AgentStore | null): void {
-  singleton = store;
+  slot()[STORE_KEY] = store;
 }

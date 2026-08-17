@@ -17,6 +17,7 @@
 import { AGENT_PROGRAMMABLE_LAUNCHABLE } from "../programmable";
 import type { ValidatedDecision } from "./decision";
 import { AgentError } from "./errors";
+import { instantLaunchBlocker } from "./permissions";
 import { answerAgentBuild, startAgentBuild } from "./programmable";
 import { agentInstantLaunch, claimAgentRevenue } from "./service";
 import type { AgentStore } from "./store";
@@ -37,16 +38,12 @@ export async function executeDecision(
       return { summary: "Did nothing.", detail: {} };
 
     case "instant_launch": {
-      // The market carries the agent's own picture. A model cannot be handed the
-      // ability to name an image URL — that is an arbitrary remote fetch and an
-      // arbitrary thing to put on a market page — and there is nothing else to
-      // use until an owner supplies one.
-      if (agent.imageUrl === null || agent.imageUrl.trim() === "") {
-        throw new AgentError(
-          "VALIDATION_FAILED",
-          "This agent has no image, and a market it creates would have nothing to show.",
-        );
-      }
+      // The market carries the agent's own picture. Normally the planner will not
+      // have offered this action at all when there is no picture to use, so
+      // reaching here means an approval made before the picture was removed. Same
+      // sentence either way.
+      const blocker = instantLaunchBlocker(agent);
+      if (blocker !== null) throw new AgentError("VALIDATION_FAILED", blocker);
 
       const result = await agentInstantLaunch(store, agent, null, {
         name: decision.name,

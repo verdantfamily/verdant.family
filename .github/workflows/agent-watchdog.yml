@@ -1,0 +1,39 @@
+name: agent-watchdog
+
+# Runs off Railway on purpose. The scheduler reporting its own health cannot tell
+# anyone when the process holding it has stopped, and Railway's healthchecks run
+# at deploy time only — so a scheduler that dies an hour after a green deploy goes
+# unnoticed until somebody happens to look. This asks from outside, on a timer.
+on:
+  schedule:
+    # Every fifteen minutes, which is also the shortest interval an owner can give
+    # an agent: a scheduler that stops is noticed before any agent misses two slots.
+    # GitHub runs scheduled workflows late under load; that is acceptable here,
+    # because the staleness threshold is measured against the heartbeat's own
+    # timestamp rather than against when this happened to run.
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # No install step. The watchdog imports nothing — not the app, not a
+      # package — so that the check keeps working on a day when the build does not.
+      - name: check that agents are being woken
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: node apps/agen/scripts/agent-watchdog.ts https://agen.space

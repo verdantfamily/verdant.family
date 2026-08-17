@@ -15,17 +15,39 @@
  * having done nothing.
  */
 
-import type { JsonSchema, ModelProvider, StructuredRequest } from "@verdant/market-compiler";
+import {
+  array,
+  bounded,
+  object,
+  optional,
+  text,
+  type JsonSchema,
+  type ModelProvider,
+  type StructuredRequest,
+} from "@verdant/market-compiler";
 
 import { providerOrNull } from "../builds";
 import { AGENT_PROGRAMMABLE_LAUNCHABLE } from "../programmable";
 import { EXECUTABLE_KINDS } from "./decision";
 import { AgentError } from "./errors";
+import { instantLaunchBlocker } from "./permissions";
 import type { AgentStore } from "./store";
 import type { AgentMandate, AgentPermissions, AgentPolicy, AgentRecord } from "./types";
 
 const PLANNER_TIMEOUT_MS = 120_000;
-const PLANNER_MAX_OUTPUT_TOKENS = 2_000;
+
+/**
+ * A ceiling, not a target.
+ *
+ * The decision itself is a few hundred tokens, so the first version of this was
+ * 2,000 — which failed against a real reasoning model roughly half the time with
+ * "stopped early: max_output_tokens", because reasoning tokens are spent from the
+ * same budget before a single visible token is written. A cycle that dies there
+ * has already been metered and has nothing to show for it, which is a worse way
+ * to spend money than letting the model finish. Bounding cost is `effort` and the
+ * daily call limit's job; this only stops a runaway.
+ */
+const PLANNER_MAX_OUTPUT_TOKENS = 16_000;
 
 export interface PlannerContext {
   readonly store: AgentStore;
@@ -90,6 +112,10 @@ export function modelPlanner(provider: ModelProvider): Planner {
         schema: decisionSchema(context),
         timeoutMs: PLANNER_TIMEOUT_MS,
         role: "fast",
+        // Choosing between five actions against a short mandate is not deep work,
+        // and the cheapest way to keep an agent's daily spend predictable is to not
+        // buy thinking it does not need.
+        effort: "low",
         maxOutputTokens: PLANNER_MAX_OUTPUT_TOKENS,
       };
 
@@ -143,8 +169,17 @@ function instructionsFor(context: PlannerContext): string {
     "",
     "You may choose exactly one of:",
     "- no_action: nothing is worth doing this cycle.",
-    "- instant_launch: create a market immediately, with a name, symbol and description.",
   ];
+
+  // Offered only when it could actually be carried out, and explained when it is
+  // not — otherwise the model reasons about a market it will never be allowed to
+  // create, and the owner reads a rationale that makes no sense.
+  const launchBlocker = instantLaunchBlocker(context.agent);
+  if (context.permissions.instantAllowed && launchBlocker === null) {
+    lines.push("- instant_launch: create a market immediately, with a name, symbol and description.");
+  } else if (context.permissions.instantAllowed) {
+    lines.push(`(You cannot create markets right now. ${launchBlocker ?? ""})`);
+  }
 
   if (context.permissions.programmableAllowed) {
     lines.push(
@@ -236,7 +271,9 @@ function stateFor(context: PlannerContext): string {
  */
 function decisionSchema(context: PlannerContext): JsonSchema {
   const kinds = EXECUTABLE_KINDS.filter((kind) => {
-    if (kind === "instant_launch") return context.permissions.instantAllowed;
+    if (kind === "instant_launch") {
+      return context.permissions.instantAllowed && instantLaunchBlocker(context.agent) === null;
+    }
     if (kind === "programmable_build" || kind === "answer_clarification") {
       return context.permissions.programmableAllowed;
     }
@@ -244,37 +281,34 @@ function decisionSchema(context: PlannerContext): JsonSchema {
     return true;
   });
 
-  return {
-    type: "object",
-    additionalProperties: false,
-    required: ["kind", "rationale", "confidence"],
-    properties: {
-      kind: { type: "string", enum: kinds },
-      rationale: { type: "string", description: "Why, in one or two sentences, for the owner." },
-      confidence: { type: "number", description: "0 to 1." },
-      name: { type: "string", description: "Market name. instant_launch and programmable_build only." },
-      symbol: { type: "string", description: "2-10 uppercase letters or digits." },
-      description: { type: "string", description: "instant_launch only." },
-      initialBuyEth: {
-        type: "number",
-        description: "ETH to buy of your own market at creation. May be 0. Clamped to your budget.",
-      },
-      boost: { type: "boolean", description: "Route trading fees into buybacks, if your owner allows it." },
-      prompt: { type: "string", description: "programmable_build only: the market's full specification." },
-      jobId: { type: "string", description: "answer_clarification only: one of your own builds." },
-      answers: {
-        type: "array",
-        description: "answer_clarification only.",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          required: ["id", "answer"],
-          properties: { id: { type: "string" }, answer: { type: "string" } },
-        },
-      },
-      token: { type: "string", description: "claim_revenue only: one of your own market tokens." },
-    },
-  };
+  // Built with the same helpers every other stage uses, because strict structured
+  // output has rules that are easy to break by hand and fail as an opaque 400: every
+  // property must be required, and "optional" is spelled as a nullable type. A field
+  // that does not apply to the chosen kind comes back as null and is ignored.
+  return object({
+    kind: { type: "string", enum: kinds },
+    rationale: text("Why, in one or two sentences, for the owner."),
+    confidence: bounded("How sure you are", 0, 1),
+    name: optional(text("Market name. instant_launch and programmable_build only.")),
+    symbol: optional(text("2-10 uppercase letters or digits.")),
+    description: optional(text("instant_launch only.")),
+    initialBuyEth: optional(
+      bounded("ETH to buy of your own market at creation. May be 0. Clamped to your budget.", 0, 1),
+    ),
+    boost: optional({
+      type: "boolean",
+      description: "Route trading fees into buybacks, if your owner allows it.",
+    }),
+    prompt: optional(text("programmable_build only: the market's full specification.")),
+    jobId: optional(text("answer_clarification only: one of your own builds.")),
+    answers: optional(
+      array(
+        object({ id: text("The question's id."), answer: text("Your answer.") }),
+        "answer_clarification only.",
+      ),
+    ),
+    token: optional(text("claim_revenue only: one of your own market tokens.")),
+  });
 }
 
 /**

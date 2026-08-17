@@ -826,6 +826,16 @@ function Ecosystem({
 }) {
   const peak = weeks.reduce((high, week) => Math.max(high, week.value), 0);
 
+  /*
+   * Whether twelve weeks is a chart yet.
+   *
+   * A deployment whose launches all landed in one week draws a single black slab beside
+   * eleven empty columns, which reads as a broken axis rather than as a young market. Three
+   * weeks with something in them is the point at which the shape says anything the four
+   * figures above have not already said.
+   */
+  const busy = weeks.filter((week) => week.value > 0).length;
+
   return (
     <section className="ax-section ax-reveal" id="data">
       <div className="ax-section-head">
@@ -857,7 +867,7 @@ function Ecosystem({
             />
           </div>
 
-          {peak === 0 ? null : (
+          {busy < 3 ? null : (
             <>
               <h3 className="mx-h3">Launches per week</h3>
 
@@ -869,14 +879,18 @@ function Ecosystem({
                       key={week.label}
                       title={`${week.label}: ${count(week.value)}`}
                     >
-                      <i
-                        style={
-                          {
-                            "--h": `${String(Math.round((week.value / peak) * 100))}%`,
-                            "--i": String(index),
-                          } as React.CSSProperties
-                        }
-                      />
+                      {/* A week with nothing in it draws nothing. A hairline at the foot of
+                          an empty column would be a launch that did not happen. */}
+                      {week.value === 0 ? null : (
+                        <i
+                          style={
+                            {
+                              "--h": `${String(Math.round((week.value / peak) * 100))}%`,
+                              "--i": String(index),
+                            } as React.CSSProperties
+                          }
+                        />
+                      )}
                     </div>
                   ))}
                 </div>

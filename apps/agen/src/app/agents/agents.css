@@ -1,78 +1,118 @@
 /*
- * Agen for Agents — the surface of a different room.
+ * Agen for Agents — the same building, a quieter room.
  *
  * Everything here is namespaced `ag-`, against the main product's `ax-`, and every rule
- * is a descendant of `.ag-root`. That is not tidiness: the two systems disagree about
- * the most basic thing a stylesheet declares — which way round black and white go — and
- * a single unscoped rule would take the launchpad down with it. The token block below
- * is deliberately not on `:root`.
+ * is a descendant of `.ag-root`. The two systems now agree about which way round black
+ * and white go, so the scoping is no longer load-bearing in the way it once was — but it
+ * stays, because two stylesheets that share a page and disagree about `--line` by two
+ * percent produce a page nobody can debug. The token block below is deliberately not on
+ * `:root`.
  *
  * ## What it sits inside
  *
- * The main app's frame is a white rounded sheet with a gutter, on a black body. This
- * environment does not replace that frame; it fills it. `.ag-root` matches the sheet's
- * height exactly and paints it black, so the sheet's rounded corners survive and the
- * page reads as one continuous dark surface rather than as a dark page pasted onto a
- * light product.
+ * The same white page as the catalogue. `.ag-root` strips the old shell's card frame the
+ * way `.ax-page` does, so an owner moving between the launchpad and their agents crosses
+ * no visible threshold: same ground, same measure, same typography. The environment is
+ * distinguished by what is on it, not by inverting the lights.
  *
  * ## The look
  *
- * Near-black, hairlines, and space. There are no cards in the launchpad sense — a
- * bordered box around every idea is how a dashboard happens, and this is not one. What
- * separates things is a 1px line at 8% white and a lot of nothing. Colour appears three
- * times: green for a live agent, blue for Telegram, and a cool silver for the marks and
- * rules that need to read as machined rather than drawn.
+ * White, hairlines, and space. There are no cards in the launchpad sense — a bordered box
+ * around every idea is how a dashboard happens, and this is not one. What separates
+ * things is a 1px line and a lot of nothing. Colour appears twice: green for a live
+ * agent and amber for one that wants attention.
+ *
+ * The face is SF Pro rather than the brand's Aeonik. This is the one screen an owner
+ * reads rather than browses — permissions, limits, what a machine decided with their
+ * money — and a system face carries dense text and small numbers better than a display
+ * face drawn for headlines.
  *
  * Numbers and machine state are set in mono. Prose is not.
  */
 
 .ag-root {
-  /* Surfaces, darkest first. The canvas is not pure black: at #000 the hairlines have to
-     be brightened to be seen at all, and bright hairlines are what make an interface look
-     like a terminal emulator rather than a product. */
-  --ag-canvas: #08080a;
-  --ag-raise: #0d0d10;
-  --ag-raise-2: #141418;
+  /* Surfaces, lightest first, and matched to `design.css` rather than merely near it:
+     these pages sit on the same white as the catalogue, and two whites half a percent
+     apart look like a rendering fault rather than a decision. */
+  --ag-canvas: #ffffff;
+  --ag-raise: #f7f7f8;
+  --ag-raise-2: #efeff1;
 
-  --ag-line: rgb(255 255 255 / 8%);
-  --ag-line-strong: rgb(255 255 255 / 14%);
+  /* Solid rather than a black at 6%: over `--ag-raise` a translucent line darkens and the
+     same border reads as two different weights depending on what it crosses. */
+  --ag-line: #ebebec;
+  --ag-line-strong: #dcdcde;
 
-  --ag-white: #f4f4f6;
-  --ag-text: #b9b9c2;
-  --ag-muted: #83838e;
-  --ag-faint: #55555f;
+  --ag-ink: #0b0b0c;
+  --ag-text: #45454b;
+  --ag-muted: #77777f;
+  --ag-faint: #a3a3ac;
 
-  /* The chrome. Used for the mark, for rules that want to read as machined, and for the
-     edge of anything that should look milled rather than filled. */
-  --ag-chrome: #c3c7cf;
+  /* The chrome. Used for the mark and for the edge of anything that should look milled
+     rather than filled. Dark enough to hold an outline on white, which the old silver —
+     mixed to glow against black — is not. */
+  --ag-chrome: #9aa0aa;
 
-  --ag-live: #35d07f;
-  --ag-warn: #d9a441;
-  --ag-blue: #3ea6ff;
+  /* Both are read as 6px dots more often than as text, and a dot has no weight to lean
+     on: these are the darkest versions that still read as green and amber rather than as
+     bottle and brown. */
+  --ag-live: #12a05c;
+  --ag-warn: #b07d12;
 
   --ag-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 
+  /* SF Pro, by the two names that resolve to it on Apple platforms without asking the
+     network for anything. The explicit families behind them are for the machines where
+     somebody has installed it; everywhere else `system-ui` is the right answer anyway,
+     because the point of this choice is a face the reader's own system renders well. */
+  --ag-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue",
+    system-ui, sans-serif;
+
+  /* Not the full window. The catalogue's measure exactly, and the pages with navigation
+     centre that plus the rail beside it — so the reading column is the width a reader has
+     been trained by every other page to expect, wherever they arrived from. */
+  --ag-measure: 1200px;
+  --ag-rail: 244px;
+
   --ag-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 
-  /* Mirrors `.shell`'s gutter so the black fills the sheet to its corners. */
-  min-height: calc(100vh - 2 * clamp(0.6rem, 1.6vw, 1.4rem));
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
+  font-family: var(--ag-sans);
   background: var(--ag-canvas);
   color: var(--ag-text);
-  color-scheme: dark;
+  color-scheme: light;
   -webkit-font-smoothing: antialiased;
 }
 
-@media (max-width: 720px) {
-  .ag-root {
-    min-height: 100vh;
-  }
+/*
+ * The old shell is a white card with a gutter on a black body. On these pages the page is
+ * already white, so the card is a rounded seam in the middle of nothing. Stripped exactly
+ * as `design.css` strips it for `.ax-page`, and for the same reason.
+ */
+body:has(.ag-root) {
+  background: var(--ag-canvas, #ffffff);
+}
+
+.shell:has(.ag-root) {
+  max-width: none;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  /* The card clipped its corners, and a clip is a scroll container: the rail's `sticky`
+     had nothing to stick to and held its place only because it is a viewport tall. */
+  overflow: visible;
 }
 
 .ag-root ::selection {
-  background: rgb(255 255 255 / 16%);
-  color: #fff;
+  background: rgb(11 11 12 / 12%);
+  color: var(--ag-ink);
 }
 
 .ag-mono {
@@ -90,7 +130,7 @@
   gap: 9px;
   font-size: 0.82rem;
   letter-spacing: -0.02em;
-  color: var(--ag-white);
+  color: var(--ag-ink);
   text-decoration: none;
 }
 
@@ -98,10 +138,10 @@
   width: 20px;
   height: 20px;
   border-radius: 6px;
-  border: 1px solid var(--ag-chrome);
-  /* Not filled. An outlined mark at this size reads as an instrument face; a filled one
-     reads as a favicon. */
-  opacity: 0.85;
+  /* Filled. Outlined, it read as an instrument face against black and as an unticked
+     checkbox against white — and a logo that asks to be clicked is worse than a plain
+     one. */
+  background: var(--ag-ink);
   flex: none;
 }
 
@@ -118,6 +158,9 @@
  */
 .ag-gate {
   flex: 1;
+  width: 100%;
+  max-width: var(--ag-measure);
+  margin-inline: auto;
   display: flex;
   flex-direction: column;
   padding: 34px clamp(24px, 6vw, 92px) 44px;
@@ -155,7 +198,7 @@
   font-weight: 500;
   line-height: 0.98;
   letter-spacing: -0.045em;
-  color: var(--ag-white);
+  color: var(--ag-ink);
   margin: 0;
 }
 
@@ -172,7 +215,7 @@
   font-weight: 400;
   line-height: 1.25;
   letter-spacing: -0.032em;
-  color: var(--ag-white);
+  color: var(--ag-ink);
   /* The two lines are broken by hand, so this only has to stop a very wide window from
      setting the whole headline on one line. Anything tighter re-wraps the first line and
      the deliberate break stops reading as one. */
@@ -214,17 +257,19 @@
   font-size: 0.9rem;
   font-weight: 500;
   letter-spacing: -0.015em;
-  color: #08080a;
-  background: var(--ag-white);
+  color: #ffffff;
+  background: var(--ag-ink);
   border: 0;
   border-radius: 999px;
   cursor: pointer;
   text-decoration: none;
-  transition: transform 0.2s var(--ag-ease), background 0.2s var(--ag-ease);
+  transition: transform 0.2s var(--ag-ease), box-shadow 0.2s var(--ag-ease);
 }
 
+/* On black the hover was a brightening, which white has nowhere to go from. A lift and a
+   shadow instead, matching the launchpad's primary button. */
 .ag-go:hover:not(:disabled) {
-  background: #fff;
+  box-shadow: 0 8px 22px -8px rgb(11 11 12 / 50%);
   transform: translateX(2px);
 }
 
@@ -255,7 +300,7 @@
 }
 
 .ag-quiet:hover {
-  color: var(--ag-white);
+  color: var(--ag-ink);
 }
 
 .ag-btn {
@@ -268,7 +313,7 @@
   font: inherit;
   font-size: 0.82rem;
   letter-spacing: -0.012em;
-  color: var(--ag-white);
+  color: var(--ag-ink);
   background: var(--ag-raise-2);
   border: 1px solid var(--ag-line);
   border-radius: 10px;
@@ -279,7 +324,7 @@
 
 .ag-btn:hover:not(:disabled) {
   border-color: var(--ag-line-strong);
-  background: #17171c;
+  background: #e9e9ea;
 }
 
 .ag-btn:disabled {
@@ -303,10 +348,10 @@
   align-items: center;
   justify-content: center;
   gap: 22px;
-  background: #050506;
+  background: var(--ag-canvas);
   /* Quick, because the hold is only 620ms in total: a quarter-second fade spends most of
-     it half-transparent, and a black state you can still read the previous screen through
-     is not a black state. */
+     it half-transparent, and a cover you can still read the previous screen through is
+     not a cover. */
   animation: ag-enter-in 0.12s linear both;
 }
 
@@ -314,7 +359,7 @@
   width: 34px;
   height: 34px;
   border-radius: 10px;
-  border: 1px solid var(--ag-chrome);
+  background: var(--ag-ink);
   opacity: 0.9;
   animation: ag-enter-mark 1.6s var(--ag-ease) infinite;
 }
@@ -353,10 +398,18 @@
 
 /* --- the shell ------------------------------------------------------------ */
 
+/*
+ * Centred rather than full-bleed. Left against the window edge, the rail sat a thumb's
+ * width from the frame on a laptop and half a screen from the content on a monitor, and
+ * the same page read as two different products depending on the desk it was on.
+ */
 .ag-shell {
   flex: 1;
+  width: 100%;
+  max-width: calc(var(--ag-measure) + var(--ag-rail));
+  margin-inline: auto;
   display: grid;
-  grid-template-columns: 244px minmax(0, 1fr);
+  grid-template-columns: var(--ag-rail) minmax(0, 1fr);
   align-items: stretch;
 }
 
@@ -439,7 +492,7 @@
   font-size: 0.85rem;
   font-weight: 500;
   letter-spacing: -0.02em;
-  color: var(--ag-white);
+  color: var(--ag-ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -494,7 +547,7 @@
 
 .ag-switch-item:hover {
   background: var(--ag-raise-2);
-  color: var(--ag-white);
+  color: var(--ag-ink);
 }
 
 .ag-switch-item .ag-face {
@@ -522,7 +575,7 @@
 }
 
 .ag-switch-new:hover {
-  color: var(--ag-white);
+  color: var(--ag-ink);
 }
 
 /* --- navigation ----------------------------------------------------------- */
@@ -558,12 +611,12 @@
 }
 
 .ag-nav a:hover {
-  color: var(--ag-white);
+  color: var(--ag-ink);
   background: var(--ag-raise);
 }
 
 .ag-nav a[aria-current="page"] {
-  color: var(--ag-white);
+  color: var(--ag-ink);
   background: var(--ag-raise-2);
 }
 
@@ -599,15 +652,18 @@
   padding: 40px clamp(22px, 4vw, 56px) 96px;
 }
 
+/* No cap of its own. The shell around it is already the measure, and a second limit here
+   only ever disagrees with the first. What keeps prose readable at this width is the
+   `ch` limit on the text that is prose — see `.ag-head-sub` and `.ag-form`. */
 .ag-wide {
-  max-width: 900px;
+  max-width: none;
 }
 
 /* The screens with no sidebar — the gate's siblings and the public profile — centre the
-   same column the shell left-aligns against its navigation. */
+   same measure the shell gives the pages that have one. */
 .ag-solo {
   width: 100%;
-  max-width: 900px;
+  max-width: var(--ag-measure);
   margin-inline: auto;
   padding: 40px clamp(22px, 4vw, 56px) 96px;
 }
@@ -631,7 +687,7 @@
   font-size: clamp(1.5rem, 1.3rem + 0.9vw, 2rem);
   font-weight: 500;
   letter-spacing: -0.038em;
-  color: var(--ag-white);
+  color: var(--ag-ink);
 }
 
 .ag-head-sub {
@@ -706,7 +762,7 @@
 }
 
 .ag-sec-more:hover {
-  color: var(--ag-white);
+  color: var(--ag-ink);
 }
 
 /* --- metrics -------------------------------------------------------------- */
@@ -716,7 +772,7 @@
  *
  * The first version drew a vertical hairline between every figure by showing a 1px gap of
  * the container's background through the cells. It looked right at four across and wrong
- * everywhere else: three figures in a two-column grid left a lit grey rectangle where the
+ * everywhere else: three figures in a two-column grid left a grey rectangle where the
  * fourth would have been. Rules that only work at one column count are not rules, so the
  * dividers went and the spacing does the separating.
  */
@@ -753,7 +809,7 @@
   font-size: 1.35rem;
   font-weight: 400;
   letter-spacing: -0.03em;
-  color: var(--ag-white);
+  color: var(--ag-ink);
   font-variant-numeric: tabular-nums;
 }
 
@@ -802,7 +858,7 @@ a.ag-row:hover {
   font-size: 0.9rem;
   font-weight: 450;
   letter-spacing: -0.02em;
-  color: var(--ag-white);
+  color: var(--ag-ink);
 }
 
 .ag-row-id em {
@@ -842,6 +898,23 @@ a.ag-row:hover {
   word-break: break-all;
 }
 
+/*
+ * The address links to the explorer and carries no class of its own, so without this it
+ * takes the launchpad's underlined blue — which in the middle of a monospaced address
+ * reads as a different kind of thing from the identical address, one row up, that does
+ * not happen to link anywhere.
+ */
+.ag-wallet a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid var(--ag-line-strong);
+  transition: border-color 0.16s var(--ag-ease);
+}
+
+.ag-wallet a:hover {
+  border-bottom-color: var(--ag-chrome);
+}
+
 .ag-wallet-tag {
   font-family: var(--ag-mono);
   font-size: 0.62rem;
@@ -868,7 +941,7 @@ a.ag-row:hover {
 }
 
 .ag-copy:hover {
-  color: var(--ag-white);
+  color: var(--ag-ink);
   border-color: var(--ag-line-strong);
 }
 
@@ -929,14 +1002,15 @@ a.ag-row:hover {
 }
 
 .ag-note-bad {
-  color: #f0b5b5;
-  border-color: rgb(220 120 120 / 26%);
+  color: #a3242b;
+  background: #fdf4f4;
+  border-color: #f0d3d4;
 }
 
 /* --- the directory -------------------------------------------------------- */
 
-/* Borders on the cards, not a lit background behind them — an odd number of agents must
-   not leave a glowing empty slot in the last row. */
+/* Borders on the cards, not a fill behind them — an odd number of agents must not leave a
+   tinted empty slot in the last row. */
 .ag-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -974,7 +1048,7 @@ a.ag-row:hover {
   font-size: 0.95rem;
   font-weight: 500;
   letter-spacing: -0.025em;
-  color: var(--ag-white);
+  color: var(--ag-ink);
 }
 
 .ag-card-id em {
@@ -1022,7 +1096,7 @@ a.ag-row:hover {
   font: inherit;
   font-size: 0.9rem;
   letter-spacing: -0.012em;
-  color: var(--ag-white);
+  color: var(--ag-ink);
   background: var(--ag-raise);
   border: 1px solid var(--ag-line);
   border-radius: 10px;
@@ -1047,10 +1121,12 @@ a.ag-row:hover {
   color: var(--ag-faint);
 }
 
+/* On black, focus meant a lighter well. Here the same move darkens the field, which is
+   what a disabled control looks like — so focus clears it to the page instead. */
 .ag-field input:focus,
 .ag-field textarea:focus {
-  border-color: var(--ag-line-strong);
-  background: var(--ag-raise-2);
+  border-color: var(--ag-chrome);
+  background: var(--ag-canvas);
 }
 
 .ag-pair {
@@ -1078,7 +1154,7 @@ a.ag-row:hover {
   width: 15px;
   height: 15px;
   margin: 0;
-  accent-color: #fff;
+  accent-color: var(--ag-ink);
   cursor: pointer;
 }
 
@@ -1192,7 +1268,7 @@ a.ag-row:hover {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
-    background: rgb(8 8 10 / 94%);
+    background: rgb(255 255 255 / 88%);
     backdrop-filter: blur(12px);
     border-top: 1px solid var(--ag-line);
   }
@@ -1211,7 +1287,7 @@ a.ag-row:hover {
   }
 
   .ag-tabs a[aria-current="page"] {
-    color: var(--ag-white);
+    color: var(--ag-ink);
   }
 
   .ag-tabs svg {
@@ -1305,11 +1381,11 @@ a.ag-row:hover {
 
 .ag-mode-on {
   background: var(--ag-raise-2);
-  border-color: var(--ag-white);
+  border-color: var(--ag-ink);
 }
 
 .ag-mode-on strong {
-  color: var(--ag-white);
+  color: var(--ag-ink);
 }
 
 /* A proposal is the one thing on screen waiting on the person reading it, so it
@@ -1325,7 +1401,7 @@ a.ag-row:hover {
   font-weight: 400;
   letter-spacing: 0.13em;
   text-transform: uppercase;
-  color: var(--ag-white);
+  color: var(--ag-ink);
 }
 
 .ag-proposal {
@@ -1355,7 +1431,7 @@ a.ag-row:hover {
 
 .ag-decision-head strong {
   font-size: 0.92rem;
-  color: var(--ag-white);
+  color: var(--ag-ink);
 }
 
 .ag-decision-tag {

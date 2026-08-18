@@ -152,9 +152,9 @@ body:has(.ag-root) {
 /* --- the gate ------------------------------------------------------------- */
 
 /*
- * One screen, four elements, and a great deal of nothing. The brief for this page was
- * "extremely sparse", which in practice means resisting the two things a landing page
- * always grows: a second column and a row of feature tiles.
+ * One screen, four elements, and a great deal of nothing. Used by the interstitials in
+ * `shell.tsx` — connect, sign, waiting — which are light like every page behind the door.
+ * The door itself is `.ag-door` below and shares none of this.
  */
 .ag-gate {
   flex: 1;
@@ -193,22 +193,6 @@ body:has(.ag-root) {
   padding: 72px 0;
 }
 
-.ag-gate-word {
-  font-size: clamp(2.6rem, 1.6rem + 4.6vw, 5rem);
-  font-weight: 500;
-  line-height: 0.98;
-  letter-spacing: -0.045em;
-  color: var(--ag-ink);
-  margin: 0;
-}
-
-.ag-gate-word em {
-  display: block;
-  font-style: normal;
-  font-weight: 400;
-  color: var(--ag-faint);
-}
-
 .ag-gate-lead {
   margin: clamp(38px, 6vw, 62px) 0 0;
   font-size: clamp(1.25rem, 1.05rem + 0.9vw, 1.85rem);
@@ -216,9 +200,6 @@ body:has(.ag-root) {
   line-height: 1.25;
   letter-spacing: -0.032em;
   color: var(--ag-ink);
-  /* The two lines are broken by hand, so this only has to stop a very wide window from
-     setting the whole headline on one line. Anything tighter re-wraps the first line and
-     the deliberate break stops reading as one. */
   max-width: 26ch;
 }
 
@@ -243,6 +224,165 @@ body:has(.ag-root) {
   font-size: 0.68rem;
   letter-spacing: 0.02em;
   color: var(--ag-faint);
+}
+
+/* --- the door ------------------------------------------------------------- */
+
+/*
+ * The one dark screen in a light product, and deliberately so: it is the threshold rather
+ * than a page of the thing, and everything behind it is white from the moment you are
+ * through. The dark values are local to this block rather than a second theme, because
+ * nothing but the door is ever dark and a theme would be a standing invitation to use it.
+ */
+.ag-door {
+  --door-ink: #ffffff;
+  --door-muted: #8d8d92;
+
+  flex: 1;
+  width: 100%;
+  display: grid;
+  /* The artwork takes the larger half. Measured off the reference, where the panel begins
+     at 48% — near enough to the middle to read as a split screen, far enough from it to
+     look chosen. */
+  grid-template-columns: minmax(0, 48fr) minmax(0, 52fr);
+  background: var(--door-canvas, #000000);
+  color: var(--door-ink);
+  min-height: 100vh;
+}
+
+/*
+ * Full bleed, and the body under it too.
+ *
+ * The door is the only screen here that ignores `--ag-measure`. A centred column with
+ * white either side of it would put two vertical seams down a black screen, and the
+ * artwork has to reach the right edge or it is a picture of a panel rather than the panel.
+ */
+body:has(.ag-door),
+.shell:has(.ag-door) {
+  /* Declared here rather than on the door so the body can use it too: `:has` selects the
+     ancestor, but a custom property set on the descendant does not travel back up. */
+  --door-canvas: #000000;
+  background: var(--door-canvas);
+}
+
+.ag-door-left {
+  display: flex;
+  flex-direction: column;
+  padding: clamp(28px, 4.4vw, 46px) clamp(24px, 4.4vw, 46px);
+  min-width: 0;
+}
+
+.ag-door-top {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+/* A pill rather than a bare word: it is the only way out of this screen, and on a field
+   this empty a small underlined link at the top reads as a footnote. */
+.ag-door-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 18px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 8%);
+  color: var(--door-ink);
+  font-size: 0.84rem;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  transition:
+    background 0.18s var(--ag-ease),
+    transform 0.18s var(--ag-ease);
+}
+
+.ag-door-back:hover {
+  background: rgb(255 255 255 / 14%);
+}
+
+.ag-door-back:active {
+  transform: translateY(1px);
+}
+
+/*
+ * The reading sits under the way back; the actions sit on the floor.
+ *
+ * `margin-top: auto` on the actions rather than centring the middle, so the button is in
+ * the same place in every state of the door — enter, connect, sign — and does not walk up
+ * and down the screen as the sentence above it changes length.
+ */
+.ag-door-body {
+  margin-top: clamp(36px, 7vh, 74px);
+  min-width: 0;
+}
+
+.ag-door-word {
+  margin: 0;
+  /* The ceiling is for the widest displays only: at the reference width this resolves to
+     the middle of the range, and without it a 1600px window sets a 52px headline in a
+     768px column and looks under-set rather than sparse. */
+  font-size: clamp(2.1rem, 1rem + 3.1vw, 4rem);
+  font-weight: 500;
+  line-height: 1.04;
+  letter-spacing: -0.035em;
+  color: var(--door-ink);
+}
+
+.ag-door-sub {
+  margin: 18px 0 0;
+  max-width: 34ch;
+  font-size: 1rem;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  color: var(--door-muted);
+}
+
+.ag-door-acts {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 48px;
+}
+
+.ag-door-note {
+  font-family: var(--ag-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  color: var(--door-muted);
+}
+
+/* The quiet link beside the button is grey on white everywhere else, which is invisible
+   here. */
+.ag-door-acts .ag-quiet {
+  color: var(--door-muted);
+}
+
+.ag-door-acts .ag-quiet:hover {
+  color: var(--door-ink);
+}
+
+/*
+ * Cropped, not fitted.
+ *
+ * `cover` with the right edge pinned: the panel keeps its density at every window shape
+ * and gives up whatever will not fit, which for this artwork is a slice off the left. The
+ * alternative — `contain` — would letterbox it, and bands of dead black above and below a
+ * shrunken graphic are worse than losing the part of it nobody is reading.
+ *
+ * The file is named in exactly one place. See public/a4a/README.md before replacing it.
+ */
+.ag-door-art {
+  background-image: url("/a4a/art.svg");
+  background-size: cover;
+  background-position: right center;
+  background-repeat: no-repeat;
+  /* A margin at the right and nowhere else, which is what the reference does: the panel
+     bleeds off the top and bottom and stops short of the edge it is nearest. Delete this
+     one line for a panel that runs to the corner. */
+  margin-right: clamp(14px, 2.2vw, 30px);
 }
 
 /* --- actions -------------------------------------------------------------- */
@@ -276,6 +416,19 @@ body:has(.ag-root) {
 .ag-go:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* Inverted again on the door, where the page is the colour this button normally is. The
+   pill stays the brightest thing on the screen either way, which is the whole job of it. */
+.ag-door .ag-go {
+  color: #000000;
+  background: #ffffff;
+  height: 50px;
+  padding: 0 34px;
+}
+
+.ag-door .ag-go:hover:not(:disabled) {
+  box-shadow: 0 10px 26px -10px rgb(255 255 255 / 45%);
 }
 
 .ag-go svg {
@@ -353,6 +506,18 @@ body:has(.ag-root) {
      it half-transparent, and a cover you can still read the previous screen through is
      not a cover. */
   animation: ag-enter-in 0.12s linear both;
+}
+
+/* The cover is thrown from the door, which is black. A white one is a flash between two
+   dark screens, which is the one thing a transition meant to read as continuous cannot
+   do. */
+body:has(.ag-door) .ag-enter {
+  background: var(--door-canvas, #000000);
+  color: #ffffff;
+}
+
+body:has(.ag-door) .ag-enter i {
+  background: #ffffff;
 }
 
 .ag-enter i {
@@ -1231,6 +1396,21 @@ a.ag-row:hover {
   }
 
   .ag-side {
+    display: none;
+  }
+
+  /*
+   * The door loses its panel and becomes one column.
+   *
+   * Half a phone screen of texture would push the headline and the button below the fold,
+   * and the artwork says nothing the sentence does not. The black stays: the threshold is
+   * the same threshold on a phone.
+   */
+  .ag-door {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ag-door-art {
     display: none;
   }
 

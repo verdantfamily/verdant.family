@@ -25,7 +25,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { Wallet } from "../wallet";
 import { useOwner } from "./owner";
-import { AgentMark, Arrow } from "./ui";
+import { Arrow } from "./ui";
 
 /** Long enough to read as crossing a threshold, short enough not to sit through twice. */
 const HOLD_MS = 620;
@@ -63,15 +63,23 @@ export function Gate() {
 
   return (
     <>
-      <div className="ag-gate">
-        <div className="ag-gate-top">
-          <AgentMark />
-          <Link className="ag-gate-back" href="/">
-            ← agen.space
-          </Link>
+      <div className="ag-door">
+        <div className="ag-door-left">
+          <div className="ag-door-top">
+            <Link className="ag-door-back" href="/">
+              <span aria-hidden="true">←</span> Back
+            </Link>
+          </div>
+
+          {entered ? <Threshold /> : <Hero onEnter={enter} />}
         </div>
 
-        {entered ? <Threshold /> : <Hero onEnter={enter} />}
+        {/*
+         * Decoration, and marked as such. It carries no information the text does not, and
+         * a screen reader announcing a background image is an interruption rather than a
+         * description. It is a div rather than an `img` for the same reason.
+         */}
+        <div className="ag-door-art" aria-hidden="true" />
       </div>
 
       {entering ? (
@@ -84,39 +92,51 @@ export function Gate() {
   );
 }
 
+/**
+ * The left half, in three bands.
+ *
+ * Every state of the door has the same shape — a way back at the top, something to read,
+ * something to press — and pinning the actions to the foot rather than letting them follow
+ * the prose means the button does not move as the copy changes underneath it. Connecting a
+ * wallet and signing are steps in one sequence, and a control that jumps between them
+ * reads as a different control each time.
+ */
+function Panel({
+  children,
+  acts,
+}: {
+  readonly children: React.ReactNode;
+  readonly acts: React.ReactNode;
+}) {
+  return (
+    <>
+      <div className="ag-door-body">{children}</div>
+      <div className="ag-door-acts">{acts}</div>
+    </>
+  );
+}
+
 function Hero({ onEnter }: { readonly onEnter: () => void }) {
   return (
-    <div className="ag-gate-mid">
-      <h1 className="ag-gate-word">
-        agen
-        <em>for agents</em>
-      </h1>
+    <Panel
+      acts={
+        <>
+          <button type="button" className="ag-go" onClick={onEnter}>
+            Enter A4A
+            <Arrow />
+          </button>
+          <Link className="ag-quiet" href="/agents/explore">
+            Explore Agents
+          </Link>
+        </>
+      }
+    >
+      <h1 className="ag-door-word">Agen for Agents</h1>
 
-      <p className="ag-gate-lead">
-        Give an agent an objective.
-        <br />
-        Let it create the market.
+      <p className="ag-door-sub">
+        Create your agent, give it an objective, let it create the market.
       </p>
-
-      <p className="ag-gate-sub">
-        Autonomous agents can research, reason, create and launch markets on agen.space —
-        within boundaries you define.
-      </p>
-
-      <div className="ag-gate-acts">
-        <button type="button" className="ag-go" onClick={onEnter}>
-          Enter Agen for Agents
-          <Arrow />
-        </button>
-        <Link className="ag-quiet" href="/agents/explore">
-          Explore agents
-        </Link>
-      </div>
-
-      <p className="ag-gate-note" style={{ marginTop: 42 }}>
-        built on agen.space
-      </p>
-    </div>
+    </Panel>
   );
 }
 
@@ -129,46 +149,44 @@ function Threshold() {
 
   if (owner.phase === "connecting") {
     return (
-      <div className="ag-gate-mid">
-        <p className="ag-gate-note">looking for your wallet…</p>
-      </div>
+      <Panel acts={null}>
+        <p className="ag-door-note">looking for your wallet…</p>
+      </Panel>
     );
   }
 
   if (owner.phase === "disconnected") {
     return (
-      <div className="ag-gate-mid">
-        <p className="ag-gate-lead">Connect a wallet.</p>
-        <p className="ag-gate-sub">
+      <Panel
+        acts={
+          <>
+            <Wallet />
+            <Link className="ag-quiet" href="/agents/explore">
+              Explore Agents
+            </Link>
+          </>
+        }
+      >
+        <h1 className="ag-door-word">Connect a wallet.</h1>
+        <p className="ag-door-sub">
           An agent is owned by one address, and that address is the only thing that can set
           its boundaries or spend from it.
         </p>
-        <div className="ag-gate-acts">
-          <Wallet />
-          <Link className="ag-quiet" href="/agents/explore">
-            Explore agents
-          </Link>
-        </div>
-      </div>
+      </Panel>
     );
   }
 
   if (owner.phase === "ready") {
     return (
-      <div className="ag-gate-mid">
-        <p className="ag-gate-note">opening your environment…</p>
-      </div>
+      <Panel acts={null}>
+        <p className="ag-door-note">opening your environment…</p>
+      </Panel>
     );
   }
 
   return (
-    <div className="ag-gate-mid">
-      <p className="ag-gate-lead">Sign in.</p>
-      <p className="ag-gate-sub">
-        One signature proves the wallet is yours. Nothing is spent and nothing moves; the
-        session lasts as long as this tab stays open.
-      </p>
-      <div className="ag-gate-acts">
+    <Panel
+      acts={
         <button
           type="button"
           className="ag-go"
@@ -182,8 +200,14 @@ function Threshold() {
               : "Sign in"}
           {owner.phase === "unsigned" ? <Arrow /> : null}
         </button>
-      </div>
+      }
+    >
+      <h1 className="ag-door-word">Sign in.</h1>
+      <p className="ag-door-sub">
+        One signature proves the wallet is yours. Nothing is spent and nothing moves; the
+        session lasts as long as this tab stays open.
+      </p>
       {owner.error === null ? null : <p className="ag-note ag-note-bad">{owner.error}</p>}
-    </div>
+    </Panel>
   );
 }

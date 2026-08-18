@@ -42,6 +42,7 @@ import { getAddress, isAddress } from "viem";
 import { GENERATED_ROOT } from "./builds";
 import { EXTERNAL, INSTANT_ADDRESSES } from "./chain";
 import { fetchInstantMarketList, type InstantMarketRow } from "./instant-feed";
+import { readMetadata } from "./metadata";
 import { publicClient } from "./onchain";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join as joinPath } from "node:path";
@@ -93,12 +94,63 @@ const EMPTY_METADATA: InstantMetadata = { description: "", image: null, links: {
 const documents = new Map<string, { readonly at: number; readonly value: InstantMetadata }>();
 
 /**
+ * Our own document, if this URI is one.
+ *
+ * Instant writes `https://agen.space/api/metadata/<hash>.json` into the token, and those
+ * bytes live on this process's volume. Reading the file is a `readFile`; fetching the URL
+ * is a request to ourselves while a catalogue render is already occupying the replica.
+ * The file is the same document the route would serve.
+ */
+function ownMetadataName(uri: string): string | null {
+  try {
+    const path = new URL(uri).pathname;
+    const match = /^\/api\/metadata\/([0-9a-f]{32}\.json)$/.exec(path);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function parseMetadata(raw: unknown): InstantMetadata {
+  if (typeof raw !== "object" || raw === null) return EMPTY_METADATA;
+
+  const record = raw as Record<string, unknown>;
+  const text = (value: unknown, max: number): string =>
+    typeof value === "string" ? value.trim().slice(0, max) : "";
+
+  const link = (value: unknown): string | undefined => {
+    const found = text(value, 256);
+    return found === "" || !/^https?:\/\//i.test(found) ? undefined : found;
+  };
+
+  const rawLinks =
+    typeof record.links === "object" && record.links !== null
+      ? (record.links as Record<string, unknown>)
+      : {};
+
+  const image = text(record.image, 512);
+  const x = link(rawLinks.x);
+  const website = link(rawLinks.website);
+  const telegram = link(rawLinks.telegram);
+
+  return {
+    description: text(record.description, 1_000),
+    image: /^https?:\/\//i.test(image) ? image : null,
+    links: {
+      ...(x === undefined ? {} : { x }),
+      ...(website === undefined ? {} : { website }),
+      ...(telegram === undefined ? {} : { telegram }),
+    },
+  };
+}
+
+/**
  * A metadata document, or the empty one.
  *
- * Every field is copied out by name and bounded, exactly as `storeMetadata` does on the
- * way in. The URI is written into the token at creation and cannot be changed, but it is
- * still a URL a creator chose, so what comes back is somebody's JSON and is treated as
- * such rather than spread into the model.
+ * Our own documents are read from disk. Everything else is fetched, bounded, because that
+ * is an outbound request to an address the creator chose and a page render is waiting on
+ * it. Agen's own origin is never fetched: that is a self-request, and a self-request
+ * during a catalogue render is how the tokens vanished once already.
  */
 export async function readMetadataDocument(uri: string): Promise<InstantMetadata> {
   const trimmed = uri.trim();
@@ -107,47 +159,26 @@ export async function readMetadataDocument(uri: string): Promise<InstantMetadata
   const cached = documents.get(trimmed);
   if (cached !== undefined && Date.now() - cached.at < METADATA_TTL_MS) return cached.value;
 
+  const own = ownMetadataName(trimmed);
+  if (own !== null) {
+    try {
+      const bytes = await readMetadata(own);
+      if (bytes === null) return EMPTY_METADATA;
+      const value = parseMetadata(JSON.parse(bytes) as unknown);
+      documents.set(trimmed, { at: Date.now(), value });
+      return value;
+    } catch {
+      return EMPTY_METADATA;
+    }
+  }
+
   try {
-    // Bounded, because this is an outbound request to an address the creator chose and a
-    // page render is waiting on it.
     const response = await fetch(trimmed, {
       signal: AbortSignal.timeout(4_000),
       cache: "no-store",
     });
     if (!response.ok) return EMPTY_METADATA;
-
-    const raw: unknown = await response.json();
-    if (typeof raw !== "object" || raw === null) return EMPTY_METADATA;
-
-    const record = raw as Record<string, unknown>;
-    const text = (value: unknown, max: number): string =>
-      typeof value === "string" ? value.trim().slice(0, max) : "";
-
-    const link = (value: unknown): string | undefined => {
-      const found = text(value, 256);
-      return found === "" || !/^https?:\/\//i.test(found) ? undefined : found;
-    };
-
-    const rawLinks =
-      typeof record.links === "object" && record.links !== null
-        ? (record.links as Record<string, unknown>)
-        : {};
-
-    const image = text(record.image, 512);
-    const x = link(rawLinks.x);
-    const website = link(rawLinks.website);
-    const telegram = link(rawLinks.telegram);
-
-    const value: InstantMetadata = {
-      description: text(record.description, 1_000),
-      image: /^https?:\/\//i.test(image) ? image : null,
-      links: {
-        ...(x === undefined ? {} : { x }),
-        ...(website === undefined ? {} : { website }),
-        ...(telegram === undefined ? {} : { telegram }),
-      },
-    };
-
+    const value = parseMetadata(await response.json());
     documents.set(trimmed, { at: Date.now(), value });
     return value;
   } catch {
@@ -291,18 +322,18 @@ async function marketsFromFeed(
   if (ours.length === 0) return null;
 
   /*
-   * Pictures and descriptions are fetched after the shelf exists, never before.
+   * Pictures come from the volume, not from a request to this same process.
    *
-   * The documents live on this same host (`agen.space/api/metadata/...`). Asking for them
-   * while the catalogue request is still open is a self-request on a single replica, and
-   * that is how a working feed produced an empty launchpad: the parent waited on children
-   * that could not start until the parent finished. A card with initials instead of art is
-   * a market. A shelf that never returns is not.
-   *
-   * The token page still reads the document — one market, one request, after the HTML is
-   * already on its way — which is the only place the picture is load-bearing.
+   * The URI is ours (`/api/metadata/<hash>.json`) and the bytes are already on disk, so
+   * this is a `readFile` per market. A missing file is initials on that one card. Nothing
+   * here can take the shelf down: each document stands or falls alone.
    */
-  return ours.map(({ market }) => market);
+  return Promise.all(
+    ours.map(async ({ market, uri }) => ({
+      ...market,
+      metadata: await readMetadataDocument(uri).catch(() => EMPTY_METADATA),
+    })),
+  );
 }
 
 /**
@@ -422,6 +453,8 @@ interface StoredShelf {
     readonly price: number;
     readonly liquidity: string;
     readonly sqrtPriceX96: string;
+    readonly image: string | null;
+    readonly description: string;
   }[];
 }
 
@@ -452,7 +485,12 @@ async function loadRemembered(): Promise<readonly InstantMarket[]> {
           price: row.price,
           liquidity: BigInt(row.liquidity),
           sqrtPriceX96: BigInt(row.sqrtPriceX96),
-          metadata: EMPTY_METADATA,
+          metadata: {
+            description: typeof row.description === "string" ? row.description : "",
+            image:
+              typeof row.image === "string" && /^https?:\/\//i.test(row.image) ? row.image : null,
+            links: {},
+          },
         },
       ];
     });
@@ -485,6 +523,8 @@ function remember(markets: readonly InstantMarket[]): readonly InstantMarket[] {
       price: market.price,
       liquidity: market.liquidity.toString(),
       sqrtPriceX96: market.sqrtPriceX96.toString(),
+      image: market.metadata.image,
+      description: market.metadata.description,
     })),
   };
 

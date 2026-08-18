@@ -47,9 +47,16 @@ function row(token: string, symbol: string) {
 }
 
 const feed = vi.hoisted(() => ({ list: vi.fn() }));
+const files = vi.hoisted(() => ({
+  read: vi.fn<(name: string) => Promise<string | null>>(async () => null),
+}));
 
 vi.mock("./instant-feed", () => ({
   fetchInstantMarketList: feed.list,
+}));
+
+vi.mock("./metadata", () => ({
+  readMetadata: (name: string) => files.read(name),
 }));
 
 vi.mock("./chain", () => ({
@@ -82,10 +89,38 @@ async function reader() {
 
 beforeEach(() => {
   feed.list.mockReset();
+  files.read.mockReset();
+  files.read.mockResolvedValue(null);
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
 });
 
 describe("reading every Instant market", () => {
+  it("puts the picture from the volume on the card, without asking this process for it", async () => {
+    files.read.mockImplementation(async (name: string) =>
+      name === "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json"
+        ? JSON.stringify({
+            image: "https://agen.space/api/images/logo.png",
+            description: "the house token",
+            name: "Agen",
+            symbol: "AGEN",
+          })
+        : null,
+    );
+
+    const { readInstantMarkets } = await reader();
+    feed.list.mockResolvedValue([
+      {
+        ...row(TOKENS[0], "AGEN"),
+        metadataURI: "https://agen.space/api/metadata/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+      },
+    ]);
+
+    const shelf = await readInstantMarkets();
+
+    expect(shelf[0]?.metadata.image).toBe("https://agen.space/api/images/logo.png");
+    expect(files.read).toHaveBeenCalledWith("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json");
+  });
+
   it("builds the shelf from the feed's rows", async () => {
     const { readInstantMarkets } = await reader();
     feed.list.mockResolvedValue([row(TOKENS[0], "AGEN"), row(TOKENS[1], "ROBIN")]);

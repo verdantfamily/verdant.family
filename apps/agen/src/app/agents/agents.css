@@ -87,9 +87,10 @@
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue",
     system-ui, sans-serif;
 
-  /* Not the full window. The catalogue's measure exactly, and the pages with navigation
-     centre that plus the rail beside it — so the reading column is the width a reader has
-     been trained by every other page to expect, wherever they arrived from. */
+  /* The catalogue's measure exactly, used by the pages that are documents — the directory,
+     an agent's public profile — so a reader arriving from a market page finds the column
+     the width they were trained to expect. The owner's environment does not use it: see
+     `.ag-shell`, which takes the window. */
   --ag-measure: 1200px;
   --ag-rail: 244px;
 
@@ -786,15 +787,21 @@ body:has(.ag-door) .ag-enter p {
 /* --- the shell ------------------------------------------------------------ */
 
 /*
- * Centred rather than full-bleed. Left against the window edge, the rail sat a thumb's
- * width from the frame on a laptop and half a screen from the content on a monitor, and
- * the same page read as two different products depending on the desk it was on.
+ * The window, all of it.
+ *
+ * This was centred inside a measure for a while, which kept the line length honest but paid
+ * for it twice: the rail floated somewhere in the left third of a monitor instead of being
+ * anchored to an edge, and the room ran out either side of a page whose whole subject is a
+ * room. An environment is a place you are inside of, and a place with margins is a document.
+ *
+ * Nothing here needs the measure to stay readable. The rail is a column of single words, the
+ * figures are cards in a grid that is happy at any width, and the two things that are
+ * genuinely prose — the sentence under an agent's name and the forms — carry their own `ch`
+ * limits and are unaffected by how wide the window gets.
  */
 .ag-shell {
   flex: 1;
   width: 100%;
-  max-width: calc(var(--ag-measure) + var(--ag-rail));
-  margin-inline: auto;
   display: grid;
   grid-template-columns: var(--ag-rail) minmax(0, 1fr);
   align-items: stretch;

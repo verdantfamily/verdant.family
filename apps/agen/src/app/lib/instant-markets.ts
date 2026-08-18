@@ -433,8 +433,35 @@ async function marketsFromChain(
  * read that works always replaces this, so the memory is only ever consulted on the
  * requests that would otherwise have shown nothing at all.
  */
-let lastGood: readonly InstantMarket[] = [];
-let loadedFromDisk = false;
+interface ShelfMemory {
+  lastGood: readonly InstantMarket[];
+  loadedFromDisk: boolean;
+}
+
+/**
+ * One memory per process, not one per bundle.
+ *
+ * Next compiles `instrumentation` and each route into separate bundles, and every one of
+ * them gets its own copy of this module's variables. A warm-up at boot that filled a
+ * module-scope variable would therefore leave the bundle that actually renders the shelf
+ * exactly as cold as it was — which is the shape of bug that made the scheduler invisible
+ * to its own health endpoint. `globalThis` is what the two halves have in common.
+ *
+ * Under Vitest the memory is module-scope again, because the tests reach for a fresh
+ * module through `vi.resetModules()` to get a shelf that has never seen anything, and a
+ * process-wide memory would leak one case's markets into the next.
+ */
+const MEMORY = Symbol.for("agen.instant.shelf");
+
+const local: ShelfMemory = { lastGood: [], loadedFromDisk: false };
+
+function memory(): ShelfMemory {
+  if (process.env.VITEST === "true") return local;
+
+  const host = globalThis as typeof globalThis & { [MEMORY]?: ShelfMemory };
+  host[MEMORY] ??= { lastGood: [], loadedFromDisk: false };
+  return host[MEMORY];
+}
 
 const SHELF_FILE = "instant-shelf.json";
 
@@ -462,14 +489,15 @@ interface StoredShelf {
 const PERSIST = process.env.VITEST !== "true";
 
 async function loadRemembered(): Promise<readonly InstantMarket[]> {
-  if (loadedFromDisk || !PERSIST) return lastGood;
-  loadedFromDisk = true;
+  const held = memory();
+  if (held.loadedFromDisk || !PERSIST) return held.lastGood;
+  held.loadedFromDisk = true;
 
   try {
     const raw = JSON.parse(await readFile(joinPath(GENERATED_ROOT, SHELF_FILE), "utf8")) as StoredShelf;
-    if (!Array.isArray(raw.markets) || raw.markets.length === 0) return lastGood;
+    if (!Array.isArray(raw.markets) || raw.markets.length === 0) return held.lastGood;
 
-    lastGood = raw.markets.flatMap((row) => {
+    held.lastGood = raw.markets.flatMap((row) => {
       if (!isAddress(row.token) || !isAddress(row.creator) || !isAddress(row.vault)) return [];
       return [
         {
@@ -499,13 +527,14 @@ async function loadRemembered(): Promise<readonly InstantMarket[]> {
     // and the next successful read creates it.
   }
 
-  return lastGood;
+  return held.lastGood;
 }
 
 function remember(markets: readonly InstantMarket[]): readonly InstantMarket[] {
   if (markets.length === 0) return markets;
-  lastGood = markets;
-  loadedFromDisk = true;
+  const held = memory();
+  held.lastGood = markets;
+  held.loadedFromDisk = true;
   if (!PERSIST) return markets;
 
   const stored: StoredShelf = {

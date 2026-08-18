@@ -19,4 +19,29 @@ export async function register(): Promise<void> {
     // without a database or an endpoint.
     console.log("[agents] scheduler started");
   }
+
+  await warmShelf();
+}
+
+/**
+ * Read the shelf once before anybody is sent here.
+ *
+ * `/health` waits on this, so the cost of a cold feed is paid by the deploy rather than by
+ * whoever loads the site a second after it. Failure is not fatal and is not retried: the
+ * deadline in `shelf-warmup` releases the container anyway, and a shelf that could not be
+ * read now is a shelf `readInstantMarkets` will fall back to the remembered copy for.
+ */
+async function warmShelf(): Promise<void> {
+  const { warmupStarted, warmupFinished } = await import("./app/lib/shelf-warmup");
+  warmupStarted();
+
+  try {
+    const { readInstantMarkets } = await import("./app/lib/instant-markets");
+    const markets = await readInstantMarkets();
+    console.log(`[shelf] warm at boot with ${String(markets.length)} market(s)`);
+  } catch (error) {
+    console.warn(`[shelf] could not warm at boot: ${String(error).slice(0, 200)}`);
+  } finally {
+    warmupFinished();
+  }
 }

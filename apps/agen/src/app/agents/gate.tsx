@@ -34,12 +34,22 @@ import { Arrow } from "./ui";
  */
 const HOLD_MS = 4_500;
 
+/**
+ * How long the cover takes to get out of the way.
+ *
+ * The screen underneath is mounted and animating for all of it, so this is an overlap
+ * rather than a gap: the cover is thinning while the next screen is already arriving
+ * through it, and neither one has the screen to itself. Matches `ag-enter-out`.
+ */
+const LEAVE_MS = 620;
+
 export function Gate() {
   const router = useRouter();
   const owner = useOwner();
   const [entering, setEntering] = useState(false);
+  const [leaving, setLeaving] = useState(false);
   const [entered, setEntered] = useState(false);
-  const held = useRef<number>(0);
+  const timers = useRef<number[]>([]);
 
   const enter = useCallback(() => {
     const reduced =
@@ -54,14 +64,30 @@ export function Gate() {
     }
 
     setEntering(true);
-    held.current = window.setTimeout(() => {
-      setEntering(false);
-      setEntered(true);
-    }, HOLD_MS);
+
+    timers.current.push(
+      // The next screen mounts here, not when the cover finishes. That is the whole point:
+      // it does its own entrance behind a cover that is on its way out, so what you see is
+      // one screen becoming another rather than a black rectangle blinking off a finished
+      // page that was sitting there waiting.
+      window.setTimeout(() => {
+        setEntered(true);
+        setLeaving(true);
+      }, HOLD_MS),
+      window.setTimeout(() => {
+        setEntering(false);
+        setLeaving(false);
+      }, HOLD_MS + LEAVE_MS),
+    );
   }, []);
 
-  // Four and a half seconds is long enough to leave in the middle of.
-  useEffect(() => () => window.clearTimeout(held.current), []);
+  // Five seconds is long enough to leave in the middle of.
+  useEffect(() => {
+    const pending = timers.current;
+    return () => {
+      for (const id of pending) window.clearTimeout(id);
+    };
+  }, []);
 
   // Once the owner's agents are known there is a real destination, so stop occupying a
   // URL whose only job was to ask the question.
@@ -93,7 +119,11 @@ export function Gate() {
       </div>
 
       {entering ? (
-        <div className="ag-enter" role="status" aria-live="polite">
+        <div
+          className={leaving ? "ag-enter ag-enter-out" : "ag-enter"}
+          role="status"
+          aria-live="polite"
+        >
           <i aria-hidden="true" />
           <p>Initializing agent environment</p>
         </div>
@@ -157,9 +187,18 @@ function Hero({ onEnter }: { readonly onEnter: () => void }) {
 function Threshold() {
   const owner = useOwner();
 
+  /*
+   * The keys are what make each of these arrive rather than appear.
+   *
+   * A panel with a new key is a new panel as far as React is concerned, which is what
+   * restarts the entrance underneath. They are keyed by screen and not by phase on purpose:
+   * signing and loading are the same screen as unsigned with a different word on the button,
+   * and re-running the headline every time somebody's wallet changes its mind would animate
+   * a sentence that did not change.
+   */
   if (owner.phase === "connecting") {
     return (
-      <Panel acts={null}>
+      <Panel key="looking" acts={null}>
         <p className="ag-door-note">looking for your wallet…</p>
       </Panel>
     );
@@ -168,6 +207,7 @@ function Threshold() {
   if (owner.phase === "disconnected") {
     return (
       <Panel
+        key="connect"
         acts={
           <>
             <Wallet />
@@ -188,7 +228,7 @@ function Threshold() {
 
   if (owner.phase === "ready") {
     return (
-      <Panel acts={null}>
+      <Panel key="opening" acts={null}>
         <p className="ag-door-note">opening your environment…</p>
       </Panel>
     );
@@ -196,6 +236,7 @@ function Threshold() {
 
   return (
     <Panel
+      key="sign"
       acts={
         <button
           type="button"

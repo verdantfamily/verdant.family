@@ -660,6 +660,57 @@ body:has(.ag-door) .ag-enter p {
   }
 }
 
+/*
+ * Leaving.
+ *
+ * Written after the rules it overrides, not before: `.ag-enter-out i` and `.ag-enter i` are
+ * the same weight, and the mark's pulse is set to repeat forever — put this above it and the
+ * cover's own exit never runs.
+ *
+ * The screen underneath is mounted and already running its own entrance before any of this
+ * starts, so the cover is lifting off something in motion rather than cutting to a still.
+ * That is the whole trick: a cover that disappears reveals a finished page and reads as a
+ * cut, and a cover that fades while the page beneath it is still arriving reads as one
+ * movement.
+ *
+ * The three parts leave at different rates. The caption goes first and quickly, because a
+ * sentence you can still half-read through a fade is a sentence being taken away from you.
+ * The mark grows slightly as it goes, which sells the black as receding rather than
+ * dissolving. The ground itself is last and slowest.
+ */
+.ag-enter-out {
+  animation: ag-enter-out 0.62s var(--ag-ease) forwards;
+  pointer-events: none;
+}
+
+.ag-enter-out i {
+  animation: ag-enter-mark-out 0.62s var(--ag-ease) forwards;
+}
+
+.ag-enter-out p {
+  animation: ag-enter-word-out 0.26s var(--ag-ease) forwards;
+}
+
+@keyframes ag-enter-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes ag-enter-mark-out {
+  to {
+    opacity: 0;
+    transform: scale(1.14);
+  }
+}
+
+@keyframes ag-enter-word-out {
+  to {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
 /* Breathing rather than spinning. A spinner claims work is being done at a rate; this only
    claims the screen is alive, which over four seconds is the honest claim. */
 @keyframes ag-enter-mark {
@@ -683,6 +734,13 @@ body:has(.ag-door) .ag-enter p {
  * finished ones — the form is simply already there.
  */
 @media (prefers-reduced-motion: reduce) {
+  .ag-door-word,
+  .ag-door-sub,
+  .ag-door-note,
+  .ag-door-acts,
+  .ag-head h1,
+  .ag-head-sub,
+  .ag-make .ag-make-word,
   .ag-enter,
   .ag-enter i,
   .ag-make-art,
@@ -1811,7 +1869,7 @@ body:has(.ag-make),
 }
 
 .ag-make .ag-upload i img {
-  animation: ag-make-shown 0.4s var(--ag-ease) both;
+  animation: ag-shown 0.4s var(--ag-ease) both;
 }
 
 /* --- the commit ----------------------------------------------------------- */
@@ -1843,7 +1901,7 @@ body:has(.ag-make),
 
 .ag-make .ag-note,
 .ag-make .ag-hint {
-  animation: ag-make-shown 0.3s var(--ag-ease) both;
+  animation: ag-shown 0.3s var(--ag-ease) both;
 }
 
 /* --- before there is anything to make with -------------------------------- */
@@ -1896,7 +1954,7 @@ body:has(.ag-make),
  */
 .ag-make-inner > *:not(.ag-form),
 .ag-make .ag-form > * {
-  animation: ag-make-rise 0.52s var(--ag-ease) both;
+  animation: ag-rise 0.52s var(--ag-ease) both;
 }
 
 .ag-make-inner > *:nth-child(1) {
@@ -1936,18 +1994,75 @@ body:has(.ag-make),
   animation-delay: 0.65s;
 }
 
-@keyframes ag-make-rise {
+/* --- arrivals ------------------------------------------------------------- */
+
+/*
+ * How anything gets onto a screen here.
+ *
+ * Three shapes, and no more than three. `ag-rise` is the default and does the work: a short
+ * lift with the opacity, used for rows, blocks and paragraphs. `ag-shown` is for things that
+ * replace something in place — an uploaded picture, an error where there was none — where a
+ * lift would look like the layout moving rather than the content changing. `ag-word` is for
+ * headlines only.
+ *
+ * A page that invents a fourth is a page that has stopped matching the others.
+ */
+@keyframes ag-rise {
   from {
     opacity: 0;
     transform: translateY(14px);
   }
 }
 
-@keyframes ag-make-shown {
+@keyframes ag-shown {
   from {
     opacity: 0;
     transform: scale(0.96);
   }
+}
+
+/*
+ * Headlines resolve rather than slide.
+ *
+ * At 48px a translation is a large object moving across the screen and reads as a slide
+ * transition; the same distance on a paragraph is barely a shift. So the big type comes out
+ * of a blur instead, over a shorter distance — it arrives as something coming into focus,
+ * which is what a title is doing.
+ */
+@keyframes ag-word {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+    filter: blur(9px);
+  }
+}
+
+/*
+ * The headline, its sentence, and then whatever you press — in that order, on the same beat
+ * the making room uses, so arriving at either screen feels like arriving at one product.
+ */
+.ag-door-word,
+.ag-head h1 {
+  animation: ag-word 0.62s var(--ag-ease) both;
+}
+
+.ag-door-sub,
+.ag-door-note,
+.ag-head-sub {
+  animation: ag-rise 0.55s var(--ag-ease) both;
+  animation-delay: 0.09s;
+}
+
+.ag-door-acts {
+  animation: ag-rise 0.55s var(--ag-ease) both;
+  animation-delay: 0.17s;
+}
+
+/* The making room staggers its whole column, and the headline sits inside that stagger. It
+   keeps the column's beat and only borrows the blur — written at the column's own weight so
+   it lands after the rule that would otherwise give it the paragraph treatment. */
+.ag-make .ag-make-word {
+  animation: ag-word 0.62s var(--ag-ease) 0.09s both;
 }
 
 /*

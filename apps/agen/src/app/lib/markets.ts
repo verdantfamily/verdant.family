@@ -485,6 +485,15 @@ export function buildStoreSource(): MarketSource {
 const SPARK_BUCKETS = 120;
 
 /**
+ * How many markets the shelf enriches at once.
+ *
+ * Two feed requests each, so a shelf of thirty is sixty in flight if nothing bounds it.
+ * Small enough that a service answering the shelf is never handed the whole catalogue in
+ * one breath, large enough that the page is not a queue of round trips.
+ */
+const SHELF_CONCURRENCY = 6;
+
+/**
  * The closes behind a card's sparkline, trimmed to the part worth drawing.
  *
  * Undefined rather than an empty array where there is nothing to draw, because `Spark`
@@ -595,25 +604,40 @@ export function instantSource(): MarketSource {
       const found = await readInstantMarkets();
 
       /*
-       * Two feed reads per market, in parallel: the day's figures and enough closes to
-       * draw the line on its card.
+       * The catalogue is the list. Figures on a card are decoration.
        *
-       * A card that says "no price history yet" about a market with five trades in it is
-       * worse than a card with no line at all, and the only way to be right about that is
-       * to ask. Two requests per market is honest about the cost and fine at this size;
-       * the fix when a shelf is hundreds of markets is a batch route on the feed, and this
-       * note is here so whoever hits that knows the shape of it.
+       * A market that is real, named and priced is a card whether or not today's volume or
+       * a sparkline could be fetched. Those extras used to be asked for before the shelf
+       * existed, and a refusal covering the lot rendered as "no Instant token yet". The
+       * cards are built first, from the one request that named them; the extras fill in
+       * after, a few at a time, and anything they throw is a card without a line rather
+       * than a missing token.
        */
-      return Promise.all(
-        found.map(async (market) => {
-          const [stats, history] = await Promise.all([
-            fetchInstantStats(market.poolId),
-            fetchInstantCandles(market.poolId, "5m", SPARK_BUCKETS),
-          ]);
+      const bare = found.map((market) => instantSummaryFrom(market, null));
 
-          return instantSummaryFrom(market, stats, history);
-        }),
-      );
+      try {
+        const summaries: InstantSummary[] = [];
+
+        for (let index = 0; index < found.length; index += SHELF_CONCURRENCY) {
+          summaries.push(
+            ...(await Promise.all(
+              found.slice(index, index + SHELF_CONCURRENCY).map(async (market) => {
+                const [stats, history] = await Promise.all([
+                  fetchInstantStats(market.poolId).catch(() => null),
+                  fetchInstantCandles(market.poolId, "5m", SPARK_BUCKETS).catch(() => null),
+                ]);
+
+                return instantSummaryFrom(market, stats, history);
+              }),
+            )),
+          );
+        }
+
+        return summaries;
+      } catch (error) {
+        console.warn(`[shelf] card figures failed; serving ${String(bare.length)} markets without them: ${String(error).slice(0, 160)}`);
+        return bare;
+      }
     },
 
     read: async (id) => {
@@ -685,9 +709,23 @@ export function marketSource(): MarketSource {
 
   return {
     list: async () => {
+      /*
+       * Each half degrades, and says so.
+       *
+       * The catch is the same one that has always been here — half a catalogue beats a 500 —
+       * but it used to be mute, so a shelf that had emptied looked identical in the logs to a
+       * launchpad nobody had used yet. The failure it hides is the exact failure worth being
+       * told about, and one line is what turns "the tokens are gone" into a diagnosis.
+       */
       const [fromBuilds, fromChain] = await Promise.all([
-        builds.list().catch(() => [] as readonly MarketSummary[]),
-        instant.list().catch(() => [] as readonly MarketSummary[]),
+        builds.list().catch((error: unknown) => {
+          console.warn(`[shelf] no build store: ${String(error).slice(0, 200)}`);
+          return [] as readonly MarketSummary[];
+        }),
+        instant.list().catch((error: unknown) => {
+          console.warn(`[shelf] no Instant half: ${String(error).slice(0, 200)}`);
+          return [] as readonly MarketSummary[];
+        }),
       ]);
 
       return [...fromChain, ...fromBuilds]

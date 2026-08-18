@@ -33,6 +33,35 @@ function instant(
   };
 }
 
+/** The token named in `spotlight.tsx`, which is the whole point of the pick being a pick. */
+const CHOSEN = "0x11e1553f59bb42834dc23b1b9d23c885273d3d97";
+
+describe("the house's own pick", () => {
+  it("takes the frame from a token worth ten times as much", () => {
+    const chosen = spotlightOf([instant("0xbigger", 1_000), instant(CHOSEN, 100)]);
+
+    expect(chosen?.id).toBe(CHOSEN);
+  });
+
+  it("is recognised whatever case the address arrives in", () => {
+    const chosen = spotlightOf([instant("0xbigger", 1_000), instant(CHOSEN.toUpperCase(), 100)]);
+
+    expect(chosen?.id.toLowerCase()).toBe(CHOSEN);
+  });
+
+  it("gives way to the largest market cap when the chosen token is not on the shelf", () => {
+    const chosen = spotlightOf([instant("0xsmall", 2), instant("0xlarge", 10)]);
+
+    expect(chosen?.id).toBe("0xlarge");
+  });
+
+  it("gives way rather than showing an empty frame when the chosen token has no figures", () => {
+    const chosen = spotlightOf([instant(CHOSEN), instant("0xlarge", 10)]);
+
+    expect(chosen?.id).toBe("0xlarge");
+  });
+});
+
 describe("which token the Spotlight shows", () => {
   it("picks the Instant market with the highest capitalisation", () => {
     const chosen = spotlightOf([

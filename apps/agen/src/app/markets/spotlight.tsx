@@ -6,21 +6,51 @@ import { TokenArt } from "./art";
 import { Spark } from "./spark";
 
 /**
- * The Instant token that is currently worth the most.
+ * The token held at the top of the shelf, by name rather than by size.
  *
- * A catalogue with nothing at the top of it is a list. This is the one card that is
- * allowed to be larger than the others, and it is chosen by a number rather than by
- * editorial: the highest market cap on the Instant shelf, or nothing if nothing is
- * trading yet. A vacant gold frame would be worse than no section.
+ * Empty means the largest market cap wins, which is the ordinary state and the one this
+ * file was written for. An address here is a deliberate exception — the house saying this
+ * is the token worth looking at this week — and it is one line so that taking it back is
+ * one line too.
+ *
+ * Editorial in the honest sense: it changes which token is shown, never what is said about
+ * it. The card below reads the same figures from the same feed whichever token fills it.
+ *
+ * Currently: Agen, the platform's own token, launched 2026-08-17.
+ */
+const SPOTLIT = "0x11e1553f59bb42834dc23b1b9d23c885273d3d97";
+
+/** Whether a market can fill the frame: Instant, and far enough along to have figures. */
+function eligible(market: MarketSummary): boolean {
+  return market.kind === "instant" && market.trading?.marketCap !== undefined;
+}
+
+/**
+ * The token the Spotlight shows.
+ *
+ * The chosen one if it is here and trading; otherwise the Instant token that is currently
+ * worth the most; otherwise nothing.
+ *
+ * A catalogue with nothing at the top of it is a list, so this card is the one allowed to
+ * be larger than the others — but a vacant gold frame would be worse than no section, and
+ * an empty one naming a token that has not traded yet would be worse still. So the pick
+ * has to earn the frame on the same terms the market-cap rule does, and when it cannot —
+ * delisted, not launched, not yet indexed — the shelf falls back to the number rather than
+ * showing a hole where the house's choice was meant to be.
  */
 export function spotlightOf(markets: readonly MarketSummary[]): MarketSummary | null {
+  const chosen = markets.find(
+    (market) => market.id.toLowerCase() === SPOTLIT.toLowerCase() && eligible(market),
+  );
+  if (chosen !== undefined) return chosen;
+
   let best: MarketSummary | null = null;
 
   for (const market of markets) {
-    if (market.kind !== "instant") continue;
-    const cap = market.trading?.marketCap;
-    if (cap === undefined) continue;
-    if (best === null || cap > (best.trading?.marketCap ?? 0)) best = market;
+    if (!eligible(market)) continue;
+    if (best === null || (market.trading?.marketCap ?? 0) > (best.trading?.marketCap ?? 0)) {
+      best = market;
+    }
   }
 
   return best;

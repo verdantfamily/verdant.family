@@ -48,18 +48,33 @@ const REVALIDATE_SECONDS = 5;
 const TIMEOUT_MS = 4_000;
 
 /**
+ * What the catalogue itself is allowed to wait.
+ *
+ * The figure beside a card can be missing and the card still stands, so four seconds is the
+ * right budget for one. The list of markets is not like that: every card on the shelf is
+ * downstream of this one request, and when it times out the alternative is sixty `eth_call`s
+ * against a public RPC that will refuse them. Waiting a few seconds longer for the cheap
+ * answer is better than falling to the expensive one that fails.
+ */
+const LIST_TIMEOUT_MS = 10_000;
+
+/**
  * One request, and null for every way it can fail.
  *
  * No indexer configured, a refusal, a timeout, an unreachable host, a malformed body: each
  * means the same thing to every caller — there is no history to show — and distinguishing
  * them at the call site would produce five branches that render the same dash.
  */
-async function ask<T>(path: string, fresh = false): Promise<T | null> {
+async function ask<T>(
+  path: string,
+  fresh = false,
+  timeoutMs: number = TIMEOUT_MS,
+): Promise<T | null> {
   if (!instantFeedConfigured) return null;
 
   try {
     const response = await fetch(`${INSTANT_FEED_URL}${path}`, {
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
       ...(fresh ? { cache: "no-store" } : { next: { revalidate: REVALIDATE_SECONDS } }),
     });
 
@@ -111,6 +126,111 @@ interface RawStats {
     readonly boostBuybacks?: number;
   };
   readonly allTime: { readonly high: string; readonly low: string };
+}
+
+interface RawMarketList {
+  readonly markets: readonly RawMarketRow[];
+  readonly total: number;
+}
+
+/** One row of `/instant/markets`, with only the fields a market summary is built from. */
+interface RawMarketRow {
+  readonly poolId: string;
+  readonly token: string;
+  readonly hook: string;
+  readonly creator: string;
+  readonly vault: string;
+  readonly fee: number;
+  readonly name: string;
+  readonly symbol: string;
+  readonly decimals: number;
+  readonly totalSupply: string;
+  readonly metadataURI: string;
+  readonly createdAt: number;
+  readonly sqrtPriceX96: string;
+  readonly liquidity: string;
+}
+
+/** An Instant market as the feed stores it. Strings are still strings; see the reader. */
+export interface InstantMarketRow {
+  readonly poolId: string;
+  readonly token: string;
+  readonly hook: string;
+  readonly creator: string;
+  readonly vault: string;
+  readonly fee: number;
+  readonly name: string;
+  readonly symbol: string;
+  readonly decimals: number;
+  readonly totalSupply: bigint;
+  readonly metadataURI: string;
+  readonly createdAt: number;
+  readonly sqrtPriceX96: bigint;
+  readonly liquidity: bigint;
+}
+
+/**
+ * Every Instant market the feed knows, newest first, in one request.
+ *
+ * The shelf's reason for existing. Paging the registry and joining each market on chain is
+ * two multicalls per market, and at thirty markets that is sixty `eth_call`s for one render
+ * — enough that the chain's public RPC answers the whole batch with a single rate-limit
+ * object rather than a response per call. The feed already holds every field below, indexed
+ * from the same events, so the shelf asks once instead of sixty times.
+ *
+ * `null` rather than an empty array for every way this can come to nothing, because the
+ * caller falls back to the chain and "the feed has no markets" and "there is no feed" have
+ * to be distinguishable for that to be correct. A row missing a field it cannot do without
+ * is dropped rather than defaulted: a supply or a price invented here would be a number on
+ * a card that nothing on chain agrees with.
+ */
+export async function fetchInstantMarketList(
+  limit = 200,
+): Promise<readonly InstantMarketRow[] | null> {
+  const path = `/instant/markets?limit=${String(limit)}`;
+
+  /*
+   * Asked twice before giving up, because of what giving up costs.
+   *
+   * Everything else on this feed answers a question about one market and a second attempt
+   * would only delay a dash. This answers what the catalogue contains, and the fallback is
+   * the chain route that cannot serve a shelf this size — so a single dropped connection or
+   * an indexer mid-restart is worth one more request rather than a shelf that says the
+   * launchpad is empty. The second attempt is uncached: a `no-store` read cannot be handed
+   * the failure the first one just recorded.
+   */
+  const raw =
+    (await ask<RawMarketList>(path, false, LIST_TIMEOUT_MS)) ??
+    (await ask<RawMarketList>(path, true, LIST_TIMEOUT_MS));
+
+  if (raw === null || !Array.isArray(raw.markets)) return null;
+
+  const rows: InstantMarketRow[] = [];
+
+  for (const row of raw.markets) {
+    try {
+      rows.push({
+        poolId: row.poolId,
+        token: row.token,
+        hook: row.hook,
+        creator: row.creator,
+        vault: row.vault,
+        fee: row.fee,
+        name: row.name,
+        symbol: row.symbol,
+        decimals: row.decimals,
+        totalSupply: BigInt(row.totalSupply),
+        metadataURI: row.metadataURI,
+        createdAt: row.createdAt,
+        sqrtPriceX96: BigInt(row.sqrtPriceX96),
+        liquidity: BigInt(row.liquidity),
+      });
+    } catch {
+      // One unreadable row is one missing card, not an empty shelf.
+    }
+  }
+
+  return rows;
 }
 
 interface RawSwaps {

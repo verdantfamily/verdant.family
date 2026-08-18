@@ -39,8 +39,12 @@ import { agen, markets as marketReads, pool } from "@verdant/sdk";
 import type { Address, Hex } from "viem";
 import { getAddress, isAddress } from "viem";
 
+import { GENERATED_ROOT } from "./builds";
 import { EXTERNAL, INSTANT_ADDRESSES } from "./chain";
+import { fetchInstantMarketList, type InstantMarketRow } from "./instant-feed";
 import { publicClient } from "./onchain";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join as joinPath } from "node:path";
 
 /** How long a metadata document is trusted. It is content-addressed, so this is generous. */
 const METADATA_TTL_MS = 5 * 60 * 1000;
@@ -221,16 +225,272 @@ export async function readInstantMarket(token: string): Promise<InstantMarket | 
   }
 }
 
-/** Every Instant market, newest first. Empty when Instant is not deployed. */
-export async function readInstantMarkets(limit = 50): Promise<readonly InstantMarket[]> {
+/**
+ * A feed row turned into a market, or null if it is not one of ours.
+ *
+ * The feed is trusted for figures and checked for identity. Every field below is something
+ * the indexer read from the same events the registry was written by, so there is nothing to
+ * verify about a supply or a price that would not amount to reading the chain again. What is
+ * worth checking is that the row belongs to the deployment this build talks to: the hook has
+ * to be ours, and the token has to hash to the pool id the row claims. A feed pointed at
+ * another Instant — a fork, a staging indexer, a stale URL — then contributes nothing to the
+ * shelf instead of filling it with markets whose pages would 404 against our registry.
+ */
+function fromFeedRow(row: InstantMarketRow, hook: Address): InstantMarket | null {
+  try {
+    if (!isAddress(row.token) || !isAddress(row.hook)) return null;
+    if (!isAddress(row.creator) || !isAddress(row.vault)) return null;
+    if (getAddress(row.hook) !== hook) return null;
+
+    const token = getAddress(row.token);
+
+    // Instant quotes every market in ether, so the pool key is a function of the token alone.
+    if (pool.poolIdFor(pool.NATIVE_CURRENCY, token, hook) !== row.poolId) return null;
+
+    return {
+      token,
+      poolId: row.poolId as Hex,
+      creator: getAddress(row.creator),
+      createdAt: row.createdAt,
+      vault: getAddress(row.vault),
+      name: row.name,
+      symbol: row.symbol,
+      supplyTokens: Number(row.totalSupply / 10n ** BigInt(row.decimals)),
+      lpFee: row.fee,
+      price: agen.priceFromSqrt(row.sqrtPriceX96),
+      liquidity: row.liquidity,
+      sqrtPriceX96: row.sqrtPriceX96,
+      metadata: EMPTY_METADATA,
+    };
+  } catch {
+    // One unreadable row is one missing card. It is not an empty shelf.
+    return null;
+  }
+}
+
+/**
+ * The shelf as the feed sees it, or null where the feed cannot supply one.
+ *
+ * Null covers no feed configured, an unreachable one, and one that recognises none of the
+ * markets it returned — all three mean the caller should ask the chain instead. It does not
+ * cover a feed that is reachable and knows about markets, which is the ordinary case and the
+ * one this exists for.
+ */
+async function marketsFromFeed(
+  hook: Address,
+  limit: number,
+): Promise<readonly InstantMarket[] | null> {
+  const rows = await fetchInstantMarketList(limit).catch(() => null);
+  if (rows === null) return null;
+
+  const ours = rows.flatMap((row) => {
+    const market = fromFeedRow(row, hook);
+    return market === null ? [] : [{ market, uri: row.metadataURI }];
+  });
+
+  if (ours.length === 0) return null;
+
+  /*
+   * Pictures and descriptions are fetched after the shelf exists, never before.
+   *
+   * The documents live on this same host (`agen.space/api/metadata/...`). Asking for them
+   * while the catalogue request is still open is a self-request on a single replica, and
+   * that is how a working feed produced an empty launchpad: the parent waited on children
+   * that could not start until the parent finished. A card with initials instead of art is
+   * a market. A shelf that never returns is not.
+   *
+   * The token page still reads the document — one market, one request, after the HTML is
+   * already on its way — which is the only place the picture is load-bearing.
+   */
+  return ours.map(({ market }) => market);
+}
+
+/**
+ * Every Instant market, newest first. Empty when Instant is not deployed.
+ *
+ * The feed answers this in one request and the chain answers it in two `eth_call`s per
+ * market, which is why the feed is asked first rather than as a cache in front of the
+ * authority. At thirty markets the chain route is sixty batched calls for a single render,
+ * and the public RPC refuses a batch that size as a whole — one rate-limit object where
+ * sixty responses were expected, which is not a market failing to load but every market
+ * failing at once.
+ *
+ * The registry remains the authority for what a market *is*: `readInstantMarket` below still
+ * reads it, so a token page, a trade and a launch are unaffected by anything here, and every
+ * row the feed offers is checked against the pool id it derives from before it is shown.
+ * When there is no feed to ask, the chain still answers — slower, and correct.
+ */
+export async function readInstantMarkets(limit = 200): Promise<readonly InstantMarket[]> {
   const found = addresses();
   if (found === null) return [];
 
+  const fromFeed = await marketsFromFeed(found.hook, limit);
+  if (fromFeed !== null) {
+    console.info(`[shelf] feed answered with ${String(fromFeed.length)} market(s)`);
+    return remember(fromFeed);
+  }
+
+  const fromChain = await marketsFromChain(found, limit);
+  if (fromChain.length > 0) {
+    console.info(`[shelf] chain answered with ${String(fromChain.length)} market(s)`);
+    return remember(fromChain);
+  }
+
+  const remembered = await loadRemembered();
+  console.warn(
+    `[shelf] neither the feed nor the chain answered; serving ${String(remembered.length)} remembered market(s)`,
+  );
+
+  return remembered;
+}
+
+/**
+ * The registry route, degraded per market rather than as a whole.
+ *
+ * `Promise.all` over the joins is what made this all-or-nothing: one market whose token read
+ * was caught in a rate-limited batch rejected the lot, and the caller could not tell that
+ * from a chain with no markets on it. Each join now stands or falls alone, so a refusal that
+ * lands on three markets costs three cards instead of the catalogue.
+ *
+ * Empty means the page itself could not be read, which the caller treats as failure rather
+ * than as an answer.
+ */
+async function marketsFromChain(
+  found: { readonly hook: Address; readonly marketRegistry: Address },
+  limit: number,
+): Promise<readonly InstantMarket[]> {
+  let records: readonly marketReads.MarketRecord[];
+
   try {
-    const records = await marketReads.readMarketPage(publicClient(), found, { limit });
-    const joined = await Promise.all(records.map(async (record) => join(record)));
-    return joined.filter((market): market is InstantMarket => market !== null);
-  } catch {
+    records = await marketReads.readMarketPage(publicClient(), found, { limit });
+  } catch (error) {
+    console.warn(`[shelf] the registry would not answer: ${String(error).slice(0, 200)}`);
     return [];
   }
+
+  const joined = await Promise.all(
+    records.map(async (record) => join(record).catch(() => null)),
+  );
+
+  const markets = joined.filter((market): market is InstantMarket => market !== null);
+
+  if (markets.length < records.length) {
+    console.warn(
+      `[shelf] the registry listed ${String(records.length)} market(s) and ${String(markets.length)} could be read`,
+    );
+  }
+
+  return markets;
+}
+
+/**
+ * The last shelf that could be read, kept so that a failure cannot look like a deletion.
+ *
+ * Module scope, which is per server process and is the honest scope for this: it is not a
+ * cache — nothing is served from it while reads are working, and it is never consulted to
+ * save a request — it is the answer to "what do we do when we know we are wrong".
+ *
+ * The reasoning that makes this safe rather than stale-by-design: Instant's registry only
+ * ever grows. A token, its pool and its vault are deployed, the registry records them, and
+ * there is no removal — so a catalogue that held thirty markets cannot legitimately hold
+ * none a moment later. An empty read after a non-empty one is therefore not news about the
+ * chain, it is a failed read, and answering with the markets we last saw is strictly more
+ * truthful than answering with none. Delisting is applied downstream of this, so a market
+ * removed from the site does not come back through here.
+ *
+ * What it deliberately does not do is hide a market that has since been launched: a fresh
+ * read that works always replaces this, so the memory is only ever consulted on the
+ * requests that would otherwise have shown nothing at all.
+ */
+let lastGood: readonly InstantMarket[] = [];
+let loadedFromDisk = false;
+
+const SHELF_FILE = "instant-shelf.json";
+
+interface StoredShelf {
+  readonly at: number;
+  readonly markets: readonly {
+    readonly token: string;
+    readonly poolId: string;
+    readonly creator: string;
+    readonly createdAt: number;
+    readonly vault: string;
+    readonly name: string;
+    readonly symbol: string;
+    readonly supplyTokens: number;
+    readonly lpFee: number;
+    readonly price: number;
+    readonly liquidity: string;
+    readonly sqrtPriceX96: string;
+  }[];
+}
+
+/** The volume is only mounted in the running app. A unit test must not inherit a leftover file. */
+const PERSIST = process.env.VITEST !== "true";
+
+async function loadRemembered(): Promise<readonly InstantMarket[]> {
+  if (loadedFromDisk || !PERSIST) return lastGood;
+  loadedFromDisk = true;
+
+  try {
+    const raw = JSON.parse(await readFile(joinPath(GENERATED_ROOT, SHELF_FILE), "utf8")) as StoredShelf;
+    if (!Array.isArray(raw.markets) || raw.markets.length === 0) return lastGood;
+
+    lastGood = raw.markets.flatMap((row) => {
+      if (!isAddress(row.token) || !isAddress(row.creator) || !isAddress(row.vault)) return [];
+      return [
+        {
+          token: getAddress(row.token),
+          poolId: row.poolId as Hex,
+          creator: getAddress(row.creator),
+          createdAt: row.createdAt,
+          vault: getAddress(row.vault),
+          name: row.name,
+          symbol: row.symbol,
+          supplyTokens: row.supplyTokens,
+          lpFee: row.lpFee,
+          price: row.price,
+          liquidity: BigInt(row.liquidity),
+          sqrtPriceX96: BigInt(row.sqrtPriceX96),
+          metadata: EMPTY_METADATA,
+        },
+      ];
+    });
+  } catch {
+    // No file, unreadable file, or a deploy that has not written one yet. Memory stays empty
+    // and the next successful read creates it.
+  }
+
+  return lastGood;
+}
+
+function remember(markets: readonly InstantMarket[]): readonly InstantMarket[] {
+  if (markets.length === 0) return markets;
+  lastGood = markets;
+  loadedFromDisk = true;
+  if (!PERSIST) return markets;
+
+  const stored: StoredShelf = {
+    at: Math.floor(Date.now() / 1000),
+    markets: markets.map((market) => ({
+      token: market.token,
+      poolId: market.poolId,
+      creator: market.creator,
+      createdAt: market.createdAt,
+      vault: market.vault,
+      name: market.name,
+      symbol: market.symbol,
+      supplyTokens: market.supplyTokens,
+      lpFee: market.lpFee,
+      price: market.price,
+      liquidity: market.liquidity.toString(),
+      sqrtPriceX96: market.sqrtPriceX96.toString(),
+    })),
+  };
+
+  void mkdir(GENERATED_ROOT, { recursive: true })
+    .then(() => writeFile(joinPath(GENERATED_ROOT, SHELF_FILE), JSON.stringify(stored)))
+    .catch(() => undefined);
+
+  return markets;
 }

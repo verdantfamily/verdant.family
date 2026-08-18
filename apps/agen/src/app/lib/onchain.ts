@@ -35,13 +35,32 @@ import { AGEN_ADDRESSES, EXTERNAL, chain } from "./chain";
  * is a `view` and the chain is cheap, but the round trips are not — a market page asks
  * for a registry record, a pool's slot0 and its liquidity, which is three requests
  * without this and one with it.
+ *
+ * ## Why the batch has a ceiling
+ *
+ * Because the public RPC answers a batch it considers too large with a single object —
+ * `{"error":{"code":429}}` — where a response per call was asked for. viem matches
+ * responses to requests by id, finds nothing for any of them, and raises a `TypeError`
+ * rather than a rate-limit error, so what reaches a caller is not "slow down" but an
+ * unreadable failure of every read in the batch at once. A page that catches it then
+ * renders as though the chain were empty.
+ *
+ * Left unbounded, viem will put as many as a thousand calls in one request, and the size
+ * of a batch is decided by how much a page happens to ask for rather than by what the
+ * other end will accept. The ceiling keeps a single refusal from being able to cover a
+ * whole render, and `retryCount` is what handles the refusal itself.
  */
+const MAX_CALLS_PER_BATCH = 12;
+
 let client: PublicClient | undefined;
 
 export function publicClient(): PublicClient {
   client ??= createPublicClient({
     chain,
-    transport: http(undefined, { batch: true, retryCount: 2 }),
+    transport: http(undefined, {
+      batch: { batchSize: MAX_CALLS_PER_BATCH, wait: 8 },
+      retryCount: 2,
+    }),
   });
   return client;
 }

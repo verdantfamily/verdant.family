@@ -21,14 +21,19 @@ import { labelActivity, weiToEth } from "../activity";
 import { workspaceHref } from "../routing";
 import { useActiveAgent } from "../shell";
 import {
+  AgentFace,
   AgentMetric,
   AgentMetrics,
   AgentNothing,
   AgentSection,
   AgentStatus,
+  AgentTile,
+  AgentTiles,
   LaunchRow,
+  Sparkline,
   type AgentState,
 } from "../ui";
+import type { Snapshot } from "./data";
 import { AutonomyPanel } from "./autonomy-panel";
 import { CopyWallet } from "./copy-wallet";
 import { useAgentSnapshot } from "./data";
@@ -48,36 +53,41 @@ export function Overview() {
 
   return (
     <div className="ag-wide">
-      <div className="ag-head">
-        <h1>{agent.name}</h1>
-        <AgentStatus state={agent.status as AgentState} />
-        <button type="button" className="ag-quiet" style={{ height: 24 }} onClick={() => void toggle()}>
-          {agent.status === "paused" ? "resume" : "pause"}
-        </button>
-      </div>
-      <p className="ag-head-sub">
-        {agent.description === ""
-          ? "This agent has no description yet."
-          : agent.description}
-      </p>
+      <div className="ag-hero">
+        <AgentFace name={agent.name} imageUrl={agent.imageUrl} />
 
-      <AutonomyPanel name={agent.name} username={agent.username} />
+        <div className="ag-hero-name">
+          <h1>{agent.name}</h1>
+          <AgentStatus state={agent.status as AgentState} />
+          <button type="button" className="ag-quiet" style={{ height: 24 }} onClick={() => void toggle()}>
+            {agent.status === "paused" ? "resume" : "pause"}
+          </button>
+        </div>
+
+        <p className="ag-hero-sub">
+          {agent.description === ""
+            ? "This agent has no description yet."
+            : agent.description}
+        </p>
+      </div>
 
       {error !== null ? <p className="ag-note ag-note-bad">{error}</p> : null}
 
       {loading ? (
-        <p className="ag-gate-note" style={{ marginTop: 46 }}>
-          loading current state…
-        </p>
+        <p className="ag-gate-note">loading current state…</p>
       ) : snapshot === null ? null : (
         <>
+          <AgentTiles>
+            {topThree(snapshot).map((tile) => (
+              <AgentTile key={tile.label} label={tile.label} value={tile.value} />
+            ))}
+            <Month history={snapshot.history} />
+          </AgentTiles>
+
+          <AutonomyPanel name={agent.name} username={agent.username} />
+
           <AgentSection title="Wallet" more={<Link className="ag-sec-more" href={workspaceHref(agent.username, "wallet")}>open</Link>}>
             <AgentMetrics columns={3}>
-              <AgentMetric
-                label="Treasury"
-                value={eth(snapshot.treasuryEth === null ? null : Number(snapshot.treasuryEth))}
-                note="funded by you"
-              />
               <AgentMetric
                 label="Budget left today"
                 value={eth(weiToEth(snapshot.allowance.spendRemainingWei))}
@@ -86,6 +96,11 @@ export function Overview() {
               <AgentMetric
                 label="Max per launch"
                 value={eth(weiToEth(snapshot.permissions.maxEthPerLaunchWei))}
+              />
+              <AgentMetric
+                label="Launches today"
+                value={snapshot.allowance.launchesUsed}
+                note={`${snapshot.allowance.launchesRemaining} left`}
               />
             </AgentMetrics>
 
@@ -100,22 +115,6 @@ export function Overview() {
               )}
               <CopyWallet address={agent.walletAddress} />
             </div>
-          </AgentSection>
-
-          <AgentSection title={`Today · ${snapshot.allowance.day}`}>
-            <AgentMetrics>
-              <AgentMetric label="Spent" value={eth(weiToEth(snapshot.allowance.spentWei))} />
-              <AgentMetric
-                label="Spend limit"
-                value={eth(weiToEth(snapshot.permissions.maxEthPerDayWei))}
-              />
-              <AgentMetric label="Launches" value={snapshot.allowance.launchesUsed} />
-              <AgentMetric
-                label="Launch limit"
-                value={snapshot.permissions.maxLaunchesPerDay}
-                note={`${snapshot.allowance.launchesRemaining} left`}
-              />
-            </AgentMetrics>
           </AgentSection>
 
           <AgentSection title="Creator revenue">
@@ -178,6 +177,58 @@ export function Overview() {
           </AgentSection>
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * Which three numbers go at the top.
+ *
+ * Treasury and revenue are the two an owner came to see, and either can be genuinely
+ * unknown: the treasury is a chain read and the revenue is a chain read per market, and a
+ * node having a bad minute is not the same as an agent holding nothing. So both are
+ * candidates rather than fixtures, and when one cannot be read it is dropped and the next
+ * true thing takes its place. The last two are counted in our own database and cannot fail,
+ * which is what guarantees there are always three.
+ *
+ * Nothing here ever renders a dash. A dash in a row of figures reads as zero to everybody
+ * who is not thinking about it.
+ */
+function topThree(snapshot: Snapshot): readonly { readonly label: string; readonly value: string }[] {
+  const candidates = [
+    snapshot.treasuryEth === null
+      ? null
+      : { label: "Treasury", value: eth(Number(snapshot.treasuryEth)) },
+    snapshot.revenue === null
+      ? null
+      : { label: "Revenue earned", value: eth(weiToEth(snapshot.revenue.lifetimeWei)) },
+    { label: "Budget today", value: eth(weiToEth(snapshot.allowance.spendRemainingWei)) },
+    { label: "Markets created", value: String(snapshot.launches.length) },
+  ];
+
+  return candidates.filter((tile) => tile !== null).slice(0, 3);
+}
+
+/**
+ * What the agent has spent over the last thirty days.
+ *
+ * Spending rather than revenue, because spending is the thing we record ourselves, daily,
+ * as it happens — creator fees are only ever read as a balance standing right now, and a
+ * month of them would have to be invented. The figure and the line are the same numbers,
+ * so the one that can be read precisely is printed and the one that shows the shape of the
+ * month is drawn.
+ */
+function Month({ history }: { readonly history: Snapshot["history"] }) {
+  const daily = history.map((day) => Number(weiToEth(day.spentWei) ?? 0));
+  const total = daily.reduce((sum, value) => sum + value, 0);
+
+  return (
+    <div className={total === 0 ? "ag-chart ag-chart-flat" : "ag-chart"}>
+      <div className="ag-chart-head">
+        <span className="ag-chart-label">30 day spend</span>
+        <span className="ag-chart-figure">{eth(total)}</span>
+      </div>
+      <Sparkline values={daily} />
     </div>
   );
 }

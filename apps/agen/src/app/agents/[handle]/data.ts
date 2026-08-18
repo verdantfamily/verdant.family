@@ -58,9 +58,17 @@ export interface Revenue {
   readonly claimableWei: string;
 }
 
+/** One day of the agent's own spending. Days it did nothing are present and zero. */
+export interface SpendDay {
+  readonly day: string;
+  readonly launches: number;
+  readonly spentWei: string;
+}
+
 export interface Snapshot {
   readonly permissions: Permissions;
   readonly allowance: Allowance;
+  readonly history: readonly SpendDay[];
   readonly keys: readonly ApiKey[];
   readonly launches: readonly Record<string, unknown>[];
   readonly activity: readonly Record<string, unknown>[];
@@ -94,6 +102,7 @@ export function useAgentSnapshot(): {
             keys: ApiKey[];
             launches: Record<string, unknown>[];
             allowance: Allowance;
+            history: SpendDay[];
           }>(`/api/v1/owner/agents/${agent.id}`),
           // Revenue reads the chain per market and can fail where the rest cannot. A
           // missing fee figure should not take the whole screen down with it.
@@ -106,6 +115,7 @@ export function useAgentSnapshot(): {
         setSnapshot({
           permissions: detail.agent.permissions,
           allowance: detail.allowance,
+          history: detail.history ?? [],
           keys: detail.keys,
           launches: detail.launches,
           activity: activity.activity,

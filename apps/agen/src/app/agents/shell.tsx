@@ -9,11 +9,16 @@
  *
  * ## The sidebar is not a menu of everything
  *
- * Four groups, thirteen entries, and several of them say `soon` rather than pretending.
- * The brief asked for a narrow product and the fastest way to lose that is a sidebar
- * that accepts every idea anybody has. Entries that lead nowhere useful are still worth
- * listing — they are the shape of the product — but they are marked, and the page behind
- * them says plainly that it is not built rather than showing an empty chart.
+ * Three groups and ten entries. The brief asked for a narrow product and the fastest way
+ * to lose that is a rail that accepts every idea anybody has, so the rail lists what an
+ * owner comes here to do and nothing else. Several entries lead to pages that are not
+ * built; they are still the shape of the product and still worth listing, and each of
+ * those pages says plainly that it is not built rather than showing an empty chart.
+ *
+ * The `soon` tags that used to sit beside them are gone. Fourteen small grey words in a
+ * column with four smaller grey words scattered among them is a rail that has to be read;
+ * without them it can be scanned, and nothing is claimed that the destination does not
+ * immediately correct.
  *
  * ## Mobile is not the sidebar in a drawer
  *
@@ -47,31 +52,28 @@ export function useActiveAgent(): ActiveValue {
   return value;
 }
 
-const PRIMARY = [
-  { slug: "", label: "Overview", ready: true },
-  { slug: "chat", label: "Chat", ready: false },
-  { slug: "opportunities", label: "Opportunities", ready: false },
-  { slug: "launches", label: "Launches", ready: true },
-  { slug: "wallet", label: "Wallet", ready: true },
-  { slug: "activity", label: "Activity", ready: true },
-] as const;
+interface Entry {
+  readonly slug: string;
+  readonly label: string;
+  readonly icon: ReactNode;
+}
 
-const AGENT = [
-  { slug: "objective", label: "Objective", ready: false },
-  { slug: "skills", label: "Skills", ready: false },
-  { slug: "permissions", label: "Permissions", ready: true },
-  { slug: "memory", label: "Memory", ready: false },
-] as const;
+const PRIMARY: readonly Entry[] = [
+  { slug: "", label: "Overview", icon: <IconGrid /> },
+  { slug: "chat", label: "Chat", icon: <IconChat /> },
+  { slug: "opportunities", label: "Opportunities", icon: <IconGlass /> },
+  { slug: "launches", label: "Launches", icon: <IconRise /> },
+  { slug: "wallet", label: "Wallet", icon: <IconWallet /> },
+  { slug: "activity", label: "Activity", icon: <IconPulse /> },
+];
 
-const CREATE = [
-  { slug: "instant", label: "Instant", ready: false },
-  { slug: "programmable", label: "Programmable", ready: false },
-] as const;
+const AGENT: readonly Entry[] = [
+  { slug: "objective", label: "Objective", icon: <IconLines /> },
+  { slug: "permissions", label: "Permissions", icon: <IconShield /> },
+  { slug: "memory", label: "Memory", icon: <IconMemory /> },
+];
 
-const INTEGRATIONS = [
-  { slug: "telegram", label: "Telegram", ready: false },
-  { slug: "keys", label: "API Keys", ready: true },
-] as const;
+const INTEGRATIONS: readonly Entry[] = [{ slug: "keys", label: "API Key", icon: <IconKey /> }];
 
 export function AgentShell({
   username,
@@ -144,7 +146,7 @@ export function AgentShell({
 
   return (
     <ActiveCtx.Provider value={{ agent, refresh: owner.refresh, call: owner.call }}>
-      <div className="ag-shell">
+      <div className="ag-shell ag-night">
         <aside className="ag-side">
           <div className="ag-side-top">
             <AgentSwitcher agents={owner.agents} active={agent} />
@@ -173,8 +175,6 @@ function Nav({ agent }: { readonly agent: OwnerAgent }) {
       <Group items={PRIMARY} username={agent.username} />
       <p className="ag-nav-label">Agent</p>
       <Group items={AGENT} username={agent.username} />
-      <p className="ag-nav-label">Create</p>
-      <Group items={CREATE} username={agent.username} />
       <p className="ag-nav-label">Integrations</p>
       <Group items={INTEGRATIONS} username={agent.username} />
     </nav>
@@ -185,7 +185,7 @@ function Group({
   items,
   username,
 }: {
-  readonly items: readonly { readonly slug: string; readonly label: string; readonly ready: boolean }[];
+  readonly items: readonly Entry[];
   readonly username: string;
 }) {
   const pathname = usePathname();
@@ -198,8 +198,8 @@ function Group({
         const current = decodeURIComponent(pathname) === href;
         return (
           <Link key={item.label} href={href} aria-current={current ? "page" : undefined}>
-            {item.label}
-            {item.ready ? null : <span className="ag-nav-soon">soon</span>}
+            {item.icon}
+            <span>{item.label}</span>
           </Link>
         );
       })}
@@ -303,8 +303,8 @@ function MobileTabs({ username }: { readonly username: string }) {
   const tabs = [
     { href: base, label: "Overview", icon: <IconGrid /> },
     { href: `${base}/chat`, label: "Chat", icon: <IconChat /> },
-    { href: `${base}/opportunities`, label: "Ideas", icon: <IconSpark /> },
-    { href: `${base}/launches`, label: "Launches", icon: <IconArrowUp /> },
+    { href: `${base}/opportunities`, label: "Ideas", icon: <IconGlass /> },
+    { href: `${base}/launches`, label: "Launches", icon: <IconRise /> },
   ];
 
   return (
@@ -336,7 +336,7 @@ function Doorway({
   readonly error?: string | null;
 }) {
   return (
-    <div className="ag-gate">
+    <div className="ag-gate ag-night">
       <div className="ag-gate-top">
         <AgentMark />
         <Link className="ag-gate-back" href="/agents">
@@ -355,7 +355,7 @@ function Doorway({
 
 function Waiting({ note }: { readonly note: string }) {
   return (
-    <div className="ag-gate">
+    <div className="ag-gate ag-night">
       <div className="ag-gate-top">
         <AgentMark />
       </div>
@@ -366,37 +366,102 @@ function Waiting({ note }: { readonly note: string }) {
   );
 }
 
+/*
+ * One hairline weight, one 20-unit box, no fills.
+ *
+ * They are drawn here rather than pulled from a set because a set arrives with its own
+ * weight and its own idea of a corner radius, and eleven icons that disagree with the type
+ * beside them is worse than no icons at all. Each one is the plainest possible reading of
+ * its word: the wallet is a card with a pocket, memory is a chip, and none of them are
+ * asked to be clever about it.
+ */
 function IconGrid() {
   return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-      <rect x="3" y="3" width="6" height="6" rx="1.6" />
-      <rect x="11" y="3" width="6" height="6" rx="1.6" />
-      <rect x="3" y="11" width="6" height="6" rx="1.6" />
-      <rect x="11" y="11" width="6" height="6" rx="1.6" />
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true">
+      <rect x="3.2" y="3.2" width="6" height="6" rx="1.6" />
+      <rect x="10.8" y="3.2" width="6" height="6" rx="1.6" />
+      <rect x="3.2" y="10.8" width="6" height="6" rx="1.6" />
+      <rect x="10.8" y="10.8" width="6" height="6" rx="1.6" />
     </svg>
   );
 }
 
 function IconChat() {
   return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-      <path d="M3.5 6.5A2.5 2.5 0 0 1 6 4h8a2.5 2.5 0 0 1 2.5 2.5v5A2.5 2.5 0 0 1 14 14H8l-4 3v-3a.5.5 0 0 1-.5-.5Z" strokeLinejoin="round" />
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true">
+      <path
+        d="M3.4 7.2A3 3 0 0 1 6.4 4.2h7.2a3 3 0 0 1 3 3v3.6a3 3 0 0 1-3 3H8.2L4.4 16.4v-2.9a3 3 0 0 1-1-2.2Z"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
 
-function IconSpark() {
+function IconGlass() {
   return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-      <path d="M10 3l1.7 4.3L16 9l-4.3 1.7L10 15l-1.7-4.3L4 9l4.3-1.7Z" strokeLinejoin="round" />
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true">
+      <circle cx="9" cy="9" r="4.9" />
+      <path d="m12.7 12.7 3.5 3.5" strokeLinecap="round" />
     </svg>
   );
 }
 
-function IconArrowUp() {
+function IconRise() {
   return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-      <path d="M10 16V5m0 0L5.5 9.5M10 5l4.5 4.5" strokeLinecap="round" strokeLinejoin="round" />
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true">
+      <path d="M3.4 13.6 8 9l3 3 5.2-5.2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12.6 6.8h3.6v3.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconWallet() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true">
+      <rect x="3" y="5.2" width="14" height="10.6" rx="2.4" />
+      <path d="M13.2 10.5h3.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconPulse() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true">
+      <path d="M2.8 10.4h3.1L8 5.6l3.2 8.8 2-4h4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconLines() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true">
+      <path d="M3.6 5.6h12.8M3.6 10h9M3.6 14.4h5.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconShield() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true">
+      <path d="M10 3.2 4.6 5.4v4.2c0 3.2 2.2 5.8 5.4 7 3.2-1.2 5.4-3.8 5.4-7V5.4Z" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconMemory() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true">
+      <rect x="5.4" y="5.4" width="9.2" height="9.2" rx="1.8" />
+      <path d="M8.4 3v2.4M11.6 3v2.4M8.4 14.6V17M11.6 14.6V17M3 8.4h2.4M3 11.6h2.4M14.6 8.4H17M14.6 11.6H17" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconKey() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true">
+      <circle cx="7.2" cy="7.2" r="3.4" />
+      <path d="m9.7 9.7 6 6M13.2 13.2l-1.6 1.6M15.2 15.2l-1.6 1.6" strokeLinecap="round" />
     </svg>
   );
 }

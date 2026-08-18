@@ -328,6 +328,11 @@ export function utcDay(at = Math.floor(Date.now() / 1000)): string {
   return new Date(at * 1000).toISOString().slice(0, 10);
 }
 
+/** `day` moved by whole days, still as `YYYY-MM-DD`. Arithmetic in UTC, like the keys. */
+function shiftDay(day: string, by: number): string {
+  return utcDay(Math.floor(Date.parse(`${day}T00:00:00Z`) / 1000) + by * 86_400);
+}
+
 function asAddress(value: string): Address {
   if (!isAddress(value, { strict: false })) {
     throw new AgentError("VALIDATION_FAILED", "That is not an address.");
@@ -786,6 +791,42 @@ export class AgentStore {
       reservedLaunches: Number(row.reserved_launches),
       reservedWei: BigInt(String(row.reserved_wei)),
     };
+  }
+
+  /**
+   * The last `days` days of spending, oldest first, with the gaps filled in.
+   *
+   * A day an agent did nothing writes no row, so the table alone is a list of the days it
+   * was busy rather than a series — reading it straight would draw a chart in which a
+   * fortnight of silence and a fortnight of daily launches look identical. The zeroes are
+   * put back here so that the shape on screen is the shape of the month.
+   *
+   * Reserved amounts are deliberately left out. A reservation is money that might be spent
+   * in the next few minutes, which belongs in today's allowance and not in a history of
+   * what happened.
+   */
+  spendHistory(agentId: string, days: number, today = utcDay()): readonly SpendDay[] {
+    const rows = this.db
+      .prepare("SELECT * FROM agent_spend_days WHERE agent_id = ? AND day > ? ORDER BY day")
+      .all(agentId, shiftDay(today, -days)) as Record<string, unknown>[];
+
+    const found = new Map(rows.map((row) => [String(row.day), row]));
+    const out: SpendDay[] = [];
+
+    for (let back = days - 1; back >= 0; back -= 1) {
+      const day = shiftDay(today, -back);
+      const row = found.get(day);
+      out.push({
+        agentId,
+        day,
+        launches: row === undefined ? 0 : Number(row.launches),
+        spentWei: row === undefined ? 0n : BigInt(String(row.spent_wei)),
+        reservedLaunches: 0,
+        reservedWei: 0n,
+      });
+    }
+
+    return out;
   }
 
   allowance(agentId: string, permissions: AgentPermissions, day = utcDay()): DailyAllowance {

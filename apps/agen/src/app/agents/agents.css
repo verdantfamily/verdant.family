@@ -53,6 +53,11 @@
      type becomes white on white the moment the palette flips. */
   --ag-on-ink: #ffffff;
 
+  /* Large figures. On paper this is simply the ink; in the dark room it is pulled off white,
+     because a 32px number set in pure white outshines the agent's own name two lines above
+     it and the screen ends up being about the money again. */
+  --ag-figure: var(--ag-ink);
+
   /* The chrome. Used for the mark and for the edge of anything that should look milled
      rather than filled. Dark enough to hold an outline on white, which the old silver —
      mixed to glow against black — is not. */
@@ -63,6 +68,7 @@
      bottle and brown. */
   --ag-live: #12a05c;
   --ag-warn: #b07d12;
+  --ag-bad: #a3242b;
 
   /* The chain's own blue, used only where a number needs to be marked as money. */
   --ag-eth: #4f42f0;
@@ -112,18 +118,23 @@
  * the next time it is opened; two mechanisms for one idea is one too many.
  */
 .ag-night {
-  --ag-canvas: #000000;
-  --ag-raise: #181818;
-  --ag-raise-2: #2f2f2f;
+  /* Not black. A card on pure black has to be lifted far enough to be seen that it starts
+     to glow, and the room ends up looking like a light interface photographed in the dark.
+     Sitting the ground at #121212 leaves the card four steps up, which is enough to read as
+     a surface and not enough to read as a light. */
+  --ag-canvas: #121212;
+  --ag-raise: #161616;
+  --ag-raise-2: #1e1e1e;
 
-  --ag-line: #212121;
-  --ag-line-strong: #3a3a3c;
+  --ag-line: #232323;
+  --ag-line-strong: #313131;
 
   --ag-ink: #ffffff;
   --ag-on-ink: #000000;
-  --ag-text: #d8d8dc;
-  --ag-muted: #8c8c93;
-  --ag-faint: #6b6b72;
+  --ag-figure: #b4b4b4;
+  --ag-text: #a9a9a9;
+  --ag-muted: #8a8a8a;
+  --ag-faint: #6a6a6a;
 
   --ag-chrome: #5a5a62;
 
@@ -131,10 +142,25 @@
      on black. */
   --ag-live: #35d38a;
   --ag-warn: #e0a63a;
+  --ag-bad: #ff6f6f;
 
   background: var(--ag-canvas);
   color: var(--ag-text);
   color-scheme: dark;
+}
+
+/*
+ * The lamp is switched on a container, so everything above it has to be told.
+ *
+ * The environment centres itself inside a measure, which means a dark shell inside a white
+ * document is a dark panel with white margins on any screen wider than the measure. The
+ * literal is unavoidable here: these three all sit *outside* the element that defines the
+ * dark palette, so there is no token in scope to ask.
+ */
+body:has(.ag-night),
+.shell:has(.ag-night),
+.ag-root:has(.ag-night) {
+  background: #121212;
 }
 
 /*
@@ -567,7 +593,7 @@ body:has(.ag-door),
 
 .ag-btn:hover:not(:disabled) {
   border-color: var(--ag-line-strong);
-  background: #e9e9ea;
+  background: color-mix(in srgb, var(--ag-ink) 9%, var(--ag-raise-2));
 }
 
 .ag-btn:disabled {
@@ -774,21 +800,24 @@ body:has(.ag-door) .ag-enter p {
   align-items: stretch;
 }
 
+/*
+ * No rule down the side.
+ *
+ * A border between the rail and the page is how a sidebar announces that it is a panel, and
+ * a room this dark does not need one: the navigation is a column of small grey words with a
+ * great deal of space to its right, and nothing about it is going to be mistaken for the
+ * page. The line was doing no work except making the environment look like software.
+ */
 .ag-side {
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  padding: 22px 14px 18px;
-  border-right: 1px solid var(--ag-line);
+  gap: 22px;
+  padding: clamp(28px, 4vh, 46px) 16px 22px clamp(24px, 3.3vw, 34px);
   background: var(--ag-canvas);
   position: sticky;
   top: 0;
   height: 100vh;
   overflow-y: auto;
-}
-
-.ag-side-top {
-  padding: 0 8px;
 }
 
 /* --- the switcher --------------------------------------------------------- */
@@ -799,11 +828,11 @@ body:has(.ag-door) .ag-enter p {
 
 .ag-switch-face {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) 12px;
+  grid-template-columns: 34px minmax(0, 1fr) 12px;
   align-items: center;
-  gap: 10px;
+  gap: 11px;
   width: 100%;
-  padding: 9px 10px;
+  padding: 6px 12px 6px 11px;
   font: inherit;
   text-align: left;
   color: inherit;
@@ -823,9 +852,9 @@ body:has(.ag-door) .ag-enter p {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
   overflow: hidden;
   background: var(--ag-raise-2);
   border: 1px solid var(--ag-line);
@@ -870,10 +899,21 @@ body:has(.ag-door) .ag-enter p {
   white-space: nowrap;
 }
 
+/* Nearly not there until it is wanted. An agent's own name is the heading of the rail, and
+   a permanent chevron beside it turns the heading into a control that must be read as one
+   every time. Owners with a second agent find it by moving the mouse there. */
 .ag-switch-chev {
   width: 12px;
   height: 12px;
   color: var(--ag-faint);
+  opacity: 0;
+  transition: opacity 0.16s var(--ag-ease);
+}
+
+.ag-switch-face:hover .ag-switch-chev,
+.ag-switch-face:focus-visible .ag-switch-chev,
+.ag-switch-face[aria-expanded="true"] .ag-switch-chev {
+  opacity: 1;
 }
 
 .ag-switch-menu {
@@ -944,41 +984,65 @@ body:has(.ag-door) .ag-enter p {
 .ag-nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
 .ag-nav-label {
-  padding: 0 10px;
-  margin: 14px 0 6px;
+  padding: 0 12px;
+  margin: 12px 0 8px;
   font-family: var(--ag-mono);
-  font-size: 0.62rem;
-  letter-spacing: 0.14em;
+  font-size: 0.6rem;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ag-faint);
 }
 
+/*
+ * An icon and a word, and the icon is the smaller half of the pair.
+ *
+ * Drawn at 17px in a hairline so it sits at about the weight of the text beside it. An icon
+ * heavier than its label turns a list of destinations into a row of buttons, and a rail of
+ * fourteen buttons is the dashboard this was written not to be.
+ */
 .ag-nav a {
-  display: flex;
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 7px 10px;
-  font-size: 0.855rem;
+  gap: 11px;
+  padding: 8px 12px;
+  font-size: 0.87rem;
+  /* The page's reading line-height is set for paragraphs and adds five pixels under every
+     one of these, which over fourteen rows is most of a row. */
+  line-height: 1.2;
   letter-spacing: -0.014em;
-  color: var(--ag-muted);
+  color: var(--ag-faint);
   text-decoration: none;
   border-radius: 0;
-  transition: color 0.14s var(--ag-ease), background 0.14s var(--ag-ease);
+  transition: color 0.14s var(--ag-ease);
+}
+
+/* Blocks, not inline. An inline `svg` reserves a text descender under itself, which adds
+   four invisible pixels to every row and loosens the whole rail by half a line. */
+.ag-nav a svg {
+  display: block;
+  width: 17px;
+  height: 17px;
+  stroke-width: 1.4;
 }
 
 .ag-nav a:hover {
-  color: var(--ag-ink);
-  background: var(--ag-raise);
+  color: var(--ag-text);
 }
 
+/*
+ * White, and nothing else.
+ *
+ * The filled pill the current page used to wear was the only shape in the rail, which made
+ * the navigation the most decorated thing on a screen whose subject is somewhere else.
+ * Against this much grey, being the one white line is louder than any background.
+ */
 .ag-nav a[aria-current="page"] {
   color: var(--ag-ink);
-  background: var(--ag-raise-2);
 }
 
 .ag-nav-soon {
@@ -991,8 +1055,7 @@ body:has(.ag-door) .ag-enter p {
 
 .ag-side-foot {
   margin-top: auto;
-  padding: 14px 10px 0;
-  border-top: 1px solid var(--ag-line);
+  padding: 22px 12px 0;
 }
 
 .ag-side-foot a {
@@ -1010,7 +1073,7 @@ body:has(.ag-door) .ag-enter p {
 
 .ag-main {
   min-width: 0;
-  padding: 40px clamp(22px, 4vw, 56px) 96px;
+  padding: clamp(40px, 5vh, 50px) clamp(22px, 3.4vw, 46px) 96px clamp(18px, 2.2vw, 30px);
 }
 
 /* No cap of its own. The shell around it is already the measure, and a second limit here
@@ -1059,31 +1122,214 @@ body:has(.ag-door) .ag-enter p {
   max-width: 62ch;
 }
 
+/* --- the top of an agent's own page --------------------------------------- */
+
+/*
+ * Picture, name, and one sentence — stacked rather than in a row.
+ *
+ * The picture is an agent's face everywhere else in the product (the rail, the directory, a
+ * market it made), so it opens its own page too, at a size where it is a portrait rather
+ * than a favicon. Putting it above the name instead of beside it leaves the name at the
+ * left margin the rest of the page is measured from, so the eye starts every screen in the
+ * same place.
+ */
+.ag-hero {
+  margin-bottom: clamp(22px, 3vh, 30px);
+}
+
+.ag-hero .ag-face {
+  width: 64px;
+  height: 64px;
+  border-radius: 14px;
+  border: 0;
+}
+
+.ag-hero .ag-face b {
+  font-size: 1.3rem;
+}
+
+.ag-hero-name {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 16px 0 0;
+}
+
+.ag-hero-name h1 {
+  margin: 0;
+  font-size: clamp(1.6rem, 1.3rem + 1.1vw, 2.15rem);
+  font-weight: 500;
+  letter-spacing: -0.04em;
+  color: var(--ag-ink);
+}
+
+.ag-hero-sub {
+  margin: 7px 0 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--ag-muted);
+  max-width: 68ch;
+}
+
+/* --- tiles ---------------------------------------------------------------- */
+
+/*
+ * The three numbers an owner opens this page to see, and they are cards.
+ *
+ * Everything else in this environment is a rule and some air, which is the right treatment
+ * for a list of markets or a log of decisions — things you read in order. These three are
+ * not read in order. They are glanced at, and a glance needs edges to land on, so here and
+ * only here the numbers get a surface of their own.
+ */
+/*
+ * One grid for the whole top of the page, tiles and month together.
+ *
+ * The month card is two thirds wide because it is two of these columns, not because two
+ * thirds looked right — it sits in the same grid as the three figures above it, so the
+ * edges line up by construction and stay lined up at every width. The rows are much further
+ * apart than the columns: across, the three tiles are one statement; down, the month is a
+ * different one.
+ */
+.ag-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(28px, 4vw, 50px) clamp(14px, 1.8vw, 22px);
+}
+
+.ag-tile,
+.ag-chart {
+  background: var(--ag-raise);
+  border-radius: 12px;
+}
+
+.ag-tile {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 20px;
+  min-height: 113px;
+  padding: 22px 24px 18px;
+}
+
+.ag-tile b {
+  font-size: clamp(1.6rem, 1.2rem + 1.1vw, 2rem);
+  font-weight: 400;
+  letter-spacing: -0.035em;
+  line-height: 1;
+  color: var(--ag-figure);
+  font-variant-numeric: tabular-nums;
+}
+
+.ag-tile b small {
+  margin-left: 5px;
+  font-size: 0.42em;
+  letter-spacing: 0;
+  color: var(--ag-faint);
+}
+
+.ag-tile span,
+.ag-chart-label {
+  font-family: var(--ag-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--ag-faint);
+}
+
+/* --- the month -------------------------------------------------------------*/
+
+/*
+ * A month of the agent's own spending, drawn edge to edge.
+ *
+ * The line runs the full width of the card and sits on its floor, with no axes, no grid and
+ * no labels on it. There is nothing to read off it precisely — the figure above it is the
+ * precise answer — and every gridline added here would be an invitation to try.
+ *
+ * It spans two of the three columns above it so that the row below the tiles is visibly a
+ * different kind of statement rather than a fourth tile that happens to be wider.
+ */
+.ag-chart {
+  grid-column: span 2;
+  display: flex;
+  flex-direction: column;
+  min-height: 141px;
+  padding: 22px 24px 0;
+  overflow: hidden;
+}
+
+.ag-chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.ag-chart-figure {
+  font-size: clamp(1.5rem, 1.1rem + 1.1vw, 1.9rem);
+  font-weight: 400;
+  letter-spacing: -0.035em;
+  color: var(--ag-figure);
+  font-variant-numeric: tabular-nums;
+}
+
+.ag-chart svg {
+  display: block;
+  width: calc(100% + 48px);
+  height: 74px;
+  margin: auto -24px 0;
+}
+
+.ag-chart svg path {
+  fill: none;
+  stroke: var(--ag-text);
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+/* A month in which nothing was spent is a true and quite common answer, and a flat line
+   along the floor says it better than an empty rectangle. */
+.ag-chart-flat path {
+  stroke: var(--ag-line-strong);
+}
+
 /* --- status --------------------------------------------------------------- */
 
+/*
+ * A dot, a word, and the faintest wash of its own colour behind them.
+ *
+ * The wash is mixed from `currentColor`, so the badge is defined once and each state only
+ * has to say what colour it is. On white the mix lands as a pale tint and on black as a
+ * dark one, which is the same badge in two rooms rather than two badges.
+ */
 .ag-status {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  font-size: 0.76rem;
+  gap: 6px;
+  padding: 3px 9px 3px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
   letter-spacing: -0.008em;
   color: var(--ag-muted);
+  background: color-mix(in srgb, currentColor 13%, transparent);
 }
 
 .ag-status i {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--ag-faint);
+  background: currentColor;
   flex: none;
 }
 
-.ag-status-live i {
-  background: var(--ag-live);
+.ag-status-live {
+  color: var(--ag-live);
 }
 
-.ag-status-warn i {
-  background: var(--ag-warn);
+.ag-status-warn {
+  color: var(--ag-warn);
 }
 
 /* --- sections ------------------------------------------------------------- */
@@ -1362,10 +1608,12 @@ a.ag-row:hover {
   border-radius: 10px;
 }
 
+/* Mixed against the page rather than written out, because this notice now appears in both
+   rooms and a fixed pale pink panel on a dark page is a lit rectangle in the middle of it. */
 .ag-note-bad {
-  color: #a3242b;
-  background: #fdf4f4;
-  border-color: #f0d3d4;
+  color: var(--ag-bad);
+  background: color-mix(in srgb, var(--ag-bad) 8%, var(--ag-canvas));
+  border-color: color-mix(in srgb, var(--ag-bad) 26%, var(--ag-canvas));
 }
 
 /* --- the directory -------------------------------------------------------- */
@@ -1588,10 +1836,9 @@ a.ag-row:hover {
 /*
  * Where an agent is made.
  *
- * Black, like the door, and for the same reason: this is the last screen before something
- * exists that did not exist before, and the pages on either side of it — the door behind,
- * the agent's own pages ahead — are the two ends of that. The work pages are white because
- * you return to them; this one you pass through once.
+ * Dark, like the door behind it and the agent's own pages ahead: the whole environment is
+ * one lit room now, and this is the doorway between the two halves of it rather than a
+ * black interlude between two white screens.
  *
  * The column is left-aligned rather than centred. Centring it would put the artwork in the
  * margin as an ornament; against the left edge the corner belongs to the picture, and the
@@ -1606,10 +1853,6 @@ a.ag-row:hover {
   overflow: hidden;
 }
 
-body:has(.ag-make),
-.shell:has(.ag-make) {
-  background: #000000;
-}
 
 .ag-make-inner {
   position: relative;
@@ -2167,6 +2410,18 @@ body:has(.ag-make),
     padding: 26px 18px 64px;
   }
 
+  /* Two across rather than three: a third of a phone is not enough room for a figure and
+     its label, and the month takes the full width below them because a line thirty days
+     long in half a phone is a texture rather than a shape. */
+  .ag-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .ag-chart {
+    grid-column: span 2;
+  }
+
   .ag-tabs {
     position: fixed;
     left: 0;
@@ -2176,7 +2431,9 @@ body:has(.ag-make),
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
-    background: rgb(255 255 255 / 88%);
+    /* The page's own ground at 88%, so the bar is the room it floats over seen through
+       frosted glass rather than a white strip laid across a dark screen. */
+    background: color-mix(in srgb, var(--ag-canvas) 88%, transparent);
     backdrop-filter: blur(12px);
     border-top: 1px solid var(--ag-line);
   }

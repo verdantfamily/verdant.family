@@ -478,6 +478,56 @@ describe("agen.space agents — Phase 1", () => {
   });
 });
 
+describe("a month of an agent's spending", () => {
+  let store: AgentStore;
+
+  beforeEach(() => {
+    store = openStore();
+    resetAgentStoreForTests(store);
+  });
+
+  afterEach(() => {
+    store.close();
+    resetAgentStoreForTests(null);
+  });
+
+  it("returns every day in the window, including the ones nothing happened on", () => {
+    const { agent } = atlas(store);
+    const history = store.spendHistory(agent.id, 30, "2026-03-15");
+
+    expect(history).toHaveLength(30);
+    expect(history[0]?.day).toBe("2026-02-14");
+    expect(history[29]?.day).toBe("2026-03-15");
+    expect(history.every((day) => day.spentWei === 0n)).toBe(true);
+  });
+
+  it("reads back what was actually spent, on the day it was spent", () => {
+    const { agent } = atlas(store);
+    const spend = store.db.prepare(
+      "INSERT INTO agent_spend_days (agent_id, day, launches, spent_wei) VALUES (?, ?, ?, ?)",
+    );
+    spend.run(agent.id, "2026-03-14", 2, "2000000000000000");
+    spend.run(agent.id, "2026-03-10", 1, "1000000000000000");
+
+    const history = store.spendHistory(agent.id, 30, "2026-03-15");
+    const busy = history.filter((day) => day.spentWei > 0n);
+
+    expect(busy.map((day) => day.day)).toEqual(["2026-03-10", "2026-03-14"]);
+    expect(busy[1]?.spentWei).toBe(2_000_000_000_000_000n);
+    expect(busy[1]?.launches).toBe(2);
+  });
+
+  it("stops at the edge of the window rather than reaching back past it", () => {
+    const { agent } = atlas(store);
+    store.db
+      .prepare("INSERT INTO agent_spend_days (agent_id, day, launches, spent_wei) VALUES (?, ?, ?, ?)")
+      .run(agent.id, "2026-01-01", 9, "9000000000000000");
+
+    const history = store.spendHistory(agent.id, 30, "2026-03-15");
+    expect(history.some((day) => day.spentWei > 0n)).toBe(false);
+  });
+});
+
 describe("agent wallets and sessions", () => {
   it("a wrapping key for one agent cannot unlock another", () => {
     const a = createIsolatedWallet("agent-a");

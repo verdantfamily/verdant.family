@@ -29,6 +29,13 @@ export async function GET(
       })),
       launches: ctx.store.listLaunches(agent.id),
       allowance: ctx.store.allowance(agent.id, ctx.store.getPermissions(agent.id)),
+      // A month of daily spending, so the environment can draw what the agent has been
+      // doing rather than only what it did today.
+      history: ctx.store.spendHistory(agent.id, 30).map((day) => ({
+        day: day.day,
+        launches: day.launches,
+        spentWei: day.spentWei.toString(),
+      })),
     });
   } catch (error) {
     return fail(error);

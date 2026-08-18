@@ -99,6 +99,89 @@ export function AgentMetric({
   );
 }
 
+/**
+ * The top of an agent's page: three figures and, under them, the month.
+ *
+ * Three figures, always, and never a fourth — the row is meant to be taken in without being
+ * read, and the moment there are five the owner is counting instead of glancing. Which
+ * three is the caller's problem; see `Overview`, which drops a figure it could not get from
+ * the chain rather than drawing a dash where a number should be.
+ *
+ * The month sits in this same grid rather than under it so that its edges are the tiles'
+ * edges by construction.
+ */
+export function AgentTiles({ children }: { readonly children: ReactNode }) {
+  return <div className="ag-tiles">{children}</div>;
+}
+
+export function AgentTile({
+  label,
+  value,
+  unit,
+}: {
+  readonly label: string;
+  readonly value: ReactNode;
+  readonly unit?: string;
+}) {
+  return (
+    <div className="ag-tile">
+      <b>
+        {value}
+        {unit === undefined ? null : <small>{unit}</small>}
+      </b>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+/**
+ * A month in one line.
+ *
+ * Deliberately unlabelled and unmeasurable. It is drawn from the same numbers as the figure
+ * printed above it, and its job is to say whether the month was steady, spiky or empty —
+ * three shapes that are obvious at a glance and would take a paragraph to write. Anything
+ * more exact is a question for the launches list, which has dates on it.
+ *
+ * `preserveAspectRatio="none"` lets the line fill whatever width the card ends up with; the
+ * stroke survives the stretch because the stylesheet marks it as non-scaling.
+ */
+export function Sparkline({ values }: { readonly values: readonly number[] }) {
+  const top = Math.max(...values, 0);
+
+  // A month of zeroes is a true answer and a common one. Drawing it as a line along the
+  // floor says "nothing happened" — dividing by the peak to get there would say NaN.
+  const points = values.map((value, index) => ({
+    x: values.length < 2 ? 0 : (index / (values.length - 1)) * 100,
+    y: top === 0 ? 27 : 27 - (value / top) * 22,
+  }));
+
+  return (
+    <svg viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true">
+      <path d={through(points)} />
+    </svg>
+  );
+}
+
+/** A line through the points, rounded at each one so a month reads as a curve. */
+function through(points: readonly { readonly x: number; readonly y: number }[]): string {
+  const first = points[0];
+  if (first === undefined) return "";
+
+  let d = `M ${round(first.x)} ${round(first.y)}`;
+  for (let i = 1; i < points.length; i += 1) {
+    const previous = points[i - 1]!;
+    const current = points[i]!;
+    d += ` Q ${round(previous.x)} ${round(previous.y)} ${round((previous.x + current.x) / 2)} ${round((previous.y + current.y) / 2)}`;
+  }
+
+  const last = points[points.length - 1]!;
+  return `${d} L ${round(last.x)} ${round(last.y)}`;
+}
+
+function round(value: number): string {
+  return (Math.round(value * 100) / 100).toString();
+}
+
 export function AgentEmptyState({
   lead,
   body,

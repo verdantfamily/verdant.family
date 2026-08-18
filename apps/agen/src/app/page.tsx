@@ -90,12 +90,13 @@ export default async function Home({
    * across a single mixed grid is comparing two different kinds of thing without being
    * told, and a reader looking for one kind has to know the artwork to tell them apart.
    *
-   * Spotlight sits above Instant and is chosen by market cap, not by sort or page. It is
-   * a featured reading of the same shelf, not a third product.
+   * Spotlight sits above Instant and holds two tokens the house names, with market cap
+   * filling any frame a named token cannot. It is a featured reading of the same shelf,
+   * not a third product.
    */
   const instant = ordered.filter((market) => market.kind === "instant");
   // Chosen from the whole Instant shelf, not the current page or the current sort: a
-  // Spotlight that followed "newest" would just be the first card again.
+  // Spotlight that followed "newest" would just be the first cards again.
   const spotlight = spotlightOf(all);
 
   /*
@@ -161,7 +162,7 @@ export default async function Home({
           </div>
         </div>
 
-        {spotlight === null ? null : <Spotlight market={spotlight} usdPerEth={usdPerEth} />}
+        <Spotlight markets={spotlight} usdPerEth={usdPerEth} />
 
         <section className="ax-shelf ax-reveal">
           <div className="ax-shelf-head">

@@ -1208,6 +1208,19 @@ span.ax-pager-arrow {
  * grid item that happened to be first. White, with a gold stroke and glow — no fill
  * and no dark outline.
  */
+/*
+ * Two frames, side by side.
+ *
+ * `auto-fit` rather than a fixed pair: one card left alone — a shelf where only one market
+ * has traded — fills the row instead of sitting in half of it, and the drop to a single
+ * column happens when the cards would be too narrow rather than at a width guessed here.
+ */
+.ax-spots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 20px;
+}
+
 .ax-spot {
   display: grid;
   grid-template-columns: minmax(220px, 0.42fr) minmax(0, 1fr);
@@ -1291,6 +1304,43 @@ span.ax-pager-arrow {
   min-width: 0;
   min-height: 168px;
   height: 100%;
+}
+
+/*
+ * A paired card carries the same parts in less width, so the picture and the line come down
+ * a size rather than the measure being squeezed. Only applies while two are beside each
+ * other: once the grid has collapsed to one column each card is full width again, and the
+ * rules above are what should hold.
+ */
+@media (min-width: 800px) {
+  .ax-spots:has(.ax-spot + .ax-spot) .ax-spot {
+    gap: 24px;
+    padding: 24px 26px;
+    min-height: 196px;
+    grid-template-columns: minmax(132px, 0.46fr) minmax(0, 1fr);
+  }
+
+  .ax-spots:has(.ax-spot + .ax-spot) .ax-spot .ax-art {
+    width: 72px;
+    height: 72px;
+    border-radius: 16px;
+  }
+
+  .ax-spots:has(.ax-spot + .ax-spot) .ax-spot-name {
+    font-size: 1.18rem;
+  }
+
+  .ax-spots:has(.ax-spot + .ax-spot) .ax-spot-cap b {
+    font-size: clamp(1.5rem, 1.2rem + 0.9vw, 1.9rem);
+  }
+
+  .ax-spots:has(.ax-spot + .ax-spot) .ax-spot-chart,
+  .ax-spots:has(.ax-spot + .ax-spot) .ax-spark-plot,
+  .ax-spots:has(.ax-spot + .ax-spot) .ax-spark-area,
+  .ax-spots:has(.ax-spot + .ax-spot) .ax-spark-flat-area {
+    height: 144px;
+    min-height: 144px;
+  }
 }
 
 .ax-spark-plot,
@@ -3267,6 +3317,11 @@ span.ax-pager-arrow {
   .ax-feature {
     grid-template-columns: auto minmax(0, 1fr);
     gap: 18px;
+  }
+
+  .ax-spots {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
   }
 
   .ax-spot {

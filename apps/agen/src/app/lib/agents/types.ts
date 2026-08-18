@@ -379,6 +379,25 @@ export interface AgentMemory {
   readonly expiresAt: number | null;
 }
 
+export const CHAT_ROLES = ["owner", "agent"] as const;
+export type ChatRole = (typeof CHAT_ROLES)[number];
+
+/**
+ * One thing said, by one of the two people who can say anything here.
+ *
+ * `memoryId` is set on an owner's turn when that turn was filed as a standing instruction
+ * the agent will read on its next cycle. It is how the screen can show which sentences the
+ * agent is actually working from, rather than asking the owner to take that on trust.
+ */
+export interface AgentChatTurn {
+  readonly id: string;
+  readonly agentId: string;
+  readonly role: ChatRole;
+  readonly text: string;
+  readonly memoryId: string | null;
+  readonly createdAt: number;
+}
+
 export const FEEDBACK_VERDICTS = ["good", "bad", "note"] as const;
 export type FeedbackVerdict = (typeof FEEDBACK_VERDICTS)[number];
 

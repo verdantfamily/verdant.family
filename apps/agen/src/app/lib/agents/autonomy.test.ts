@@ -568,15 +568,28 @@ describe("agen.space agents — Phase 2 autonomy", () => {
     const dir = mkdtempSync(join(tmpdir(), "agen-migrate-"));
     const path = join(dir, "agents.db");
 
+    const applied = (store: AgentStore) =>
+      store.db
+        .prepare("SELECT version FROM schema_migrations ORDER BY version")
+        .all()
+        .map((row) => Number((row as { version: number }).version));
+
     const first = new AgentStore(path);
     const agent = createAgent(OWNER, { name: "Atlas", username: "atlas" }, first).agent;
+    const before = applied(first);
     first.close();
 
     const second = new AgentStore(path);
     expect(second.getAgent(agent.id)?.username).toBe("atlas");
     expect(second.getAutonomy(agent.id).enabled).toBe(false);
-    const versions = second.db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
-    expect(versions).toHaveLength(2);
+
+    // The count is not written down here on purpose. What has to hold is that opening the
+    // same file twice applies nothing a second time; asserting a number instead means every
+    // future migration arrives with a red test that is not telling anyone anything.
+    const after = applied(second);
+    expect(after).toEqual(before);
+    expect(new Set(after).size).toBe(after.length);
+    expect(after.length).toBeGreaterThan(0);
     second.close();
   });
 

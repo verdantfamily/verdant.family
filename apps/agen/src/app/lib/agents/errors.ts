@@ -50,6 +50,7 @@ export type AgentErrorCode =
   | "DECISION_NOT_FOUND"
   | "DECISION_NOT_PENDING"
   | "MODEL_BUDGET_EXHAUSTED"
+  | "CHAT_LIMIT_REACHED"
   | "MODEL_UNAVAILABLE"
   | "MODEL_REFUSED"
   | "TREASURY_RESERVE"
@@ -139,6 +140,7 @@ function statusFor(code: AgentErrorCode): number {
     case "RATE_LIMITED":
     case "RUN_BUDGET_EXHAUSTED":
     case "MODEL_BUDGET_EXHAUSTED":
+    case "CHAT_LIMIT_REACHED":
       return 429;
     case "CONFIG_MISSING":
     case "WRONG_CHAIN":

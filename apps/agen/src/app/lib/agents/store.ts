@@ -26,6 +26,7 @@ import type {
   AgentApiKeyRecord,
   AgentAutonomy,
   AgentBuildLink,
+  AgentChatTurn,
   AgentDecision,
   AgentFeedback,
   AgentLaunchRecord,
@@ -38,6 +39,7 @@ import type {
   AgentRun,
   AgentStatus,
   AgentWalletRecord,
+  ChatRole,
   DailyAllowance,
   DecisionKind,
   DecisionStatus,
@@ -318,6 +320,27 @@ const MIGRATIONS: readonly { readonly version: number; readonly sql: string }[] 
       CREATE INDEX IF NOT EXISTS idx_decisions_run ON agent_decisions(run_id);
       CREATE INDEX IF NOT EXISTS idx_memory_agent ON agent_memory(agent_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_feedback_agent ON agent_feedback(agent_id, created_at);
+    `,
+  },
+  {
+    // What the owner and the agent have said to each other.
+    //
+    // A transcript and nothing else: no decision, no launch and no transaction has ever
+    // been produced by a row in this table, and none can be. `memory_id` is the one link
+    // out of it, pointing at the instruction an owner's turn was filed as — see `chat.ts`
+    // for why that row holds the owner's words and never the model's.
+    version: 3,
+    sql: `
+      CREATE TABLE IF NOT EXISTS agent_chat (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        text TEXT NOT NULL,
+        memory_id TEXT,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_chat_agent ON agent_chat(agent_id, created_at);
     `,
   },
 ];
@@ -1943,6 +1966,70 @@ export class AgentStore {
           createdAt: Number(r.created_at),
         };
       });
+  }
+
+  insertChatTurn(input: {
+    readonly agentId: string;
+    readonly role: ChatRole;
+    readonly text: string;
+    readonly memoryId?: string | null;
+  }): AgentChatTurn {
+    const turn: AgentChatTurn = {
+      id: crypto.randomUUID(),
+      agentId: input.agentId,
+      role: input.role,
+      text: input.text,
+      memoryId: input.memoryId ?? null,
+      createdAt: Math.floor(Date.now() / 1000),
+    };
+    this.db
+      .prepare(
+        "INSERT INTO agent_chat (id, agent_id, role, text, memory_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run(turn.id, turn.agentId, turn.role, turn.text, turn.memoryId, turn.createdAt);
+    return turn;
+  }
+
+  /** Oldest first, because that is the order a conversation is read in. */
+  listChat(agentId: string, limit = 200): readonly AgentChatTurn[] {
+    return this.db
+      // `seq` has to be carried out of the subquery by name: a question and the answer to
+      // it are written in the same second, and without insertion order as a tiebreaker the
+      // reply can sort above the thing it replied to.
+      .prepare(
+        `SELECT * FROM (
+           SELECT rowid AS seq, * FROM agent_chat WHERE agent_id = ? ORDER BY created_at DESC, seq DESC LIMIT ?
+         ) ORDER BY created_at, seq`,
+      )
+      .all(agentId, limit)
+      .map((row) => {
+        const r = row as Record<string, unknown>;
+        return {
+          id: String(r.id),
+          agentId: String(r.agent_id),
+          role: String(r.role) as ChatRole,
+          text: String(r.text),
+          memoryId: nullableString(r.memory_id),
+          createdAt: Number(r.created_at),
+        };
+      });
+  }
+
+  /**
+   * How many times the owner has written to this agent today.
+   *
+   * Counted from the transcript rather than kept as a separate tally, because the
+   * transcript is the thing that cannot drift: a message that exists was sent, and a
+   * message that was sent exists. Chat is capped on this count instead of on the planner's
+   * model budget so that a long conversation cannot leave the agent unable to think.
+   */
+  countOwnerChatSince(agentId: string, since: number): number {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM agent_chat WHERE agent_id = ? AND role = 'owner' AND created_at >= ?",
+      )
+      .get(agentId, since) as { n: number };
+    return Number(row.n);
   }
 
   modelUsage(agentId: string, day = utcDay()): ModelUsageDay {

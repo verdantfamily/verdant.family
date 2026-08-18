@@ -1442,6 +1442,175 @@ body:has(.ag-door) .ag-enter p {
   color: var(--ag-faint);
 }
 
+/* --- talking to it -------------------------------------------------------- */
+
+/*
+ * A column that fills the room, with the composer on the floor of it.
+ *
+ * The height is taken rather than grown into: a transcript that starts at the top of the
+ * page and pushes a composer down the screen as it fills means the place you type moves
+ * every time you type, and an empty conversation leaves a text box stranded under a
+ * heading. Fixing the floor costs one viewport calculation and buys a room that is the
+ * same shape empty as it is full.
+ */
+.ag-talk {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 92px);
+}
+
+/* The one page that wants its floor near the window's. Everywhere else the long bottom
+   margin is what stops a page ending flush against the edge; here the composer is supposed
+   to sit low, and 96px of air under it reads as a box that failed to reach the bottom. */
+.ag-main:has(.ag-talk) {
+  padding-bottom: 44px;
+}
+
+.ag-talk-log {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  align-items: flex-start;
+  padding: 26px 0 30px;
+  overflow-y: auto;
+}
+
+.ag-talk-quiet {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 0.86rem;
+  line-height: 1.65;
+  color: var(--ag-faint);
+}
+
+.ag-talk-wait {
+  align-self: flex-start;
+  font-family: var(--ag-mono);
+  font-size: 0.72rem;
+}
+
+/*
+ * The agent speaks in the page's own voice; the owner's words are on a card.
+ *
+ * Not two bubbles facing each other. The agent is not a person on the other end of a
+ * phone, and dressing its answers as somebody else's messages is the small dishonesty
+ * every chat interface starts with. What it says is simply the text of the page, which is
+ * also how it reads everywhere else in this environment.
+ */
+.ag-said {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.ag-said-it {
+  max-width: 68ch;
+  color: var(--ag-text);
+}
+
+.ag-said-mine {
+  align-self: flex-end;
+  max-width: min(78%, 60ch);
+}
+
+.ag-said-me {
+  padding: 12px 16px;
+  color: var(--ag-ink);
+  background: var(--ag-raise-2);
+  border-radius: 16px 16px 4px 16px;
+}
+
+.ag-said-pending {
+  align-self: flex-end;
+  max-width: min(78%, 60ch);
+  opacity: 0.55;
+}
+
+.ag-said-filed {
+  margin: 7px 2px 0;
+  font-family: var(--ag-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.02em;
+  text-align: right;
+  color: var(--ag-faint);
+}
+
+/* --- the composer --------------------------------------------------------- */
+
+.ag-ask {
+  position: relative;
+  display: block;
+  min-height: 112px;
+  margin-top: auto;
+  padding: 20px 20px 14px;
+  background: var(--ag-raise);
+  border: 1px solid transparent;
+  border-radius: 22px;
+  transition: border-color 0.16s var(--ag-ease);
+}
+
+.ag-ask:focus-within {
+  border-color: var(--ag-line-strong);
+}
+
+/*
+ * The box is the card, so the field inside it has nothing of its own: no border, no
+ * background, no ring on focus. Two nested rectangles where one would do is the usual way
+ * a composer ends up looking like a form.
+ */
+.ag-ask textarea {
+  display: block;
+  width: 100%;
+  min-height: 46px;
+  max-height: 40vh;
+  padding: 0 46px 0 0;
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--ag-ink);
+  background: none;
+  border: 0;
+  border-radius: 0;
+  resize: none;
+  outline: none;
+  field-sizing: content;
+}
+
+.ag-ask textarea::placeholder {
+  color: var(--ag-muted);
+}
+
+.ag-ask-send {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--ag-on-ink);
+  background: var(--ag-ink);
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: opacity 0.16s var(--ag-ease);
+}
+
+.ag-ask-send svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.5;
+}
+
+.ag-ask-send:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
 /* --- rows ----------------------------------------------------------------- */
 
 .ag-rows {
@@ -2427,6 +2596,16 @@ a.ag-row:hover {
 
   .ag-chart {
     grid-column: span 2;
+  }
+
+  /* The composer has to clear the tab bar, which is fixed to the bottom of the window and
+     would otherwise sit on top of it. */
+  .ag-main:has(.ag-talk) {
+    padding-bottom: 108px;
+  }
+
+  .ag-talk {
+    min-height: calc(100vh - 190px);
   }
 
   .ag-tabs {

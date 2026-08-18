@@ -286,7 +286,7 @@ body:has(.ag-door),
   gap: 8px;
   height: 34px;
   padding: 0 18px;
-  border-radius: 999px;
+  border-radius: 0;
   background: rgb(255 255 255 / 8%);
   color: var(--door-ink);
   font-size: 0.84rem;
@@ -375,7 +375,7 @@ body:has(.ag-door),
  * The file is named in exactly one place. See public/a4a/README.md before replacing it.
  */
 .ag-door-art {
-  background-image: url("/a4a/art.svg");
+  background-image: url("/a4a/lines.png");
   background-size: cover;
   background-position: right center;
   background-repeat: no-repeat;
@@ -400,7 +400,7 @@ body:has(.ag-door),
   color: #ffffff;
   background: var(--ag-ink);
   border: 0;
-  border-radius: 999px;
+  border-radius: 0;
   cursor: pointer;
   text-decoration: none;
   transition: transform 0.2s var(--ag-ease), box-shadow 0.2s var(--ag-ease);
@@ -429,6 +429,29 @@ body:has(.ag-door),
 
 .ag-door .ag-go:hover:not(:disabled) {
   box-shadow: 0 10px 26px -10px rgb(255 255 255 / 45%);
+}
+
+/*
+ * Connect, which is somebody else's button.
+ *
+ * `<Wallet />` is the launchpad's control and arrives carrying the global stylesheet's
+ * corners. It stands where the primary button stands in the other states of the door, so
+ * it is given the primary button's shape here rather than appearing as a third kind of
+ * thing at the same step of the same sequence.
+ */
+.ag-root .wallet {
+  border-radius: 0;
+}
+
+.ag-door .nav-account .wallet {
+  height: 50px;
+  padding: 0 34px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  color: #000000;
+  background: #ffffff;
+  border: 0;
 }
 
 .ag-go svg {
@@ -469,7 +492,7 @@ body:has(.ag-door),
   color: var(--ag-ink);
   background: var(--ag-raise-2);
   border: 1px solid var(--ag-line);
-  border-radius: 10px;
+  border-radius: 0;
   cursor: pointer;
   text-decoration: none;
   transition: border-color 0.18s var(--ag-ease), background 0.18s var(--ag-ease);
@@ -613,7 +636,7 @@ body:has(.ag-door) .ag-enter i {
   color: inherit;
   background: none;
   border: 1px solid transparent;
-  border-radius: 12px;
+  border-radius: 0;
   cursor: pointer;
   transition: background 0.16s var(--ag-ease), border-color 0.16s var(--ag-ease);
 }
@@ -689,7 +712,7 @@ body:has(.ag-door) .ag-enter i {
   padding: 6px;
   background: var(--ag-raise);
   border: 1px solid var(--ag-line-strong);
-  border-radius: 12px;
+  border-radius: 0;
 }
 
 .ag-switch-item {
@@ -705,7 +728,7 @@ body:has(.ag-door) .ag-enter i {
   color: var(--ag-text);
   background: none;
   border: 0;
-  border-radius: 8px;
+  border-radius: 0;
   cursor: pointer;
   text-decoration: none;
 }
@@ -771,7 +794,7 @@ body:has(.ag-door) .ag-enter i {
   letter-spacing: -0.014em;
   color: var(--ag-muted);
   text-decoration: none;
-  border-radius: 8px;
+  border-radius: 0;
   transition: color 0.14s var(--ag-ease), background 0.14s var(--ag-ease);
 }
 
@@ -1100,7 +1123,7 @@ a.ag-row:hover {
   color: var(--ag-muted);
   background: var(--ag-raise-2);
   border: 1px solid var(--ag-line);
-  border-radius: 999px;
+  border-radius: 0;
   cursor: pointer;
   transition: color 0.16s var(--ag-ease), border-color 0.16s var(--ag-ease);
 }
@@ -1343,7 +1366,7 @@ a.ag-row:hover {
   text-align: left;
   background: var(--ag-raise);
   border: 1px solid var(--ag-line);
-  border-radius: 10px;
+  border-radius: 0;
   cursor: pointer;
   transition: border-color 0.16s var(--ag-ease);
 }
@@ -1358,7 +1381,7 @@ a.ag-row:hover {
   justify-content: center;
   width: 34px;
   height: 34px;
-  border-radius: 8px;
+  border-radius: 0;
   overflow: hidden;
   background: var(--ag-raise-2);
   flex: none;
@@ -1463,7 +1486,7 @@ a.ag-row:hover {
     letter-spacing: -0.005em;
     color: var(--ag-faint);
     text-decoration: none;
-    border-radius: 8px;
+    border-radius: 0;
   }
 
   .ag-tabs a[aria-current="page"] {
@@ -1536,7 +1559,7 @@ a.ag-row:hover {
   text-align: left;
   background: var(--ag-raise);
   border: 1px solid var(--ag-line);
-  border-radius: 10px;
+  border-radius: 0;
   cursor: pointer;
   transition: border-color 0.14s ease, background 0.14s ease;
 }

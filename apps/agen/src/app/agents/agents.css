@@ -237,6 +237,9 @@ body:has(.ag-root) {
 .ag-door {
   --door-ink: #ffffff;
   --door-muted: #8d8d92;
+  /* How far the artwork stands off the edges of the window. One value for three sides,
+     because an inset that differs per edge reads as a mistake rather than a margin. */
+  --door-inset: clamp(16px, 2.4vw, 34px);
 
   flex: 1;
   width: 100%;
@@ -254,8 +257,8 @@ body:has(.ag-root) {
  * Full bleed, and the body under it too.
  *
  * The door is the only screen here that ignores `--ag-measure`. A centred column with
- * white either side of it would put two vertical seams down a black screen, and the
- * artwork has to reach the right edge or it is a picture of a panel rather than the panel.
+ * white either side of it would put two vertical seams down a black screen. The black runs
+ * to every edge; the artwork sitting on it does not, which is the point of the inset.
  */
 body:has(.ag-door),
 .shell:has(.ag-door) {
@@ -379,10 +382,11 @@ body:has(.ag-door),
   background-size: cover;
   background-position: right center;
   background-repeat: no-repeat;
-  /* A margin at the right and nowhere else, which is what the reference does: the panel
-     bleeds off the top and bottom and stops short of the edge it is nearest. Delete this
-     one line for a panel that runs to the corner. */
-  margin-right: clamp(14px, 2.2vw, 30px);
+  /* Held off three edges and left open on the fourth. The panel is a thing sitting on the
+     black rather than the black itself, which only reads if the black continues past it —
+     so it stops short of the top, the right and the bottom, and runs to meet the text on
+     the side where the two columns touch. Set this to 0 for a panel that bleeds. */
+  margin: var(--door-inset) var(--door-inset) var(--door-inset) 0;
 }
 
 /* --- actions -------------------------------------------------------------- */
@@ -511,9 +515,10 @@ body:has(.ag-door),
 /* --- the entry transition ------------------------------------------------- */
 
 /*
- * Held for 620ms, which is long enough to register as crossing a threshold and short
- * enough that nobody waits through it twice. It is a real navigation cover, not a
- * decoration: the destination is being resolved behind it.
+ * Held for four and a half seconds. It is a real navigation cover — the wallet is being
+ * looked for and the destination resolved behind it — but at this length it is also the
+ * screen's own beat, and it has to be worth the wait rather than merely tolerable. Hence
+ * the artwork breathing in the middle of it instead of a spinner.
  */
 .ag-enter {
   position: fixed;
@@ -525,9 +530,8 @@ body:has(.ag-door),
   justify-content: center;
   gap: 22px;
   background: var(--ag-canvas);
-  /* Quick, because the hold is only 620ms in total: a quarter-second fade spends most of
-     it half-transparent, and a cover you can still read the previous screen through is
-     not a cover. */
+  /* Quick regardless of how long the cover is held: a cover you can still read the previous
+     screen through is not a cover, so the fade only has to hide the swap. */
   animation: ag-enter-in 0.12s linear both;
 }
 
@@ -539,26 +543,52 @@ body:has(.ag-door) .ag-enter {
   color: #ffffff;
 }
 
-body:has(.ag-door) .ag-enter i {
-  background: #ffffff;
+/*
+ * The mark, which is the door's own artwork shrunk to a tile.
+ *
+ * Turned a quarter turn: the panel on the door runs in rows and this runs in columns, so
+ * the same texture reads as a second thing made of the first rather than as a thumbnail of
+ * the screen just left. The rotation happens here rather than in a second exported file, so
+ * that replacing the artwork replaces both places at once.
+ *
+ * A box rotated 90° occupies its own height in width, so the inner box is 4:5 to fill a
+ * frame that is 5:4.
+ *
+ * Enlarged to 175% and cropped rather than fitted. The whole artwork inside a tile this
+ * size puts fifty rows into eighty pixels, and lines a third of a pixel apart do not
+ * survive being drawn — they alias into grey noise. Showing half of it keeps the bars wide
+ * enough to read as bars.
+ */
+.ag-enter i {
+  --mark: clamp(84px, 9.8vw, 116px);
+
+  position: relative;
+  width: var(--mark);
+  height: calc(var(--mark) * 0.8);
+  overflow: hidden;
+  animation: ag-enter-mark 2.4s var(--ag-ease) infinite;
 }
 
-.ag-enter i {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background: var(--ag-ink);
-  opacity: 0.9;
-  animation: ag-enter-mark 1.6s var(--ag-ease) infinite;
+.ag-enter i::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: calc(var(--mark) * 0.8);
+  height: var(--mark);
+  transform: translate(-50%, -50%) rotate(90deg);
+  background: url("/a4a/lines.png") center / 175% no-repeat;
 }
 
 .ag-enter p {
   margin: 0;
-  font-family: var(--ag-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.06em;
-  text-transform: lowercase;
-  color: var(--ag-faint);
+  font-size: 0.84rem;
+  letter-spacing: -0.01em;
+  color: var(--ag-muted);
+}
+
+body:has(.ag-door) .ag-enter p {
+  color: var(--door-muted, #8d8d92);
 }
 
 @keyframes ag-enter-in {
@@ -567,13 +597,17 @@ body:has(.ag-door) .ag-enter i {
   }
 }
 
+/* Breathing rather than spinning. A spinner claims work is being done at a rate; this only
+   claims the screen is alive, which over four seconds is the honest claim. */
 @keyframes ag-enter-mark {
   0%,
   100% {
-    opacity: 0.35;
+    opacity: 0.4;
+    transform: scale(0.955);
   }
   50% {
-    opacity: 0.95;
+    opacity: 1;
+    transform: scale(1);
   }
 }
 

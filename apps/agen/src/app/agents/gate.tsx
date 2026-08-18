@@ -21,37 +21,47 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Wallet } from "../wallet";
 import { useOwner } from "./owner";
 import { Arrow } from "./ui";
 
-/** Long enough to read as crossing a threshold, short enough not to sit through twice. */
-const HOLD_MS = 620;
+/**
+ * Long enough that the environment reads as something being started rather than a page
+ * being swapped. It is also roughly what connecting a wallet costs anyway, so most of it is
+ * spent on work that was going to happen regardless.
+ */
+const HOLD_MS = 4_500;
 
 export function Gate() {
   const router = useRouter();
   const owner = useOwner();
   const [entering, setEntering] = useState(false);
   const [entered, setEntered] = useState(false);
+  const held = useRef<number>(0);
 
   const enter = useCallback(() => {
     const reduced =
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+    // Somebody who has asked for less motion has asked not to watch four seconds of a
+    // pulsing tile, and the hold buys them nothing they did not already have.
     if (reduced) {
       setEntered(true);
       return;
     }
 
     setEntering(true);
-    window.setTimeout(() => {
+    held.current = window.setTimeout(() => {
       setEntering(false);
       setEntered(true);
     }, HOLD_MS);
   }, []);
+
+  // Four and a half seconds is long enough to leave in the middle of.
+  useEffect(() => () => window.clearTimeout(held.current), []);
 
   // Once the owner's agents are known there is a real destination, so stop occupying a
   // URL whose only job was to ask the question.
@@ -85,7 +95,7 @@ export function Gate() {
       {entering ? (
         <div className="ag-enter" role="status" aria-live="polite">
           <i aria-hidden="true" />
-          <p>initializing agent environment</p>
+          <p>Initializing agent environment</p>
         </div>
       ) : null}
     </>
@@ -122,7 +132,7 @@ function Hero({ onEnter }: { readonly onEnter: () => void }) {
       acts={
         <>
           <button type="button" className="ag-go" onClick={onEnter}>
-            Enter A4A
+            Enter Agen AI
             <Arrow />
           </button>
           <Link className="ag-quiet" href="/agents/explore">

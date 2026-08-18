@@ -48,6 +48,11 @@
   --ag-muted: #77777f;
   --ag-faint: #a3a3ac;
 
+  /* What sits on top of `--ag-ink` when ink is used as a fill rather than as type. It has
+     to be a token because in a dark room ink is white, and a button that hardcodes white
+     type becomes white on white the moment the palette flips. */
+  --ag-on-ink: #ffffff;
+
   /* The chrome. Used for the mark and for the edge of anything that should look milled
      rather than filled. Dark enough to hold an outline on white, which the old silver —
      mixed to glow against black — is not. */
@@ -58,6 +63,13 @@
      bottle and brown. */
   --ag-live: #12a05c;
   --ag-warn: #b07d12;
+
+  /* The chain's own blue, used only where a number needs to be marked as money. */
+  --ag-eth: #4f42f0;
+
+  /* A checkmark as a shape rather than as a colour: it is painted by masking a fill, so it
+     inherits whatever contrasts with the box it sits in. */
+  --ag-tick: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 11 9'%3E%3Cpath d='M1 4.6 4.1 7.7 10 1.4' fill='none' stroke='%23000' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
   --ag-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 
@@ -85,6 +97,44 @@
   color: var(--ag-text);
   color-scheme: light;
   -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * A dark room.
+ *
+ * Not a theme and not a preference — a room. Most of these pages are white because they are
+ * places you work; one or two are black because they are places you arrive, and the switch
+ * is a property of the screen rather than of the reader. Setting it as the same tokens
+ * inverted means every control already written renders correctly inside it without a second
+ * rule: a field is `--ag-raise` on `--ag-canvas` in both, and only the values differ.
+ *
+ * The door predates this and carries its own `--door-*` values. It should be folded in here
+ * the next time it is opened; two mechanisms for one idea is one too many.
+ */
+.ag-night {
+  --ag-canvas: #000000;
+  --ag-raise: #181818;
+  --ag-raise-2: #2f2f2f;
+
+  --ag-line: #212121;
+  --ag-line-strong: #3a3a3c;
+
+  --ag-ink: #ffffff;
+  --ag-on-ink: #000000;
+  --ag-text: #d8d8dc;
+  --ag-muted: #8c8c93;
+  --ag-faint: #6b6b72;
+
+  --ag-chrome: #5a5a62;
+
+  /* Lifted off the white-page values, which were mixed to be legible on paper and go muddy
+     on black. */
+  --ag-live: #35d38a;
+  --ag-warn: #e0a63a;
+
+  background: var(--ag-canvas);
+  color: var(--ag-text);
+  color-scheme: dark;
 }
 
 /*
@@ -401,7 +451,7 @@ body:has(.ag-door),
   font-size: 0.9rem;
   font-weight: 500;
   letter-spacing: -0.015em;
-  color: #ffffff;
+  color: var(--ag-on-ink);
   background: var(--ag-ink);
   border: 0;
   border-radius: 0;
@@ -455,6 +505,19 @@ body:has(.ag-door),
   letter-spacing: -0.015em;
   color: #000000;
   background: #ffffff;
+  border: 0;
+}
+
+/* Same argument in the making room, where it stands in for the primary button while there
+   is no wallet to make anything with. */
+.ag-night .nav-account .wallet {
+  height: 46px;
+  padding: 0 26px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  color: var(--ag-on-ink);
+  background: var(--ag-ink);
   border: 0;
 }
 
@@ -611,10 +674,28 @@ body:has(.ag-door) .ag-enter p {
   }
 }
 
+/*
+ * Everything that moves on its own, turned off together.
+ *
+ * The entrances are the interesting case: they animate from opacity 0, so removing the
+ * animation without restoring the end state would leave the page invisible. `animation:
+ * none` on a `both`-filled animation returns the element to its own styles, which are the
+ * finished ones — the form is simply already there.
+ */
 @media (prefers-reduced-motion: reduce) {
   .ag-enter,
-  .ag-enter i {
+  .ag-enter i,
+  .ag-make-art,
+  .ag-make-inner > *:not(.ag-form),
+  .ag-make .ag-form > *,
+  .ag-make .ag-upload i img,
+  .ag-make .ag-note,
+  .ag-make .ag-hint {
     animation: none;
+  }
+
+  .ag-check input::after {
+    transition: none;
   }
 }
 
@@ -1312,7 +1393,10 @@ a.ag-row:hover {
   color: var(--ag-faint);
 }
 
-.ag-field input,
+/* Everything a field contains that is a box you type into. Checkboxes are excluded by hand
+   rather than by hoping: they are `input` too, and a tick box given a text field's height,
+   padding and fill becomes a 46px grey slab with a mark somewhere inside it. */
+.ag-field input:not([type="checkbox"]),
 .ag-field textarea {
   width: 100%;
   font: inherit;
@@ -1321,12 +1405,12 @@ a.ag-row:hover {
   color: var(--ag-ink);
   background: var(--ag-raise);
   border: 1px solid var(--ag-line);
-  border-radius: 10px;
+  border-radius: 0;
   outline: none;
   transition: border-color 0.16s var(--ag-ease), background 0.16s var(--ag-ease);
 }
 
-.ag-field input {
+.ag-field input:not([type="checkbox"]) {
   height: 44px;
   padding: 0 14px;
 }
@@ -1345,10 +1429,18 @@ a.ag-row:hover {
 
 /* On black, focus meant a lighter well. Here the same move darkens the field, which is
    what a disabled control looks like — so focus clears it to the page instead. */
-.ag-field input:focus,
+.ag-field input:not([type="checkbox"]):focus,
 .ag-field textarea:focus {
   border-color: var(--ag-chrome);
   background: var(--ag-canvas);
+}
+
+/* And in a dark room the argument runs the other way round again: clearing to the page
+   would erase the field, so focus lifts it off the page instead. */
+.ag-night .ag-field input:not([type="checkbox"]):focus,
+.ag-night .ag-field textarea:focus {
+  background: var(--ag-raise-2);
+  border-color: var(--ag-line-strong);
 }
 
 .ag-pair {
@@ -1433,6 +1525,445 @@ a.ag-row:hover {
   color: var(--ag-faint);
 }
 
+/* --- the making room ------------------------------------------------------ */
+
+/*
+ * Where an agent is made.
+ *
+ * Black, like the door, and for the same reason: this is the last screen before something
+ * exists that did not exist before, and the pages on either side of it — the door behind,
+ * the agent's own pages ahead — are the two ends of that. The work pages are white because
+ * you return to them; this one you pass through once.
+ *
+ * The column is left-aligned rather than centred. Centring it would put the artwork in the
+ * margin as an ornament; against the left edge the corner belongs to the picture, and the
+ * form has somewhere to be that is not the middle of a very wide screen.
+ */
+.ag-make {
+  position: relative;
+  flex: 1;
+  width: 100%;
+  min-height: 100vh;
+  padding: clamp(26px, 3.4vw, 44px) clamp(22px, 3.2vw, 42px) clamp(60px, 8vh, 110px);
+  overflow: hidden;
+}
+
+body:has(.ag-make),
+.shell:has(.ag-make) {
+  background: #000000;
+}
+
+.ag-make-inner {
+  position: relative;
+  z-index: 1;
+  max-width: 940px;
+}
+
+/*
+ * The corner.
+ *
+ * Bled off the top and the right, unlike the door's panel, because here it is not a half of
+ * the screen but the corner of something larger passing behind it — and a thing that
+ * continues past the frame has to touch the frame.
+ *
+ * Enlarged well past `cover`: at natural scale a strip this shallow shows thirty rows and
+ * turns to hatching. Half a dozen rows is what reads as the same artwork.
+ */
+.ag-make-art {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: clamp(190px, 25vw, 420px);
+  height: clamp(110px, 18vw, 230px);
+  background: url("/a4a/lines.png") right top / 315% auto no-repeat;
+  animation: ag-make-drift 26s var(--ag-ease) infinite alternate;
+  pointer-events: none;
+}
+
+.ag-make-top {
+  display: flex;
+  align-items: center;
+  margin-bottom: clamp(26px, 4vh, 44px);
+}
+
+/*
+ * The way out, in either kind of room.
+ *
+ * Mixed from `--ag-ink` rather than given a colour, so the same pill is a pale wash on
+ * black and a faint grey on white without a second rule or a second class.
+ */
+.ag-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 34px;
+  padding: 0 18px;
+  font-size: 0.84rem;
+  letter-spacing: -0.01em;
+  color: var(--ag-ink);
+  background: color-mix(in srgb, var(--ag-ink) 10%, transparent);
+  text-decoration: none;
+  transition:
+    background 0.18s var(--ag-ease),
+    transform 0.18s var(--ag-ease);
+}
+
+.ag-back:hover {
+  background: color-mix(in srgb, var(--ag-ink) 17%, transparent);
+}
+
+.ag-back:active {
+  transform: translateY(1px);
+}
+
+.ag-make-word {
+  margin: 0;
+  font-size: clamp(2rem, 1rem + 2.9vw, 3.6rem);
+  font-weight: 500;
+  line-height: 1.04;
+  letter-spacing: -0.035em;
+  color: var(--ag-ink);
+}
+
+.ag-make-sub {
+  margin: 16px 0 0;
+  max-width: 52ch;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  letter-spacing: -0.01em;
+  color: var(--ag-muted);
+}
+
+/* The form is the page here, not a column inside it. */
+.ag-make .ag-form {
+  max-width: none;
+  margin-top: clamp(34px, 5vh, 56px);
+}
+
+/* Sans rather than mono for the labels. Mono reads as a value being reported; these are
+   asking for one, and a row of machine-set capitals above every field makes filling the
+   form feel like editing a config file. */
+.ag-make .ag-field > span {
+  font-family: var(--ag-sans);
+  font-size: 0.72rem;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  color: var(--ag-muted);
+  transition: color 0.18s var(--ag-ease);
+}
+
+/* The label answers when the field is being used. It is the smallest possible acknowledgement
+   and it is the one people notice. */
+.ag-make .ag-field:focus-within > span {
+  color: var(--ag-ink);
+}
+
+.ag-make .ag-field {
+  margin-bottom: 26px;
+}
+
+.ag-make .ag-field input:not([type="checkbox"]) {
+  height: 46px;
+  padding: 0 16px;
+}
+
+.ag-make .ag-field textarea {
+  min-height: 92px;
+  padding: 14px 16px;
+}
+
+.ag-make .ag-pair,
+.ag-make .ag-trio {
+  gap: 0 clamp(18px, 3vw, 40px);
+}
+
+/* Standing on its own between two sections rather than tucked under a field, so it wants
+   the space a paragraph wants and not the 4px a caption does. */
+.ag-make .ag-form > .ag-hint {
+  margin: 2px 0 28px;
+  max-width: none;
+}
+
+/* Picture on the left, permissions on the right: the two halves of what an agent is before
+   it has done anything — a face and a set of limits. */
+.ag-make-split {
+  display: grid;
+  grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
+  gap: 0 clamp(18px, 3.4vw, 44px);
+}
+
+/* --- the amount fields ---------------------------------------------------- */
+
+.ag-amount {
+  position: relative;
+}
+
+.ag-make .ag-amount input {
+  padding-right: 48px;
+}
+
+/* The unit, said once, in the field it applies to. Two of these three numbers are money and
+   the third is a count, so the badge is on the two that are — a currency mark beside
+   "launches per day" would be a small lie about what the number means. */
+.ag-unit {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--ag-eth);
+  pointer-events: none;
+}
+
+.ag-unit svg {
+  width: 9px;
+  height: 14px;
+  color: #ffffff;
+}
+
+/* --- the permission rows -------------------------------------------------- */
+
+.ag-make .ag-check {
+  display: flex;
+  width: 100%;
+  height: 42px;
+  padding: 0 14px;
+  gap: 12px;
+  font-size: 0.86rem;
+  background: var(--ag-raise);
+  transition: background 0.18s var(--ag-ease);
+}
+
+.ag-make .ag-check:hover {
+  background: var(--ag-raise-2);
+}
+
+/*
+ * The box is the input, not a square standing next to a hidden one. Keeping the real control
+ * visible means focus, keyboard and the label association are the browser's problem rather
+ * than something re-implemented and half-right.
+ */
+.ag-check input {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 17px;
+  height: 17px;
+  flex: none;
+  background: transparent;
+  border: 1.5px solid var(--ag-chrome);
+  transition:
+    background 0.18s var(--ag-ease),
+    border-color 0.18s var(--ag-ease);
+}
+
+.ag-check input:checked {
+  background: var(--ag-ink);
+  border-color: var(--ag-ink);
+}
+
+/* Masked rather than drawn in a colour, so the tick is whatever contrasts with ink in the
+   room it finds itself in. */
+.ag-check input::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-color: var(--ag-on-ink);
+  -webkit-mask: var(--ag-tick) center / 11px 9px no-repeat;
+  mask: var(--ag-tick) center / 11px 9px no-repeat;
+  opacity: 0;
+  transform: scale(0.55);
+  transition:
+    opacity 0.14s var(--ag-ease),
+    transform 0.22s var(--ag-ease);
+}
+
+.ag-check input:checked::after {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.ag-check input:focus-visible {
+  outline: 2px solid var(--ag-chrome);
+  outline-offset: 2px;
+}
+
+/* --- the picture ---------------------------------------------------------- */
+
+.ag-make .ag-upload {
+  height: 66px;
+  padding: 0 18px 0 8px;
+  gap: 16px;
+}
+
+.ag-make .ag-upload i {
+  width: 50px;
+  height: 50px;
+}
+
+.ag-make .ag-upload i svg {
+  width: 20px;
+  height: 20px;
+}
+
+.ag-make .ag-upload i img {
+  animation: ag-make-shown 0.4s var(--ag-ease) both;
+}
+
+/* --- the commit ----------------------------------------------------------- */
+
+/*
+ * One button, the width of the form, saying what it is about to make by name.
+ *
+ * Full width because there is nothing else to press on this screen, and set in capitals
+ * because it is the only place on the page they appear — the labels above the fields are
+ * quiet enough to leave the emphasis here.
+ */
+.ag-make-commit {
+  justify-content: center;
+  width: 100%;
+  height: 46px;
+  margin-top: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+/* The lift the inline button uses is sideways, which on a full-width bar reads as a
+   misalignment. This one brightens in place. */
+.ag-make-commit:hover:not(:disabled) {
+  transform: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ag-ink) 18%, transparent);
+}
+
+.ag-make .ag-note,
+.ag-make .ag-hint {
+  animation: ag-make-shown 0.3s var(--ag-ease) both;
+}
+
+/* --- before there is anything to make with -------------------------------- */
+
+/* Connect, then sign. The form is not shown at all until both are done, because a set of
+   fields you cannot submit is a worse answer than the sentence explaining why. */
+.ag-make-wait {
+  max-width: 46ch;
+  margin-top: clamp(34px, 5vh, 56px);
+}
+
+.ag-make-lead {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 500;
+  letter-spacing: -0.022em;
+  color: var(--ag-ink);
+}
+
+.ag-make-wait .ag-make-sub {
+  margin-top: 12px;
+}
+
+.ag-make-acts {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-top: 26px;
+}
+
+.ag-make-note {
+  margin-top: clamp(34px, 5vh, 56px);
+  font-family: var(--ag-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  color: var(--ag-faint);
+}
+
+/* --- the room waking up --------------------------------------------------- */
+
+/*
+ * Everything arrives in the order it is read.
+ *
+ * A 70ms step down the page, which is below the threshold at which a stagger reads as
+ * choreography and above the one at which it reads as nothing. The whole sequence is over
+ * inside a second — this runs on the screen where somebody is about to type, and a form
+ * that is still assembling itself when the cursor lands is a form that stole the first
+ * keystroke.
+ */
+.ag-make-inner > *:not(.ag-form),
+.ag-make .ag-form > * {
+  animation: ag-make-rise 0.52s var(--ag-ease) both;
+}
+
+.ag-make-inner > *:nth-child(1) {
+  animation-delay: 0.02s;
+}
+.ag-make-inner > *:nth-child(2) {
+  animation-delay: 0.09s;
+}
+.ag-make-inner > *:nth-child(3) {
+  animation-delay: 0.16s;
+}
+/* Whatever stands in for the form when there is no wallet yet, arriving on the same beat
+   the form's first row would have. */
+.ag-make-inner > *:nth-child(4) {
+  animation-delay: 0.23s;
+}
+
+.ag-make .ag-form > *:nth-child(1) {
+  animation-delay: 0.23s;
+}
+.ag-make .ag-form > *:nth-child(2) {
+  animation-delay: 0.3s;
+}
+.ag-make .ag-form > *:nth-child(3) {
+  animation-delay: 0.37s;
+}
+.ag-make .ag-form > *:nth-child(4) {
+  animation-delay: 0.44s;
+}
+.ag-make .ag-form > *:nth-child(5) {
+  animation-delay: 0.51s;
+}
+.ag-make .ag-form > *:nth-child(6) {
+  animation-delay: 0.58s;
+}
+.ag-make .ag-form > *:nth-child(n + 7) {
+  animation-delay: 0.65s;
+}
+
+@keyframes ag-make-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+
+@keyframes ag-make-shown {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+/*
+ * A slow scroll down through the artwork, a row every few seconds. Vertical only: the right
+ * edge stays pinned, so the corner is always full and the movement is rows passing rather
+ * than a picture sliding away from the frame it is supposed to be filling.
+ */
+@keyframes ag-make-drift {
+  from {
+    background-position: right top;
+  }
+  to {
+    background-position: right 26%;
+  }
+}
+
 /* --- mobile --------------------------------------------------------------- */
 
 /*
@@ -1469,6 +2000,31 @@ a.ag-row:hover {
 
   .ag-door-art {
     display: none;
+  }
+
+  /*
+   * The making room narrows to one column.
+   *
+   * Two fields side by side on a phone are two fields nobody can read the labels of, and
+   * the pair that suffers most is name and handle — the two that have to be checked against
+   * each other. The corner artwork stays, unlike the door's panel: it costs a strip at the
+   * top rather than half the screen, and it is the only thing keeping this from looking
+   * like a settings sheet.
+   */
+  .ag-make-pair,
+  .ag-make .ag-pair,
+  .ag-make .ag-trio,
+  .ag-make-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ag-make-art {
+    width: 52vw;
+    height: 26vw;
+  }
+
+  .ag-make-sub {
+    font-size: 0.9rem;
   }
 
   .ag-mobile-top {

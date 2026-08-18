@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Creating an agent, in the environment it will live in.
+ * Creating an agent, in the room it will be made in.
  *
  * The behaviour here is the one that was already shipped and proven on mainnet: the same
  * `POST /api/v1/owner/agents` with the same body, the same client-side rules mirroring
@@ -9,19 +9,16 @@
  * generates the wallet, encrypts the key and writes the permission row exactly as it did
  * before — none of that was touched, and none of it should be.
  *
- * What changed is the surface and where it lives. The old form sat underneath the public
- * directory on a white page and looked like the token launch screen, because that was the
- * nearest thing to copy. It now has a room of its own.
+ * What is new is the surface: a wider form on black, and a page that answers while it is
+ * being filled in rather than only when it is submitted.
  */
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 
 import { Wallet } from "../../wallet";
-import { chain } from "../../lib/chain";
 import { useOwner } from "../owner";
-import { AgentMark, Arrow } from "../ui";
+import { Arrow } from "../ui";
 
 /** A decimal amount of ETH as wei, or null when it is not an amount at all. */
 function toWei(input: string): bigint | null {
@@ -30,6 +27,11 @@ function toWei(input: string): bigint | null {
   const [whole = "0", frac = ""] = text.split(".");
   if (frac.length > 18) return null;
   return BigInt(`${whole === "" ? "0" : whole}${frac.padEnd(18, "0")}`);
+}
+
+/** The handle rules, applied to anything: what is left of it that a handle may contain. */
+function toHandle(input: string): string {
+  return input.toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 20);
 }
 
 export function CreateForm() {
@@ -48,13 +50,26 @@ export function CreateForm() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /*
+   * The handle follows the name until somebody disagrees with it.
+   *
+   * Almost every agent's handle is its name in lowercase, and typing it twice is a chore
+   * that also invites the two to drift apart. Once the field has been edited by hand it
+   * stops following, because at that point the reader has said what they want and a form
+   * that keeps overwriting them is worse than one that never helped.
+   */
+  const chosen = useRef(false);
+
   if (owner.phase === "connecting") {
-    return <Note>looking for your wallet…</Note>;
+    return <p className="ag-make-note">looking for your wallet…</p>;
   }
 
   if (owner.phase === "disconnected") {
     return (
-      <Doorway lead="Connect a wallet." body="It becomes the only address that can control this agent.">
+      <Doorway
+        lead="Connect a wallet."
+        body="It becomes the only address that can control this agent."
+      >
         <Wallet />
       </Doorway>
     );
@@ -130,6 +145,14 @@ export function CreateForm() {
     }
   };
 
+  // The button says what it is about to make, by name, as the name is typed.
+  const named = name.trim();
+  const commit = busy
+    ? "Creating…"
+    : named === ""
+      ? "Create agent"
+      : `Create agent ${named}`;
+
   return (
     <form
       className="ag-form"
@@ -147,7 +170,11 @@ export function CreateForm() {
             maxLength={64}
             placeholder="Atlas"
             autoComplete="off"
-            onChange={(event) => setName(event.currentTarget.value)}
+            onChange={(event) => {
+              const next = event.currentTarget.value;
+              setName(next);
+              if (!chosen.current) setUsername(toHandle(next));
+            }}
           />
         </label>
 
@@ -159,9 +186,10 @@ export function CreateForm() {
             maxLength={20}
             placeholder="atlas"
             autoComplete="off"
-            onChange={(event) =>
-              setUsername(event.currentTarget.value.toLowerCase().replace(/[^a-z0-9_]/g, ""))
-            }
+            onChange={(event) => {
+              chosen.current = true;
+              setUsername(toHandle(event.currentTarget.value));
+            }}
           />
         </label>
       </div>
@@ -178,39 +206,42 @@ export function CreateForm() {
         />
       </label>
 
-      <div className="ag-field">
-        <span>Image</span>
-        <ImageField value={imageUrl} onChange={setImageUrl} />
+      <div className="ag-make-split">
+        <div className="ag-field">
+          <span>Image</span>
+          <ImageField value={imageUrl} onChange={setImageUrl} />
+        </div>
+
+        <div className="ag-field">
+          <span>May create</span>
+          <label className="ag-check" htmlFor="ag-instant">
+            <input
+              id="ag-instant"
+              type="checkbox"
+              checked={instant}
+              onChange={(event) => setInstant(event.currentTarget.checked)}
+            />
+            Instant v4 markets
+          </label>
+          <label className="ag-check" htmlFor="ag-prog">
+            <input
+              id="ag-prog"
+              type="checkbox"
+              checked={programmable}
+              onChange={(event) => setProgrammable(event.currentTarget.checked)}
+            />
+            Programmable v4 markets
+          </label>
+        </div>
       </div>
 
-      <div className="ag-field">
-        <span>May create</span>
-        <label className="ag-check" htmlFor="ag-instant">
-          <input
-            id="ag-instant"
-            type="checkbox"
-            checked={instant}
-            onChange={(event) => setInstant(event.currentTarget.checked)}
-          />
-          Instant markets
-        </label>
-        <label className="ag-check" htmlFor="ag-prog" style={{ marginTop: 8 }}>
-          <input
-            id="ag-prog"
-            type="checkbox"
-            checked={programmable}
-            onChange={(event) => setProgrammable(event.currentTarget.checked)}
-          />
-          Programmable markets
-        </label>
-        <p className="ag-hint">
-          An agent can never move funds out of its own wallet and can only call agen.space
-          contracts. These limits bound what it may spend inside that.
-        </p>
-      </div>
+      <p className="ag-hint">
+        An agent can never move funds out of its own wallet and can only call agen.space
+        contracts. These limits bound what it may spend inside that.
+      </p>
 
       <div className="ag-trio">
-        <label className="ag-field" htmlFor="ag-per-launch">
+        <label className="ag-field ag-amount" htmlFor="ag-per-launch">
           <span>Max / launch</span>
           <input
             id="ag-per-launch"
@@ -220,9 +251,10 @@ export function CreateForm() {
             autoComplete="off"
             onChange={(event) => setMaxPerLaunch(event.currentTarget.value)}
           />
+          <Ether />
         </label>
 
-        <label className="ag-field" htmlFor="ag-per-day">
+        <label className="ag-field ag-amount" htmlFor="ag-per-day">
           <span>Max / day</span>
           <input
             id="ag-per-day"
@@ -232,6 +264,7 @@ export function CreateForm() {
             autoComplete="off"
             onChange={(event) => setMaxPerDay(event.currentTarget.value)}
           />
+          <Ether />
         </label>
 
         <label className="ag-field" htmlFor="ag-launches">
@@ -247,14 +280,12 @@ export function CreateForm() {
         </label>
       </div>
 
-      <p className="ag-hint" style={{ marginTop: -8, marginBottom: 24 }}>
-        Amounts in {chain.nativeCurrency.symbol}. The agent gets its own wallet, which you
-        fund yourself afterwards.
-      </p>
-
-      <button className="ag-go" type="submit" disabled={busy || problems.length > 0}>
-        {busy ? "creating…" : "Create agent"}
-        {busy ? null : <Arrow />}
+      <button
+        className="ag-go ag-make-commit"
+        type="submit"
+        disabled={busy || problems.length > 0}
+      >
+        {commit}
       </button>
 
       {error !== null ? (
@@ -263,6 +294,18 @@ export function CreateForm() {
         <p className="ag-note">{problems[0]}</p>
       ) : null}
     </form>
+  );
+}
+
+/** The unit mark that sits in the amount fields, so the number does not have to say it. */
+function Ether() {
+  return (
+    <i className="ag-unit" aria-hidden="true">
+      <svg viewBox="0 0 9 14" fill="currentColor">
+        <path d="M4.5 0 0 7.3l4.5 2.6L9 7.3z" opacity="0.85" />
+        <path d="M4.5 10.8 0 8.2l4.5 5.8L9 8.2z" />
+      </svg>
+    </i>
   );
 }
 
@@ -320,7 +363,7 @@ function ImageField({
             <img src={value} alt="" />
           )}
         </i>
-        {busy ? "uploading…" : value === null ? "Upload an image" : "Change image"}
+        {busy ? "uploading…" : value === null ? "Upload image" : "Change image"}
       </button>
 
       <input
@@ -340,6 +383,7 @@ function ImageField({
   );
 }
 
+/** What stands in for the form until there is a wallet, and then a signature, to make with. */
 function Doorway({
   lead,
   body,
@@ -350,33 +394,10 @@ function Doorway({
   readonly children: React.ReactNode;
 }) {
   return (
-    <div style={{ maxWidth: 520, marginTop: 30 }}>
-      <p className="ag-gate-lead" style={{ margin: 0, fontSize: "1.15rem" }}>
-        {lead}
-      </p>
-      <p className="ag-gate-sub">{body}</p>
-      <div className="ag-gate-acts" style={{ marginTop: 26 }}>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function Note({ children }: { readonly children: string }) {
-  return (
-    <p className="ag-gate-note" style={{ marginTop: 30 }}>
-      {children}
-    </p>
-  );
-}
-
-export function CreateHeader() {
-  return (
-    <div className="ag-gate-top" style={{ marginBottom: 44 }}>
-      <AgentMark />
-      <Link className="ag-gate-back" href="/agents">
-        ← gate
-      </Link>
+    <div className="ag-make-wait">
+      <p className="ag-make-lead">{lead}</p>
+      <p className="ag-make-sub">{body}</p>
+      <div className="ag-make-acts">{children}</div>
     </div>
   );
 }

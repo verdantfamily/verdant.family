@@ -47,7 +47,15 @@ export async function POST(
       typeof body.message === "string" ? body.message : "",
     );
 
-    return ok({ turns: result.turns, filed: result.filed });
+    /*
+     * `wake` is a hint to the client, not something this route acted on.
+     *
+     * It means the owner asked for something now and a cycle could start. The client then asks
+     * for one through `runs`, which is the same route the Run now button uses — so a cycle
+     * still begins in exactly one place, under an owner's authenticated request, and this route
+     * keeps the property in its own header comment: nothing here executes.
+     */
+    return ok({ turns: result.turns, filed: result.filed, wake: result.wake });
   } catch (error) {
     return fail(error);
   }

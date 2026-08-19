@@ -2,9 +2,14 @@
  * One autonomous cycle, start to finish.
  *
  * A cycle is: check that this agent is allowed to think at all, claim the right
- * to run, work out what it can afford, ask the planner, validate the answer,
- * record it, and — only in `autonomous` mode, and only after every Phase 1 rule
- * has agreed — carry it out.
+ * to run, work out what it can afford, read how its existing markets are doing,
+ * ask the planner, validate the answer, record it, and — only in `autonomous`
+ * mode, and only after every Phase 1 rule has agreed — carry it out.
+ *
+ * Reading results is this file's job rather than the planner's for the same reason
+ * reading the balance is: both reach the network, and a planner that cannot reach
+ * the network is a planner that can be replaced by `nullPlanner` without changing
+ * what the rest of the system guarantees.
  *
  * Nothing in this file starts a cycle by itself. A cycle happens when a caller
  * asks for one, and `scheduler.ts` is the caller that asks on a timer. Keeping
@@ -21,11 +26,21 @@
 import { AgentError } from "./errors";
 import { decisionPayload, validateDecision, type DecisionContext, type ValidatedDecision } from "./decision";
 import { executeDecision, type ExecutionResult } from "./executor";
+import { readOutcomes as readOutcomesFromFeed, recordOutcomeMemories, type LaunchOutcome } from "./outcomes";
 import { assertAgentOperable } from "./permissions";
 import { defaultPlanner, type Planner } from "./planner";
 import type { AgentStore } from "./store";
 import { readTreasury } from "./treasury";
-import type { AgentDecision, AgentRecord, AgentRun, DecisionStatus, RunTrigger } from "./types";
+import type {
+  AgentAutonomy,
+  AgentDecision,
+  AgentMandate,
+  AgentPolicy,
+  AgentRecord,
+  AgentRun,
+  DecisionStatus,
+  RunTrigger,
+} from "./types";
 import { PLATFORM_AUTONOMY_PAUSED } from "./types";
 
 export interface CycleOptions {
@@ -33,8 +48,21 @@ export interface CycleOptions {
   readonly planner?: Planner;
   /** Injected in tests so a cycle can be exercised without a chain. */
   readonly readBalanceWei?: (agent: AgentRecord) => Promise<bigint>;
+  /** Injected in tests so a cycle can be exercised without a market feed. */
+  readonly readOutcomes?: (store: AgentStore, agent: AgentRecord) => Promise<readonly LaunchOutcome[]>;
   readonly execute?: typeof executeDecision;
   readonly holder?: string;
+  /**
+   * Something the owner has just asked this cycle to do, in their own words.
+   *
+   * Only meaningful with an `owner` trigger, and it grants nothing: it reaches the planner and
+   * stops there. Every check a scheduled cycle passes through — `validateDecision`, the
+   * permissions, the spend clamp, the reserve, the launch cooldown, the run and decision
+   * records — is downstream of the planner and applies identically. What it changes is which
+   * action the planner picks, which is the one thing an owner should be able to influence and
+   * the only thing this lets them influence.
+   */
+  readonly directive?: string | null;
 }
 
 export interface CycleReport {
@@ -81,16 +109,26 @@ export function backoffSeconds(intervalSeconds: number, consecutiveFailures: num
   return Math.max(intervalSeconds, Math.min(intervalSeconds * 2 ** doublings, MAX_BACKOFF_SECONDS));
 }
 
-export async function runAgentCycle(
-  store: AgentStore,
-  agent: AgentRecord,
-  options: CycleOptions,
-): Promise<CycleReport> {
-  const now = Math.floor(Date.now() / 1000);
+/** What the entry guards read, handed back so the cycle does not read it all again. */
+interface CycleReady {
+  readonly autonomy: AgentAutonomy;
+  readonly mandate: AgentMandate;
+  readonly policy: AgentPolicy;
+}
 
-  // ---- Guards that need no lease. Refusing here leaves no run record, because
-  // a cycle that was never allowed to begin is not a cycle that happened.
-
+/**
+ * Everything that has to be true before a cycle may begin.
+ *
+ * Refusing here leaves no run record, because a cycle that was never allowed to begin is not
+ * a cycle that happened.
+ *
+ * Extracted so that `cycleBlocked` can ask the same question without starting anything. The
+ * chat needs to know whether an agent can be woken right now — it tells the owner, and it
+ * keeps the agent from promising to start something it cannot — and the one thing that must
+ * not happen is a second copy of these rules that drifts from these ones. There is one list
+ * and two callers: this throws, and the other catches.
+ */
+function assertCycleAllowed(store: AgentStore, agent: AgentRecord, now: number): CycleReady {
   const paused = autonomyGloballyPaused(store);
   if (paused !== null) throw new AgentError("AUTONOMY_GLOBALLY_PAUSED", paused);
 
@@ -119,6 +157,42 @@ export async function runAgentCycle(
     );
   }
 
+  return { autonomy, mandate, policy };
+}
+
+/**
+ * Why a cycle cannot start right now, or `null` if one can.
+ *
+ * A question, not an attempt: nothing is written and no run is claimed. It is the honest
+ * answer to "can you go and do that now", and it is deliberately only accurate at the moment
+ * it is asked — the run budget can be spent by the scheduler a second later. A caller may use
+ * it to explain, never to skip handling a refusal from the cycle itself.
+ */
+export function cycleBlocked(
+  store: AgentStore,
+  agent: AgentRecord,
+  now: number = Math.floor(Date.now() / 1000),
+): AgentError | null {
+  try {
+    assertCycleAllowed(store, agent, now);
+    return null;
+  } catch (error) {
+    // Anything that is not an `AgentError` is a bug rather than a policy refusal, and
+    // reporting it as "you cannot be woken" would hide it.
+    if (error instanceof AgentError) return error;
+    throw error;
+  }
+}
+
+export async function runAgentCycle(
+  store: AgentStore,
+  agent: AgentRecord,
+  options: CycleOptions,
+): Promise<CycleReport> {
+  const now = Math.floor(Date.now() / 1000);
+
+  const { autonomy, mandate, policy } = assertCycleAllowed(store, agent, now);
+
   // A worker is replaying a schedule slot and must not run one twice; an owner is
   // asking now, and "now" is its own slot. The UNIQUE key does the rest.
   const scheduledFor = options.trigger === "worker" ? (autonomy.nextRunAt ?? now) : now;
@@ -143,10 +217,21 @@ export async function runAgentCycle(
   try {
     // ---- What the agent can afford, before anyone is asked to think.
 
+    // Both reads reach the network and neither depends on the other, so a slow feed costs
+    // the cycle nothing beyond the slower of the two.
     const readBalance = options.readBalanceWei ?? defaultBalance;
-    const balanceWei = await readBalance(agent);
+    const readResults = options.readOutcomes ?? readOutcomesFromFeed;
+    const [balanceWei, outcomes] = await Promise.all([
+      readBalance(agent),
+      readResults(store, agent).catch(() => [] as readonly LaunchOutcome[]),
+    ]);
     const permissions = store.getPermissions(agent.id);
     const allowance = store.allowance(agent.id, permissions);
+
+    // Written before the planner is asked, so what the agent noticed this cycle is part of
+    // what it reasons over — and so it is recorded even in `observe` mode and even if the
+    // model then declines to act. Noticing is not acting.
+    recordOutcomeMemories(store, agent, outcomes, run.id, now);
 
     const aboveReserve =
       balanceWei > policy.treasuryReserveWei ? balanceWei - policy.treasuryReserveWei : 0n;
@@ -165,6 +250,8 @@ export async function runAgentCycle(
       policy,
       spendableWei,
       launchesRemaining: allowance.launchesRemaining,
+      outcomes,
+      directive: options.directive ?? null,
     });
     modelCalls = planned.modelCalls;
 

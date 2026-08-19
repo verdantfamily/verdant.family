@@ -59,7 +59,7 @@ export function Overview() {
         <div className="ag-hero-name">
           <h1>{agent.name}</h1>
           <AgentStatus state={agent.status as AgentState} />
-          <button type="button" className="ag-quiet" style={{ height: 24 }} onClick={() => void toggle()}>
+          <button type="button" className="ag-quiet ag-quiet-sm" onClick={() => void toggle()}>
             {agent.status === "paused" ? "resume" : "pause"}
           </button>
         </div>

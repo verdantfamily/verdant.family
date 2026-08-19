@@ -176,11 +176,31 @@ export default async function Home({
                 : "No Instant token yet. The first one launched through Instant appears here."}
             </p>
           ) : (
-            <div className="ax-cards">
-              {shown.map((market) => (
-                <TokenCard market={market} usdPerEth={usdPerEth} now={now} key={market.id} />
-              ))}
-            </div>
+            <>
+              <div className="ax-cards">
+                {shown.map((market) => (
+                  <TokenCard market={market} usdPerEth={usdPerEth} now={now} key={market.id} />
+                ))}
+              </div>
+
+              {/*
+                The same control again, under the last row.
+
+                Paging from the top one leaves the reader at the bottom of a shelf they have
+                finished, having to scroll back past sixteen cards to reach the only way
+                forward. Repeated rather than moved, because the top copy is what tells you
+                how many pages there are before you start reading.
+              */}
+              <div className="ax-shelf-pager">
+                <Pager
+                  page={page}
+                  pages={pages}
+                  sort={sort.key}
+                  query={query}
+                  label="pages, end of shelf"
+                />
+              </div>
+            </>
           )}
         </section>
 
@@ -224,18 +244,26 @@ function Pager({
   pages,
   sort,
   query,
+  label = "pages",
 }: {
   readonly page: number;
   readonly pages: number;
   readonly sort: string;
   readonly query: string;
+  /**
+   * How this copy of the control names itself.
+   *
+   * Two pagers on one shelf are two navigation landmarks, and two landmarks with the same
+   * name are a list a screen reader reads twice without saying which is which.
+   */
+  readonly label?: string;
 }) {
   if (pages <= 1) return null;
 
   const numbers = Array.from({ length: pages }, (_, index) => index + 1);
 
   return (
-    <nav className="ax-pager" aria-label="pages">
+    <nav className="ax-pager" aria-label={label}>
       {page === 1 ? (
         <span className="ax-pager-arrow" aria-hidden="true">
           <Caret />

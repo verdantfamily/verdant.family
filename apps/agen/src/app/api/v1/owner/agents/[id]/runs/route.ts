@@ -10,10 +10,18 @@
 
 import { publicDecision } from "../../../../../../lib/agents/autonomy";
 import { AgentError } from "../../../../../../lib/agents/errors";
-import { fail, ok } from "../../../../../../lib/agents/http";
+import { fail, ok, readJson } from "../../../../../../lib/agents/http";
 import { runAgentCycle } from "../../../../../../lib/agents/runner";
 import { owned } from "../../../../../../lib/agents/service";
 import { owner } from "../../../../_context";
+
+/**
+ * As long as a directive can be, before it is cut.
+ *
+ * The same ceiling a chat message has, because that is where every directive comes from and a
+ * longer one would be a mandate written through the wrong door.
+ */
+const DIRECTIVE_MAX = 2_000;
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,7 +54,26 @@ export async function POST(
     const { id } = await context.params;
     const ctx = owner(request);
     const agent = owned(ctx.store, ctx.address, id);
-    const report = await runAgentCycle(ctx.store, agent, { trigger: "owner" });
+
+    /*
+     * What the owner asked for, if they asked for something.
+     *
+     * A cycle with a directive is still the cycle this route has always run. The text reaches
+     * the planner and nothing else — it cannot raise a spend limit, skip a cooldown or grant a
+     * permission, because all of those are enforced after the planner has chosen. What it can
+     * do is make the choice be the one the owner asked for instead of the one the model would
+     * have arrived at alone, which is the difference between an agent and a scheduled process.
+     *
+     * Trusted only as far as it comes from an authenticated owner acting on their own agent,
+     * which is the same trust the mandate itself is written under.
+     */
+    const body = await readJson(request).catch(() => ({}) as Record<string, unknown>);
+    const directive =
+      typeof body.directive === "string" && body.directive.trim() !== ""
+        ? body.directive.trim().slice(0, DIRECTIVE_MAX)
+        : null;
+
+    const report = await runAgentCycle(ctx.store, agent, { trigger: "owner", directive });
     return ok({
       run: report.run,
       decision: report.decision === null ? null : publicDecision(report.decision),

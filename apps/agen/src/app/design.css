@@ -1179,6 +1179,33 @@ span.ax-pager-arrow {
   color: var(--ax-line);
 }
 
+/*
+ * The pager repeated under the shelf.
+ *
+ * Centred rather than left-aligned with the cards: at the top it belongs to the row of
+ * controls it sits in, and down here it belongs to nothing, so the middle is where it is
+ * looked for. Scrolls rather than overflows on a narrow screen, since the pill grows with
+ * the number of pages and the shelf has no other horizontal give.
+ */
+.ax-shelf-pager {
+  display: flex;
+  justify-content: center;
+  margin-top: clamp(22px, 3vh, 34px);
+}
+
+.ax-shelf-pager .ax-pager {
+  /* A flex item will not shrink under its content unless told its minimum is zero, and
+     without shrinking there is nothing for the scroll below to do. */
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ax-shelf-pager .ax-pager::-webkit-scrollbar {
+  display: none;
+}
+
 /* ---------------------------------------------------------------- shelves */
 
 .ax-shelf {

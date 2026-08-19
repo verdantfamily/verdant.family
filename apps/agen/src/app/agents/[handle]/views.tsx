@@ -405,7 +405,7 @@ function KeyRow({
           {row.lastUsedAt === null ? " · never used" : ` · last used ${age(row.lastUsedAt)}`}
         </em>
       </span>
-      <button type="button" className="ag-quiet" style={{ height: 24 }} disabled={busy} onClick={onRevoke}>
+      <button type="button" className="ag-quiet ag-quiet-sm" disabled={busy} onClick={onRevoke}>
         revoke
       </button>
     </div>

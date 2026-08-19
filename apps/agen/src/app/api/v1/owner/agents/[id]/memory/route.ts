@@ -1,11 +1,15 @@
 /**
  * Agent memory.
  *
- * The table and the read path exist; nothing writes to it automatically. Phase 2
- * deliberately stops at "an owner can tell an agent something it will remember" —
- * an agent that writes its own memory needs a decay and contradiction story that
- * is a design problem in its own right, and inventing one silently here would make
- * every later cycle depend on it.
+ * POST is the owner writing an instruction. A cycle also writes here now, through
+ * `outcomes.ts`, and the split is deliberate: a cycle may only record a dated figure it
+ * read from the market feed, never a conclusion the model reached. That keeps the decay
+ * and contradiction problem out of the table — observations do not contradict each other,
+ * they accumulate — and leaves inference where an owner can read it and disagree, which
+ * is the rationale on a decision.
+ *
+ * There is no DELETE. Removing memory an agent has already reasoned from is a different
+ * feature to writing it, and one worth doing on purpose.
  */
 
 import { AgentError } from "../../../../../../lib/agents/errors";

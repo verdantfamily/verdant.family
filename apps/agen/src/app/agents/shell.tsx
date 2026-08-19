@@ -20,12 +20,14 @@
  * without them it can be scanned, and nothing is claimed that the destination does not
  * immediately correct.
  *
- * ## Mobile is not the sidebar in a drawer
+ * ## Mobile: a bottom bar for the four, a drawer for the rest
  *
- * A drawer turns every navigation into two taps and a gesture. The four destinations
- * worth reaching one-handed go into a fixed bottom bar instead, and the agent switcher
- * moves to a sticky strip at the top. The configuration pages are reachable from the
- * Overview rather than from a hamburger nobody opens.
+ * The four destinations worth reaching one-handed stay in a fixed bottom bar, because a
+ * drawer would turn the navigation an owner does twenty times a session into two taps and
+ * a gesture. The other six entries used to be reachable only through links on the Overview,
+ * which meant Permissions — the page that decides what the agent may spend — was three
+ * screens deep on a phone. Those live in the drawer behind the hamburger: not the fast path
+ * and not pretending to be, but a complete one, so nothing in the rail is desktop-only.
  */
 
 import Link from "next/link";
@@ -282,6 +284,14 @@ function AgentSwitcher({
   );
 }
 
+/**
+ * The phone's top strip, and the drawer it opens.
+ *
+ * The strip carries the same three things the rail's head carries — which agent, how it is
+ * doing, and the way to everything else. The drawer is the rail itself: the same component,
+ * the same groups, the same order, so an owner who learns the navigation on a laptop has not
+ * learned a second one for their phone.
+ */
 function MobileTop({
   agents,
   active,
@@ -289,11 +299,89 @@ function MobileTop({
   readonly agents: readonly OwnerAgent[];
   readonly active: OwnerAgent;
 }) {
+  const [open, setOpen] = useState(false);
+  const panel = useRef<HTMLDivElement>(null);
+  const pathname = usePathname();
+
+  // Going somewhere is the only thing the drawer is for, so arriving closes it. Without
+  // this the destination renders behind the panel that was used to ask for it.
+  useEffect(() => {
+    setOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const esc = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("keydown", esc);
+
+    // A full-height panel over a page that still scrolls under it is the single most common
+    // way a drawer feels broken on a phone.
+    const body = document.body;
+    const priorOverflow = body.style.overflow;
+    body.style.overflow = "hidden";
+
+    // Focus enters the panel so the keyboard and the screen reader are where the eyes are.
+    panel.current?.querySelector<HTMLElement>("a, button")?.focus();
+
+    return () => {
+      document.removeEventListener("keydown", esc);
+      body.style.overflow = priorOverflow;
+    };
+  }, [open]);
+
   return (
-    <div className="ag-mobile-top">
-      <AgentSwitcher agents={agents} active={active} />
-      <AgentStatus state={active.status as AgentState} />
-    </div>
+    <>
+      <div className="ag-mobile-top">
+        <AgentSwitcher agents={agents} active={active} />
+        <AgentStatus state={active.status as AgentState} />
+
+        <button
+          type="button"
+          className="ag-burger"
+          aria-label={open ? "Close menu" : "Open menu"}
+          aria-expanded={open}
+          aria-controls="ag-drawer"
+          onClick={() => setOpen((was) => !was)}
+        >
+          {/* Two bars, which cross rather than collapse: three would have to hide the
+              middle one, and a bar fading out under two that are rotating is a busier
+              gesture than the one it is describing. */}
+          <span className={open ? "ag-burger-bar ag-burger-x" : "ag-burger-bar"} />
+          <span className={open ? "ag-burger-bar ag-burger-x" : "ag-burger-bar"} />
+        </button>
+      </div>
+
+      <div
+        className={open ? "ag-scrim ag-scrim-on" : "ag-scrim"}
+        aria-hidden="true"
+        onClick={() => setOpen(false)}
+      />
+
+      {/*
+       * Mounted whether or not it is open, so it can be slid rather than swapped, and made
+       * `inert` when closed so ten links do not sit in the tab order of a page that is not
+       * showing them.
+       */}
+      <div
+        id="ag-drawer"
+        ref={panel}
+        className={open ? "ag-drawer ag-drawer-on" : "ag-drawer"}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`@${active.username} navigation`}
+        inert={!open}
+      >
+        <Nav agent={active} />
+
+        <div className="ag-drawer-foot">
+          <Link href="/agents/create">Create agent</Link>
+          <Link href="/">← return to agen.space</Link>
+        </div>
+      </div>
+    </>
   );
 }
 

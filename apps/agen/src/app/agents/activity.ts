@@ -29,6 +29,8 @@ export function labelActivity(type: string): string {
       return "Spent from treasury";
     case "creator_fee_claim":
       return "Claimed creator fees";
+    case "market_noticed":
+      return "Noticed something about a market";
     case "agent_created":
       return "Agent created";
     case "key_created":

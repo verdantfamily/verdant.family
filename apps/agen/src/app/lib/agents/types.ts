@@ -167,7 +167,9 @@ export type AgentActivityType =
   | "decision_executed"
   | "decision_failed"
   | "owner_feedback"
-  | "treasury_recovered";
+  | "treasury_recovered"
+  // Phase 3: the agent reading its own results back.
+  | "market_noticed";
 
 export interface DailyAllowance {
   readonly day: string;
@@ -364,8 +366,12 @@ export const MEMORY_SOURCES = ["owner", "run", "system"] as const;
 export type MemorySource = (typeof MEMORY_SOURCES)[number];
 
 /**
- * Schema only in Phase 2, deliberately. Nothing writes memory automatically yet;
- * the table exists so Phase 3 does not need a migration on a live database.
+ * Something the agent carries from one cycle into the next.
+ *
+ * Two things write here. An owner does, through chat or the memory API, and those rows are
+ * instructions with `source: "owner"`. A cycle does, through `outcomes.ts`, and those rows
+ * are dated observations about the agent's own markets with `source: "run"` — figures read
+ * from the market feed, never a conclusion the model reached about itself.
  */
 export interface AgentMemory {
   readonly id: string;

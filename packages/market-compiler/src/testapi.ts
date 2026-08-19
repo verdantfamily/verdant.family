@@ -226,14 +226,24 @@ export function unknownReceivers({
   const fields = fixtureFields(fixture.content);
   if (fields.length === 0) return [];
 
-  const inFixture = tokensIn(code(fixture.content));
+  const inFixture = reachableInFixture(fixture.content);
   const findings: ReceiverFinding[] = [];
 
   for (const test of tests) {
     const body = code(test.content);
     const declared = declaredNames(body);
 
-    for (const match of body.matchAll(/(?<![.\w$])([a-z_]\w*)\s*\.\s*\w+\s*\(/g)) {
+    /*
+     * The root of the chain, not only a name called on directly.
+     *
+     * HRBR reached the market as `components.vault.owner()`. Matching a receiver that is followed
+     * immediately by a call sees `vault.owner(` — a member access, correctly skipped — and never
+     * sees `components`, which is the name that does not exist. The compiler rejected 120 lines
+     * of that file and the pass named nothing, which is the whole failure it was written to
+     * prevent. Anything invented in the middle of a chain is a consequence of the root being
+     * wrong, so the root is what a repair needs to hear about.
+     */
+    for (const match of body.matchAll(/(?<![.\w$])([a-z_]\w*)(?:\s*\.\s*\w+)+\s*\(/g)) {
       const receiver = match[1]!;
 
       if (SOLIDITY_GLOBALS.has(receiver)) continue;
@@ -246,6 +256,241 @@ export function unknownReceivers({
 
   return findings;
 }
+
+/**
+ * Helpers a test calls that neither it nor the harness defines.
+ *
+ * The same failure as an unknown receiver, one step along: instead of inventing a name for the
+ * vault, the suite invents a convenience for reading it. SHIFT wrote `vaultBalance()` — a
+ * perfectly reasonable helper for a fixture that does not have one — and the compiler answered
+ * with thirty-five "Undeclared identifier" lines and no hint that the fixture offers a way to do
+ * it. The market was correct and was lost.
+ *
+ * Reported the same way, and as conservatively: a bare call, spelled like a function rather than
+ * a type, that the test does not define, the harness does not offer, no other file in the suite
+ * defines, and that is not something Solidity or forge provides. Everything else is silence.
+ */
+export function unknownHelpers({
+  tests,
+  harness,
+}: {
+  readonly tests: readonly GeneratedSource[];
+  /** The fixture and whatever it is built on — Agen's own files, so their contents are certain. */
+  readonly harness: readonly GeneratedSource[];
+}): readonly ReceiverFinding[] {
+  const offered = new Set<string>();
+  for (const file of harness) {
+    for (const name of reachableInFixture(file.content)) offered.add(name);
+  }
+  if (offered.size === 0) return [];
+
+  const fields = [...new Set(harness.flatMap((file) => fixtureFields(file.content)))].sort();
+  if (fields.length === 0) return [];
+
+  // A suite is written as several files against one harness, and a helper defined in one of them
+  // is available to the rest of them only by inheritance — but a test that defines it somewhere
+  // is a test that knows it needs it, and guessing which contract inherits what is the kind of
+  // reasoning this module deliberately does not do.
+  const inSuite = new Set(tests.flatMap((test) => [...functionsIn(code(test.content))]));
+
+  const findings: ReceiverFinding[] = [];
+
+  for (const test of tests) {
+    const body = code(test.content);
+    const declared = declaredNames(body);
+
+    for (const match of body.matchAll(/(?<![.\w$])([a-z_]\w*)\s*\(/g)) {
+      const name = match[1]!;
+
+      if (SOLIDITY_GLOBALS.has(name) || FORGE_HELPERS.has(name)) continue;
+      if (name.startsWith("assert") || name.startsWith("expect")) continue;
+      // `uint8(x)` is a cast and `catch (bytes memory reason)` is control flow. Both read as a
+      // lowercase name followed by a bracket, and neither is a helper anyone declared.
+      if (KEYWORDS.has(name) || /^(?:u?int|bytes)\d*$/.test(name)) continue;
+      if (declared.has(name) || offered.has(name) || inSuite.has(name)) continue;
+      if (findings.some((found) => found.file === test.path && found.receiver === name)) continue;
+
+      findings.push({ file: test.path, receiver: name, available: fields });
+    }
+  }
+
+  return findings;
+}
+
+/**
+ * Names a test reads as values that nothing declares.
+ *
+ * The third shape of the same mistake, and the one left after receivers and helpers: SIMPLE wrote
+ * `address(poolManager)` and STREAK `pm == address(poolManager)`, against a harness that names it
+ * something else. Neither is a call, so neither of the checks above sees it, and the compiler
+ * again answers with "Undeclared identifier" and nothing to substitute.
+ *
+ * The widest of the three, so it is fenced the most: only a lowercase name, used as a value rather
+ * than a call or a member, declared nowhere in the suite, offered nowhere by the harness, and not
+ * a word Solidity or forge supplies. Measured over every recorded workspace before it was
+ * trusted — see scripts/precompile-recall.mjs — because a false report here costs a repair round.
+ */
+export function unknownValues({
+  tests,
+  harness,
+}: {
+  readonly tests: readonly GeneratedSource[];
+  readonly harness: readonly GeneratedSource[];
+}): readonly ReceiverFinding[] {
+  const offered = new Set<string>();
+  for (const file of harness) {
+    for (const name of reachableInFixture(file.content)) offered.add(name);
+  }
+  if (offered.size === 0) return [];
+
+  const fields = [...new Set(harness.flatMap((file) => fixtureFields(file.content)))].sort();
+  if (fields.length === 0) return [];
+
+  const inSuite = new Set(tests.flatMap((test) => [...tokensIn(code(test.content))]));
+  const findings: ReceiverFinding[] = [];
+
+  for (const test of tests) {
+    const body = code(test.content);
+    const declared = declaredNames(body);
+
+    // Used as a value: not preceded by a dot, and not followed by a bracket or a dot.
+    for (const match of body.matchAll(/(?<![.\w$])([a-z_]\w*)\s*(?![\w\s]*[({.])/g)) {
+      const name = match[1]!;
+
+      if (SOLIDITY_GLOBALS.has(name) || FORGE_HELPERS.has(name) || KEYWORDS.has(name)) continue;
+      if (/^(?:u?int|bytes)\d*$/.test(name)) continue;
+      if (declared.has(name) || offered.has(name)) continue;
+      if (findings.some((found) => found.file === test.path && found.receiver === name)) continue;
+      // A name another file in the suite declares is a name this suite knows it needs, and which
+      // contract inherits what is not something this module reasons about.
+      if (
+        tests.some(
+          (other) => other.path !== test.path && declaredNames(code(other.content)).has(name),
+        )
+      ) {
+        continue;
+      }
+      void inSuite;
+
+      findings.push({ file: test.path, receiver: name, available: fields });
+    }
+  }
+
+  return findings;
+}
+
+/** The functions a file defines. */
+function functionsIn(body: string): ReadonlySet<string> {
+  return new Set([...body.matchAll(/\bfunction\s+(\w+)/g)].map((match) => match[1]!));
+}
+
+/**
+ * What forge-std and Solidity give every test for free.
+ *
+ * The `assert`/`expect` families are matched by prefix instead, because listing them is a list
+ * that goes stale against forge rather than against anything here.
+ */
+const FORGE_HELPERS = new Set([
+  "bound",
+  "deal",
+  "hoax",
+  "startHoax",
+  "changePrank",
+  "skip",
+  "rewind",
+  "emit",
+  "require",
+  "revert",
+  "keccak256",
+  "sha256",
+  "ripemd160",
+  "ecrecover",
+  "addmod",
+  "mulmod",
+  "selfdestruct",
+  "blockhash",
+  "gasleft",
+  "fail",
+  "logBytes",
+  "log",
+  "makeAddr",
+  "makeAddrAndKey",
+  "label",
+  "unicode",
+  "wrap",
+  "unwrap",
+  "toUint256",
+  "toInt256",
+]);
+
+/**
+ * Solidity's own words: the ones followed by a bracket without being a call, and the units and
+ * literals that read as bare names without anything declaring them.
+ */
+const KEYWORDS = new Set([
+  "memory",
+  "storage",
+  "calldata",
+  "internal",
+  "external",
+  "public",
+  "private",
+  "view",
+  "pure",
+  "immutable",
+  "constant",
+  "virtual",
+  "override",
+  "indexed",
+  "anonymous",
+  "using",
+  "is",
+  "as",
+  "import",
+  "pragma",
+  "contract",
+  "interface",
+  "library",
+  "struct",
+  "enum",
+  "event",
+  "error",
+  "mapping",
+  "assembly",
+  "unchecked",
+  "break",
+  "continue",
+  "else",
+  "wei",
+  "gwei",
+  "ether",
+  "seconds",
+  "minutes",
+  "hours",
+  "days",
+  "weeks",
+  "true",
+  "false",
+  "if",
+  "for",
+  "while",
+  "do",
+  "switch",
+  "catch",
+  "try",
+  "return",
+  "returns",
+  "function",
+  "modifier",
+  "constructor",
+  "emit",
+  "new",
+  "delete",
+  "payable",
+  "bool",
+  "address",
+  "string",
+]);
 
 /** Names Solidity and forge provide, which no file declares. */
 const SOLIDITY_GLOBALS = new Set([
@@ -295,17 +540,55 @@ function declaredNames(body: string): ReadonlySet<string> {
   return found;
 }
 
+/**
+ * Every name in the fixture a test could actually reach.
+ *
+ * "Mentioned anywhere in the fixture" was the conservative reading, and it was too coarse in the
+ * one direction that costs a market: a name the fixture uses as a local inside `setUp` is
+ * invisible to a test, so a suite built around it is exactly as undeclared as one built around a
+ * name nobody has ever written. HRBR reached the market through `components.vault`, the fixture
+ * happened to use `components` as a local while wiring the factory, and the pass stayed quiet
+ * while the compiler rejected a hundred and twenty lines.
+ *
+ * Only the locals a data location proves are locals are removed. A state variable cannot be
+ * `memory`, `storage` or `calldata`, so nothing a test can reach is lost by this, and a name that
+ * is both a field and a local stays — the field is what the test was reaching for.
+ */
+function reachableInFixture(source: string): ReadonlySet<string> {
+  const body = code(source);
+  const reachable = new Set(tokensIn(body));
+  const fields = new Set(fixtureFields(source));
+
+  for (const match of body.matchAll(/\b\w[\w.]*(?:\[\])?\s+(?:memory|storage|calldata)\s+(\w+)\b/g)) {
+    const name = match[1]!;
+    if (!fields.has(name)) reachable.delete(name);
+  }
+
+  return reachable;
+}
+
 function tokensIn(body: string): ReadonlySet<string> {
   return new Set([...body.matchAll(/[A-Za-z_]\w*/g)].map((match) => match[0]));
 }
 
-/** Solidity with its comments and string contents removed, so a mention is a use. */
+/**
+ * Solidity with its comments and string contents removed, so a mention is a use.
+ *
+ * One pass, with strings recognised before comments, because doing it in stages gets it wrong on
+ * ordinary code: the fixture contains `"agen://canonical-test"`, whose `//` was taken for the
+ * start of a comment, and the quote it left unbalanced then swallowed everything up to the next
+ * one — a hundred lines of the fixture, including `buy` and `sell`. Every reader in this module
+ * was consequently told the harness does not offer the helpers it does offer, which is both a
+ * miss and a false report from the same bug.
+ *
+ * A string body may not span lines, so a genuinely unbalanced quote costs one line rather than
+ * the rest of the file.
+ */
 function code(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/\/\/[^\n]*/g, " ")
-    .replace(/"(?:\\.|[^"\\])*"/g, '""')
-    .replace(/'(?:\\.|[^'\\])*'/g, "''");
+  return source.replace(
+    /"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g,
+    (match) => (match.startsWith('"') ? '""' : match.startsWith("'") ? "''" : " "),
+  );
 }
 
 /** What to tell a repair about a name that is not there. */
@@ -321,9 +604,10 @@ export function receiverBrief(findings: readonly ReceiverFinding[]): string {
   );
 
   return (
-    "These tests call something on a name nothing declares. The market is already deployed " +
-    "and reachable only through the fields the fixture declares — use those names, and do " +
-    "not declare a variable of your own to stand in for one.\n\n" +
+    "These tests use names nothing declares — as something to call on, as a helper to call, " +
+    "or as a value to read. The market is already deployed and reachable only through what " +
+    "the fixture declares: use those names, and do not declare a variable or write a helper " +
+    "of your own to stand in for one.\n\n" +
     `${blocks.join("\n")}\n\n` +
     `The fixture declares: ${(findings[0]?.available ?? []).join(", ")}`
   );

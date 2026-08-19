@@ -74,7 +74,7 @@ export function statedFee(specification: MarketSpecification, side: Side): numbe
   const alters = (rule: Rule): boolean => rule.then.some(chargesFee);
 
   const unconditional = (rule: Rule): boolean =>
-    rule.conditions.length === 0 &&
+    rule.conditions.every((clause) => sideOnly(clause)) &&
     rule.onceOnly !== true &&
     (rule.activeInPhases === undefined || rule.activeInPhases.length === 0);
 
@@ -128,6 +128,28 @@ export function statedFee(specification: MarketSpecification, side: Side): numbe
 }
 
 /**
+ * Whether a condition only says which side of the trade this is.
+ *
+ * STORY: "buying should cost you nothing at all, selling costs half a percent". The rule fired on
+ * any trade, its effect carried `{ buyFeePpm: 0, sellFeePpm: 5000 }`, and it also carried a
+ * condition of kind `tradeSide` reading "apply the zero rate to buys and the 0.5% rate to sells".
+ * That is not a gate on the fee — it is the effect's own sidedness written a second time — but any
+ * condition at all abandoned the flat reading, so nothing asserted the half percent and the
+ * benchmark reported a correct market as charging nothing.
+ *
+ * Kept narrow, because the cost of being wrong here is asymmetric: mistaking a real gate for this
+ * would assert a flat rate on a market that waives it, which fails a market for being right. So it
+ * must name the side or the direction *and* compare against nothing numeric. A streak of ten, a
+ * size above one percent, a window — all of those carry a number and none of them qualify.
+ */
+function sideOnly(clause: Rule["conditions"][number]): boolean {
+  const numeric = Object.values(clause.parameters ?? {}).some((value) => typeof value === "number");
+  if (numeric) return false;
+
+  return /^(?:trade)?side$|direction|isbuy|issell|buyorsell|zeroforone|swapkind/i.test(clause.kind);
+}
+
+/**
  * Whether an effect is one that takes something from a trade.
  *
  * The named kinds are the ones the schema suggests. The pattern is there because the
@@ -157,7 +179,18 @@ function chargesFee(effect: Rule["then"][number]): boolean {
  */
 function downstreamOfTheCharge(rule: Rule): boolean {
   const kind = rule.when.kind.toLowerCase();
-  return /fee/.test(kind) && /collect|charged|taken|received|accru|earned/.test(kind);
+  if (/fee/.test(kind) && /collect|charged|taken|received|accru|earned/.test(kind)) return true;
+
+  /*
+   * And anything a trade cannot trigger at all.
+   *
+   * HOLD charges 0.3% on every swap and pays it out to holders when they claim. The payout rule
+   * fires on `claim`, mentions fees because that is what it distributes, and made the flat 0.3%
+   * unreadable — so the one number the market is built on was asserted by nothing. A claim, a
+   * withdrawal or a settlement happens because somebody asked for it, never because somebody
+   * traded, so no such rule can change what a trade pays.
+   */
+  return /^(?:claim|withdraw|harvest|redeem|distribut|settle|payout)/.test(kind);
 }
 
 /**
@@ -197,10 +230,29 @@ function rateOf(effect: Rule["then"][number], side: Side): number | null {
     ([key]) => !key.toLowerCase().includes("sell") && !key.toLowerCase().includes("buy"),
   );
 
-  // Naming the other side and not this one is not silence about this one: it is an effect whose
-  // shape this file has not understood, and guessing from what is left is how the above
-  // happened. Only a parameter that is about this side, or about neither, is read.
-  const readable = mine.length > 0 ? mine : theirs.length > 0 ? [] : neutral;
+  /*
+   * Naming the other side and not this one is not silence about this one: it is an effect whose
+   * shape this file has not understood, and guessing from what is left is how the above
+   * happened. Only a parameter that is about this side, or about neither, is read.
+   *
+   * With one exception, which is where a real market went unproven. SPEC's effect said
+   * `{ feePpm: 5000, buyFeePpm: 0 }` on a rule firing on sells: the other side is named, so
+   * everything else was discarded and the 0.5% the prompt asked for in three different ways
+   * became unreadable. Nothing then asserted it — this same function writes the core suite's fee
+   * assertions — and the build reached the launch button with its central requirement unproven,
+   * twice. It happened to be implemented correctly, which is worse than failing, because the
+   * only thing standing behind it was the model's own good behaviour.
+   *
+   * An other-side rate of zero cannot be the neutral rate's owner: the effect has said that side
+   * pays nothing, so a rate stated alongside it belongs to the side that is left. A non-zero rate
+   * for the other side stays as it was — two rates and no statement of which applies here is
+   * exactly the shape this guard was written for.
+   */
+  const otherSideIsFree =
+    theirs.length > 0 &&
+    theirs.every(([key, value]) => value === 0 && /fee|tax|charge|rate/i.test(key));
+
+  const readable = mine.length > 0 ? mine : theirs.length === 0 || otherSideIsFree ? neutral : [];
 
   for (const [key, value] of readable) {
     if (typeof value !== "number") continue;

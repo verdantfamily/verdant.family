@@ -75,10 +75,18 @@ import {
 } from "./gates.js";
 import { coreTests, CORE_TEST_PATH } from "./core-tests.js";
 import { recogniseAll, remedyBrief } from "./playbook.js";
+import { lockedRates, unmetRates } from "./requirements.js";
 import { classify, FailureCategory, tacticFor, Tactic } from "./recovery.js";
 import { Blame } from "./playbook.js";
 import { explainRevert, selectorsOf } from "./revert.js";
-import { apiBrief, receiverBrief, unknownMembers, unknownReceivers } from "./testapi.js";
+import {
+  apiBrief,
+  receiverBrief,
+  unknownHelpers,
+  unknownMembers,
+  unknownReceivers,
+  unknownValues,
+} from "./testapi.js";
 import {
   CANONICAL_TEST_BASE,
   CANONICAL_TEST_SMOKE,
@@ -212,6 +220,15 @@ export const NATIVE_QUOTE = ZERO_ADDRESS;
 async function withArtefactRetries<O extends StageOutput<unknown>>(
   attempts: number,
   ask: (problems: readonly string[] | undefined, attempt: number) => Promise<O>,
+  /**
+   * Called with every answer that was thrown away, as it is thrown away.
+   *
+   * Rejections used to be recorded by the caller's `catch`, which sees only the last one: a stage
+   * that asked three times and was refused three times left one answer on the record and no way
+   * to tell whether the model kept making the same mistake or three different ones. That is the
+   * difference between diagnosing a prompt and re-running a build to watch it fail again.
+   */
+  onRejected?: (error: ArtefactError, attempt: number) => void,
 ): Promise<{ readonly output: O; readonly retries: number }> {
   let problems: readonly string[] | undefined;
   let transient = 0;
@@ -219,7 +236,11 @@ async function withArtefactRetries<O extends StageOutput<unknown>>(
   for (let attempt = 1; ; attempt++) {
     try {
       return { output: await ask(problems, attempt), retries: attempt - 1 };
-    } catch (error) {
+    } catch (raw) {
+      const error = misshapenAnswer(raw) ?? raw;
+
+      if (error instanceof ArtefactError) onRejected?.(error, attempt);
+
       // A rejected artefact is worth another turn with the validator's complaints.
       if (error instanceof ArtefactError && attempt < attempts) {
         problems = error.problems;
@@ -249,6 +270,36 @@ async function withArtefactRetries<O extends StageOutput<unknown>>(
       throw error;
     }
   }
+}
+
+/**
+ * An answer the stage could not read, arriving as a crash rather than a complaint.
+ *
+ * Every stage reads the model's answer against a schema, and every one of those readers was
+ * written for an answer shaped the way the schema says. Anthropic's tool use treats a schema as
+ * a strong suggestion, so a field can arrive as a list where an object was asked for — and the
+ * reader touches it, throws a `TypeError`, and the build ends as `TOOLCHAIN_ERROR`, which says
+ * Agen is broken. PULSE died that way at architecture planning on `Cannot read properties of
+ * undefined (reading 'map')`, sixty-eight seconds in, with three retries unspent.
+ *
+ * Turning it into an artefact complaint puts it where it belongs: the answer was unreadable, the
+ * ladder already knows how to say so, and asking again with that complaint is what every other
+ * unreadable answer gets. Narrow on purpose — only the shapes a bad answer produces — so a
+ * genuine defect in Agen still surfaces as one rather than as three retries and a shrug.
+ */
+export function misshapenAnswer(error: unknown): ArtefactError | null {
+  if (!(error instanceof TypeError)) return null;
+  if (!/Cannot read properties|is not a function|is not iterable/.test(error.message)) return null;
+
+  return new ArtefactError(
+    "answer",
+    [
+      `the answer could not be read: ${error.message}. Return every field the schema ` +
+        "declares, in the shape it declares — an object where an object is asked for, and " +
+        "every list present even when it is empty.",
+    ],
+    "",
+  );
 }
 
 /** How many times a dropped connection or a rate limit is worth waiting out. */
@@ -458,20 +509,42 @@ export async function runBuild(
    * running the whole build again to look at it. A rejected answer is the most useful
    * thing to have when working out whether the model or the schema is at fault.
    */
-  const rememberRejection = (current: GenerationJob, stage: Stage, error: unknown): GenerationJob => {
+  const rememberRejection = (
+    current: GenerationJob,
+    stage: Stage,
+    error: unknown,
+    attempt = 0,
+  ): GenerationJob => {
     if (!(error instanceof ArtefactError)) return current;
+
+    /*
+     * The files, when the answer was files.
+     *
+     * `raw` is the answer as the provider sent it, which for a test suite is JSON with the
+     * Solidity escaped inside it — technically complete and unreadable in practice. Three markets
+     * were lost to suites refused for the same reason and diagnosing it meant re-running the
+     * model, because nothing on the record could be opened and read. So the files are appended in
+     * the form they were written in.
+     */
+    const files =
+      error.files === undefined || error.files.length === 0
+        ? ""
+        : `\n\n${error.files
+            .map((file) => `// ${file.path}\n${file.content}`)
+            .join("\n\n")}`;
 
     return {
       ...current,
       exchanges: [
         ...current.exchanges,
         {
+          ...(attempt === 0 ? {} : { retries: attempt - 1 }),
           stage,
           at: now(),
           provider: provider.name,
           model: provider.model,
           promptHash: keccak256(toHex("")),
-          raw: error.raw,
+          raw: `${error.raw}${files}`,
           inputTokens: null,
           outputTokens: null,
           durationMs: null,
@@ -480,6 +553,13 @@ export async function runBuild(
       ],
     };
   };
+
+  /** Pass this to `withArtefactRetries` and no refused answer is lost, at any stage. */
+  const keepRejections =
+    (stage: Stage) =>
+    (error: ArtefactError, attempt: number): void => {
+      job = rememberRejection(job, stage, error, attempt);
+    };
 
   /** Turn whatever a stage threw into the right failure code. */
   const failureFor = (error: unknown, stage: Stage): Failure => {
@@ -555,13 +635,16 @@ export async function runBuild(
       job = await save(beginStage(job, Stage.Interpreting, now()));
 
       try {
-        const { output, retries } = await withArtefactRetries(budget.artefactRetries, (problems) =>
-          interpret(provider, {
+        const { output, retries } = await withArtefactRetries(
+          budget.artefactRetries,
+          (problems) =>
+            interpret(provider, {
             prompt: request.prompt,
             name: request.name,
             symbol: request.symbol,
             ...(problems === undefined ? {} : { problems }),
           }),
+          keepRejections(Stage.Interpreting),
         );
 
         specification = output.value;
@@ -644,6 +727,41 @@ export async function runBuild(
       });
     }
 
+    /*
+     * A rate the creator wrote down is not a preference.
+     *
+     * Everything downstream of here reasons about the market Agen decided on, and does it well:
+     * the Solidity is checked against this specification, the tests are checked against it, the
+     * gates judge it. None of that asks whether this specification is the market that was
+     * requested. SPEC's prompt states 0.5% three ways and it launched twice with that rate
+     * asserted by nothing; TIDE's 0.3% was locked as 0.003%, a hundredfold error, and the build
+     * failed later for unrelated reasons with nobody the wiser.
+     *
+     * So the numbers are compared before a line of Solidity is written, and a market missing one
+     * is refused rather than built. Refusing is the point: the alternative is launching a
+     * different market than the one asked for, which no amount of passing tests makes right.
+     * Presence, not flatness, and read narrowly — see `requirements.ts` for why a share of a fee
+     * and a percentage threshold must not count.
+     */
+    const unmet = unmetRates(request.prompt, specification);
+
+    if (unmet.length > 0) {
+      return await fail({
+        code: FailureCode.Unsupported,
+        stage: Stage.Interpreting,
+        detail:
+          `Agen read this market as charging ${
+            [...lockedRates(specification)]
+              .sort((left, right) => left - right)
+              .map((ppm) => `${(ppm / 10_000).toFixed(3)}%`)
+              .join(", ") || "no fee at all"
+          }, but the description asks for ${unmet
+            .map((rate) => `${rate.phrase} (${(rate.ppm / 10_000).toFixed(3)}%)`)
+            .join(" and ")}. Rather than launch a market that charges something else, ` +
+          "this build has stopped. Say the rate once more, in one place, and try again.",
+      });
+    }
+
     job = await save(beginStage(job, Stage.SpecificationCreated, now()));
     job = await save(endStage(job, { status: "succeeded", now: now() }));
 
@@ -694,12 +812,15 @@ export async function runBuild(
       job = await save(beginStage(job, Stage.Interpreting, now(), "Applying what you decided."));
 
       try {
-        const { output, retries } = await withArtefactRetries(budget.artefactRetries, (problems) =>
-          revise(provider, {
+        const { output, retries } = await withArtefactRetries(
+          budget.artefactRetries,
+          (problems) =>
+            revise(provider, {
             specification,
             decisions: outstanding(specification),
             ...(problems === undefined ? {} : { problems }),
           }),
+          keepRejections(Stage.Interpreting),
         );
 
         specification = output.value;
@@ -754,13 +875,16 @@ export async function runBuild(
         const matched = await matchArchitecture(provider, { specification });
         job = remember(job, Stage.ArchitecturePlanning, matched, null, "match");
 
-        const { output, retries: planRetries } = await withArtefactRetries(budget.artefactRetries, (problems) =>
-          design(provider, {
+        const { output, retries: planRetries } = await withArtefactRetries(
+          budget.artefactRetries,
+          (problems) =>
+            design(provider, {
             specification,
             context,
             match: matched.value,
             ...(problems === undefined ? {} : { problems }),
           }),
+          keepRejections(Stage.ArchitecturePlanning),
         );
 
         plan = output.value.plan;
@@ -873,6 +997,7 @@ export async function runBuild(
                   // a hook calls on every swap.
                   apis: contractApis({ sources: preludeSources() }),
                 }),
+              keepRejections(Stage.CodeGeneration),
             );
             return { source: output.value, output, component: component.contractName, retries };
           }),
@@ -885,6 +1010,7 @@ export async function runBuild(
           }
         }
       } catch (error) {
+        job = rememberRejection(job, Stage.CodeGeneration, error);
         return await fail(failureFor(error, Stage.CodeGeneration));
       }
 
@@ -1550,7 +1676,9 @@ export async function runBuild(
                 (source) => source.path === `${LAYOUT.contracts}/${component.contractName}.sol`,
               )!;
 
-              const { output } = await withArtefactRetries(budget.artefactRetries, () =>
+              const { output } = await withArtefactRetries(
+                budget.artefactRetries,
+                () =>
                 rewriteComponent(rewriteWith, {
                   component,
                   deployed: declared,
@@ -1562,6 +1690,7 @@ export async function runBuild(
                   apis,
                   specification,
                 }),
+                keepRejections(Stage.DeploymentValidation),
               );
 
               return { source: output.value, output, component: component.contractName };
@@ -1947,6 +2076,24 @@ export async function runBuild(
     let quarantined: readonly { readonly path: string; readonly why: string }[] = [];
     /** The last rejected suite, so a retry corrects an answer instead of writing a new one. */
     let rejectedSuite: readonly GeneratedSource[] = [];
+    /**
+     * The invariants a suite left unproven, when that was the only complaint against it.
+     *
+     * Carried separately from the suite because it selects a different kind of second attempt:
+     * keep these tests and add one, rather than write the suite again. Test generation was the
+     * largest source of run-to-run variance in the benchmark, and an incomplete suite thrown away
+     * and re-rolled is most of it — the same market came back refused for a different missing
+     * invariant on the second attempt, having lost the tests that were fine on the first.
+     */
+    let missingCoverage: readonly string[] | undefined;
+    /**
+     * The files that misused the fixture, when that was the only complaint against the suite.
+     *
+     * Carried for the same reason as `missingCoverage` and selecting a different attempt again:
+     * keep these tests and rewrite the named files. Both are needed because a suite can be
+     * incomplete or wrong in one file, and the instruction for one is wrong for the other.
+     */
+    let manualInfrastructure: readonly string[] | undefined;
 
     try {
       const { output, retries } = await withArtefactRetries(
@@ -1960,21 +2107,29 @@ export async function runBuild(
               testEnvironment: generationEnvironment,
               core: [core.source],
               previous: rejectedSuite,
+              ...(missingCoverage === undefined ? {} : { missingCoverage }),
+              ...(manualInfrastructure === undefined ? {} : { manualInfrastructure }),
               ...(problems === undefined ? {} : { validationProblems: problems }),
             });
           } catch (error) {
             if (error instanceof ArtefactError && error.files !== undefined) {
               rejectedSuite = error.files;
             }
+            if (error instanceof ArtefactError) {
+              missingCoverage = error.missingCoverage;
+              manualInfrastructure = error.manualInfrastructure;
+            }
             throw error;
           }
         },
+        keepRejections(Stage.TestGeneration),
       );
       tests = output.value.files;
       core = { ...core, source: output.value.core[0] ?? core.source };
       quarantined = output.value.discarded;
       job = remember(job, Stage.TestGeneration, output, null, undefined, retries);
     } catch (error) {
+      job = rememberRejection(job, Stage.TestGeneration, error);
       return await fail(failureFor(error, Stage.TestGeneration));
     }
 
@@ -2006,7 +2161,20 @@ export async function runBuild(
     // And the same question one level up: does it call on something that is not there at all?
     // A member that does not exist is a name misremembered; a receiver that does not exist is a
     // market the test never reached. See `unknownReceivers`.
-    const strangers = unknownReceivers({ tests, fixture: testEnvironment.source });
+    //
+    // Three shapes of the same mistake, because a suite reaches for the harness in three ways and
+    // Solidity answers all of them with "Undeclared identifier" and no alternatives: a name called
+    // on (`vault.credited()`), a helper called (`vaultBalance()`), and a name read as a value
+    // (`address(poolManager)`). Every one of these lost a market in a recorded run. Replayed over
+    // every workspace on disk, the three together name the offending file in all ten suites the
+    // compiler rejected this way, and report nothing on the seventy-two that compiled — see
+    // scripts/precompile-recall.mjs, which is how they were tuned without a model to ask.
+    const harness = [testEnvironment.source, ...testPreludeSources(), core.source];
+    const strangers = [
+      ...unknownReceivers({ tests, fixture: testEnvironment.source }),
+      ...unknownHelpers({ tests, harness }),
+      ...unknownValues({ tests, harness }),
+    ];
     const brief = [
       ...(missing.length === 0 ? [] : [apiBrief(missing)]),
       ...(strangers.length === 0 ? [] : [receiverBrief(strangers)]),
@@ -2261,8 +2429,10 @@ export async function runBuild(
       );
       job = await save(beginStage(job, Stage.TestGeneration, now()));
       try {
-        const { output } = await withArtefactRetries(budget.artefactRetries, (problems) =>
-          generateTests(provider, {
+        const { output } = await withArtefactRetries(
+          budget.artefactRetries,
+          (problems) =>
+            generateTests(provider, {
             specification,
             sources,
             context,
@@ -2280,6 +2450,7 @@ export async function runBuild(
                 ". Write the suite again from the market itself rather than repairing that one.",
             ],
           }),
+          keepRejections(Stage.TestGeneration),
         );
         tests = output.value.files;
         core = { ...core, source: output.value.core[0] ?? core.source };
@@ -2322,6 +2493,82 @@ export async function runBuild(
       return broken.length === 0
         ? "The generated test suite could not be made to compile"
         : `${broken.join(", ")} stopped compiling after a repair edited it`;
+    };
+
+    /**
+     * The contracts as they last stood when the project compiled.
+     *
+     * A test repair may edit contracts, which is right — a failing test is often a real bug in the
+     * market — and a repair that mistypes one while doing it must not be able to end the build.
+     * SIMPLE proved that in the worst way: it interpreted, planned, compiled, deployed and ran its
+     * suite, then three rounds of repair rewrote its hook and the last one left it not compiling.
+     * The market was reported unrepairable and the version that had compiled eight minutes earlier
+     * was still the obvious thing to fall back to.
+     */
+    let lastCompiling: readonly GeneratedSource[] = sources;
+
+    /**
+     * Put the market back the way it was when it compiled, and see what the tests really say.
+     *
+     * Called before the loop gives up. A build whose contracts do not compile cannot be judged —
+     * no test in it has run — so the honest last act is to restore the contracts that did and run
+     * the suite once against them. Either the tests pass and the market was never the problem, or
+     * they fail and the report names the failing test instead of a compiler error in a file the
+     * creator never wrote.
+     */
+    const restoreCompilingContracts = async (): Promise<boolean> => {
+      if (tested.buildFailure === null) return false;
+
+      const broken = new Set(
+        (tested.buildFailure ?? [])
+          .map((entry) => entry.file ?? "")
+          .filter((file) => file.startsWith(`${LAYOUT.contracts}/`)),
+      );
+      if (broken.size === 0) return false;
+
+      const restored = lastCompiling.filter((file) => broken.has(file.path));
+      if (restored.length === 0) return false;
+
+      job = await save(
+        beginStage(
+          job,
+          Stage.TestRepair,
+          now(),
+          `Reverting ${restored.map((file) => file.path).join(", ")} to the version that compiled.`,
+        ),
+      );
+
+      sources = mergeSources(sources, restored);
+      await workspace!.write(restored);
+
+      try {
+        testEnvironment = await buildCanonicalTestEnvironment();
+        await workspace!.write([testEnvironment.source, testEnvironment.smoke]);
+      } catch {
+        // The restored contracts do not build a fixture either, so there is nothing to fall back
+        // to and the failure the caller is about to report stands.
+        return false;
+      }
+
+      await workspace!.write([core.source, ...tests]);
+      tested = await runSuite({ depth: "critical" });
+      diagnostics = withTestAttempt(diagnostics, testAttemptFrom(tested, round, now()));
+      await flushDiagnostics();
+
+      job = await save(
+        endStage(
+          { ...job, sources },
+          {
+            status: "succeeded",
+            detail:
+              "A repair left the contracts not compiling. They were restored to the version that " +
+              `did, and the suite ${tested.ok ? "passes against it" : "still fails against it"}.`,
+            now: now(),
+          },
+        ),
+      );
+
+      return tested.ok;
     };
 
     while (
@@ -2408,6 +2655,9 @@ export async function runBuild(
       // than spending another model call to arrive here. Checked before the attempt is
       // counted or the stage opened, so the record shows the rounds that happened.
       if (stalled >= 2) {
+        // A market that does not compile has not been tested, so before anything is concluded the
+        // contracts that did compile are put back. See `restoreCompilingContracts`.
+        if (await restoreCompilingContracts()) break;
         // The rounds are spent, but the market may be fine and only its generated tests
         // broken. Salvage decides that on evidence and returns false when there is none.
         if (await salvageSuite()) break;
@@ -2506,6 +2756,9 @@ export async function runBuild(
       const contractRepairs = editableContracts
         ? repair.files.filter((file) => isModelContract(file.path))
         : [];
+      // The market as it stood before this round edited it, kept so a repair cannot be the last
+      // word on contracts that were compiling. See `lastCompiling`.
+      if (tested.buildFailure === null) lastCompiling = sources;
       const testRepairs = repair.files.filter((file) => isModelTest(file.path));
       const nextTests = mergeSources(tests, testRepairs);
       const manualInfrastructure = manualTestInfrastructureProblems(nextTests);
@@ -2585,6 +2838,7 @@ export async function runBuild(
       await flushDiagnostics();
     }
 
+    if (!tested.ok) await restoreCompilingContracts();
     if (!tested.ok) await salvageSuite();
 
     if (!tested.ok) {

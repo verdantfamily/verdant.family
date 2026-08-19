@@ -1,0 +1,32 @@
+# Railway snapshots the working tree before .gitignore. Local build output
+# (about 3 GB) has timed out every upload tonight. The production volume is
+# mounted at /app/generated; nothing below belongs in the image.
+
+generated/
+node_modules/
+**/node_modules
+.next/
+**/.next/
+out/
+**/out/
+.turbo/
+**/.turbo/
+dist/
+**/dist/
+.vercel/
+**/.vercel/
+.proof/
+.instant-proof/
+.research/
+.railway-config-pull-*/
+packages/contracts/out/
+packages/contracts/cache/
+packages/contracts/vendor/
+packages/contracts/broadcast/
+# Not apps/web or apps/landing themselves: the Dockerfile copies every workspace
+# package.json before `pnpm install --frozen-lockfile`, so excluding either app
+# fails the build at COPY. Their weight is build output, already excluded above.
+apps/agen/.next
+apps/agen/out
+*.tsbuildinfo
+**/.DS_Store

@@ -13,8 +13,10 @@ import {
   apiBrief,
   apiIndex,
   receiverBrief,
+  unknownHelpers,
   unknownMembers,
   unknownReceivers,
+  unknownValues,
 } from "./testapi";
 import { preludeApi, preludeSources, publicGetters } from "./prelude";
 import { recognise, Blame } from "./playbook";
@@ -341,5 +343,145 @@ describe("the names a fixture actually declares", () => {
         fixture: { path: "test/MarketTestBase.sol", content: "contract MarketTestBase {}" },
       }),
     ).toEqual([]);
+  });
+
+  /**
+   * HRBR reached the market as `components.vault.owner()`. Reading only the name a call sits on
+   * sees `vault.owner(` — a member access, correctly skipped — and never sees `components`, which
+   * is the name that does not exist. The compiler rejected a hundred and twenty lines of that file
+   * while the pass named nothing.
+   */
+  it("reports the root of a chain, not the member hanging off it", () => {
+    const found = unknownReceivers({
+      tests: suite(`    function test_x() public { components.vault.owner(); }`),
+      fixture: FIXTURE,
+    });
+
+    expect(found.map((entry) => entry.receiver)).toEqual(["components"]);
+  });
+
+  /**
+   * A name the fixture uses as a local inside `setUp` is invisible to a test, so a suite built
+   * around it is as undeclared as one built around a name nobody has written. This is how
+   * `components` escaped: the fixture happened to use it while wiring the factory.
+   */
+  it("does not treat a local inside the fixture as something a test can reach", () => {
+    const withLocal: GeneratedSource = {
+      path: "test/MarketTestBase.sol",
+      content: FIXTURE.content.replace(
+        "    function buy(uint128 amountIn) internal returns (uint256) {}",
+        `    function buy(uint128 amountIn) internal returns (uint256) {
+        AgenFactory.Component[] memory components = new AgenFactory.Component[](1);
+        return components.length;
+    }`,
+      ),
+    };
+
+    expect(
+      unknownReceivers({
+        tests: suite(`    function test_x() public { components.vault.owner(); }`),
+        fixture: withLocal,
+      }).map((entry) => entry.receiver),
+    ).toEqual(["components"]);
+  });
+
+  /**
+   * The bug that made every reader here unreliable: the fixture contains
+   * `"agen://canonical-test"`, whose `//` was taken for a comment, and the quote it left
+   * unbalanced swallowed the rest of the file — including `buy` and `sell`. The pass then
+   * reported the harness's own helpers as missing, on forty-eight of seventy-two workspaces.
+   */
+  it("reads a url in a string as a string, not as a comment", () => {
+    const withUrl: GeneratedSource = {
+      path: "test/MarketTestBase.sol",
+      content: FIXTURE.content.replace(
+        "    PoolKey internal key;",
+        `    string internal uri = "agen://canonical-test";
+    PoolKey internal key;`,
+      ),
+    };
+
+    expect(
+      unknownHelpers({
+        tests: suite(`    function test_x() public { buy(1 ether); }`),
+        harness: [withUrl],
+      }),
+    ).toEqual([]);
+  });
+});
+
+/**
+ * The other two shapes of the same mistake. SHIFT invented `vaultBalance()` because the fixture
+ * has no such convenience; SIMPLE and STREAK wrote `address(poolManager)` against a fixture that
+ * names it something else. Neither is a call on a receiver, so neither was seen, and both cost a
+ * market whose contracts were correct.
+ */
+describe("helpers and values a suite invents", () => {
+  const HARNESS: readonly GeneratedSource[] = [
+    {
+      path: "test/MarketTestBase.sol",
+      content: `contract MarketTestBase is AgenTest {
+    PoolKey internal key;
+    FeeVault internal component_feeVault;
+    IPoolManager internal manager;
+
+    function buy(uint128 amountIn) internal returns (uint256) {}
+    function vaultCredited() internal view returns (uint256) {}
+}`,
+    },
+  ];
+
+  const suite = (body: string): readonly GeneratedSource[] => [
+    { path: "test/Shift.t.sol", content: `contract ShiftTest is MarketTestBase {\n${body}\n}` },
+  ];
+
+  it("reports a helper the harness does not offer", () => {
+    const found = unknownHelpers({
+      tests: suite(`    function test_x() public { assertEq(vaultBalance(), 0); }`),
+      harness: HARNESS,
+    });
+
+    expect(found.map((entry) => entry.receiver)).toEqual(["vaultBalance"]);
+    expect(found[0]?.available).toContain("component_feeVault");
+  });
+
+  it("reports a value the harness does not offer", () => {
+    const found = unknownValues({
+      tests: suite(`    function test_x() public { assertEq(pm, address(poolManager)); }`),
+      harness: HARNESS,
+    });
+
+    expect(found.map((entry) => entry.receiver)).toContain("poolManager");
+  });
+
+  /**
+   * The fencing that makes these usable. A false report costs a repair round that was not needed,
+   * so casts, keywords, units, forge's own helpers and anything the suite declares itself are all
+   * silence — which is what took the false-report count from forty-eight workspaces to none.
+   */
+  it("says nothing about casts, keywords, units, or what the harness does offer", () => {
+    const tests = suite(`    uint256 internal total;
+
+    function test_x() public {
+        uint8 n = uint8(bound(total, 1, 12));
+        bytes4 selector = bytes4(0x12345678);
+        for (uint256 i = 0; i < n; i++) {
+            if (i > 0) { total += buy(1 ether) + 1 wei; } else { total = vaultCredited(); }
+        }
+        try this.test_x() { total = 0; } catch (bytes memory reason) { total = reason.length; }
+        assertTrue(total >= 0, "never negative");
+    }
+
+    function helperOfMyOwn() internal view returns (uint256) { return total; }`);
+
+    expect(unknownHelpers({ tests, harness: HARNESS })).toEqual([]);
+    expect(unknownValues({ tests, harness: HARNESS })).toEqual([]);
+  });
+
+  it("stays quiet when it cannot read the harness at all", () => {
+    const blank = [{ path: "test/MarketTestBase.sol", content: "contract MarketTestBase {}" }];
+
+    expect(unknownHelpers({ tests: suite("function test_x() public { q(); }"), harness: blank })).toEqual([]);
+    expect(unknownValues({ tests: suite("function test_x() public { uint256 a = q; }"), harness: blank })).toEqual([]);
   });
 });

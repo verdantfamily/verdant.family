@@ -36,10 +36,12 @@ import { resolve } from "node:path";
 import {
   anthropicProvider,
   fileJobStore,
+  object,
   openAiProvider,
   runBuild,
   Stage,
   statedFee,
+  text,
   type GenerationJob,
 } from "@verdant/market-compiler";
 
@@ -295,6 +297,23 @@ const fastModel = process.env["AGEN_MODEL_FAST"] ?? "gpt-5-mini";
 const escalationKey = process.env["ANTHROPIC_API_KEY"];
 const escalationModel = process.env["AGEN_ESCALATION_MODEL"] ?? "claude-sonnet-4-5";
 
+/*
+ * Built once rather than per case.
+ *
+ * Hoisted so the preflight below can ask the question against the same provider the cases
+ * will use. A preflight that instantiates its own is a preflight that can pass while every
+ * build fails, which is worse than not having one.
+ */
+const escalation =
+  escalationKey === undefined || escalationKey.length === 0
+    ? null
+    : anthropicProvider({ apiKey: escalationKey, model: escalationModel });
+
+const driving =
+  driver === "anthropic" && escalation !== null
+    ? escalation
+    : openAiProvider({ apiKey: apiKey, model, fastModel });
+
 interface Result {
   readonly symbol: string;
   readonly register: Register;
@@ -374,12 +393,52 @@ function resultOf(entry: Case, job: GenerationJob, seconds: number): Result {
   };
 }
 
+/**
+ * Whether the provider will answer at all, asked before anything expensive depends on it.
+ *
+ * An exhausted account does not look like an exhausted account in the results. Every stage
+ * raises `MODEL_UNAVAILABLE` in about a second, so the set completes in under a minute and
+ * files a run that reads as a catastrophic regression: fifteen prompts, none launched, the
+ * comparison against the previous run announcing that everything broke. Ninety-three of the
+ * two hundred and sixty-nine attempts on file are this, across four runs that measured
+ * nothing, and one of them sits in the history next to a genuine 11/15 where it is
+ * indistinguishable from a collapse in quality.
+ *
+ * One low-effort call with a two-field schema costs a fraction of a cent and tells the
+ * difference. It also catches the other cheap ways to lose an hour — a wrong model id, a
+ * key without access to it, a provider refusing structured outputs — all of which otherwise
+ * surface identically, one per prompt, after the concurrency has spread them across the set.
+ */
+async function unreachable(): Promise<string | null> {
+  try {
+    await driving.generate<{ verdict: string }>({
+      stage: "preflight",
+      instructions: "Answer with a single short word.",
+      input: 'Reply with the word "ready".',
+      schemaName: "preflight",
+      schema: object({ verdict: text("a single word") }),
+      timeoutMs: 60_000,
+      effort: "low",
+    });
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+/**
+ * Set when a build dies for want of credit, read by the queue workers to stop pulling.
+ *
+ * The preflight cannot catch an account that empties halfway through a run, and that is the
+ * common case rather than an edge one: a fifteen-prompt run costs real money and the balance
+ * it needs is spent while it runs. Without this the remaining prompts each fail in a second
+ * and are filed as failures, so a run that measured eight markets before the money ran out
+ * reports as 4/15 instead of 4/7.
+ */
+let exhausted = false;
+
 async function build(entry: Case): Promise<Result> {
   const started = Date.now();
-  const escalation =
-    escalationKey === undefined || escalationKey.length === 0
-      ? null
-      : anthropicProvider({ apiKey: escalationKey, model: escalationModel });
 
   process.stdout.write(`start  ${entry.symbol}\n`);
 
@@ -387,10 +446,7 @@ async function build(entry: Case): Promise<Result> {
     const job = await runBuild(
       { prompt: entry.prompt, name: entry.name, symbol: entry.symbol },
       {
-        provider:
-          driver === "anthropic" && escalation !== null
-            ? escalation
-            : openAiProvider({ apiKey: apiKey!, model, fastModel }),
+        provider: driving,
         ...(escalation === null || driver === "anthropic" ? {} : { escalationProvider: escalation }),
         store: fileJobStore(resolve(GENERATED_ROOT, "_jobs")),
         vendorRoot: resolve(REPO_ROOT, "packages/contracts/vendor"),
@@ -399,6 +455,7 @@ async function build(entry: Case): Promise<Result> {
     );
 
     const result = resultOf(entry, job, Math.round((Date.now() - started) / 1_000));
+    if (result.failureCode === "MODEL_UNAVAILABLE") exhausted = true;
     process.stdout.write(
       `${result.launched ? (result.misread.length === 0 ? "  ok  " : " WRONG") : " FAIL "} ` +
         `${entry.symbol.padEnd(7)} ${String(result.seconds).padStart(4)}s  ` +
@@ -427,14 +484,21 @@ async function build(entry: Case): Promise<Result> {
   }
 }
 
-/** Run the set with a fixed number in flight, in the order given. */
-async function all(): Promise<readonly Result[]> {
+/**
+ * Run the set with a fixed number in flight, in the order given.
+ *
+ * Stops early once the account is dry, leaving the untried cases out of the results rather
+ * than in them as failures. What is measured is what was paid for; a prompt nobody asked a
+ * model about is not evidence either way.
+ */
+async function all(): Promise<{ readonly results: readonly Result[]; readonly skipped: number }> {
   const queue = [...cases];
   const results: Result[] = [];
 
   await Promise.all(
     Array.from({ length: Math.max(1, Math.min(concurrency, queue.length)) }, async () => {
       for (;;) {
+        if (exhausted) return;
         const next = queue.shift();
         if (next === undefined) return;
         results.push(await build(next));
@@ -442,7 +506,7 @@ async function all(): Promise<readonly Result[]> {
     }),
   );
 
-  return results;
+  return { results, skipped: queue.length };
 }
 
 console.log(
@@ -455,22 +519,55 @@ console.log(
 );
 console.log(`${String(cases.length)} prompts, ${String(concurrency)} at a time\n`);
 
+const refusal = await unreachable();
+if (refusal !== null) {
+  // No results file. A run that never reached a model has nothing to say about the pipeline,
+  // and filing it as a zero would put a fake regression in the history that every later run
+  // is compared against.
+  console.error(`preflight failed, nothing was run: ${refusal}`);
+  console.error(
+    /no credits left/i.test(refusal)
+      ? "top up the account and run this again."
+      : `check AGEN_MODEL (currently "${model}") with: node scripts/probe-model.ts ${model}`,
+  );
+  process.exit(2);
+}
+
 const started = Date.now();
-const results = await all();
+const { results, skipped } = await all();
 const right = (result: Result): boolean => result.launched && result.misread.length === 0;
 const launched = results.filter((result) => result.launched).length;
 const correct = results.filter(right).length;
 
+/*
+ * A prompt the model never answered is not a prompt the pipeline failed.
+ *
+ * The rate is reported over what was actually measured, so a run that ran out of money after
+ * eight markets says 4/7 rather than 4/15. Both numbers are kept in the record — the rate is
+ * only honest next to the count it was taken from.
+ */
+const starved = results.filter((result) => result.failureCode === "MODEL_UNAVAILABLE").length;
+const measured = results.length - starved;
+const incomplete = starved > 0 || skipped > 0;
+
 console.log(`\n${"=".repeat(78)}`);
 console.log(
-  `launched ${String(launched)}/${String(results.length)} ` +
-    `(${((launched / results.length) * 100).toFixed(0)}%) in ` +
-    `${String(Math.round((Date.now() - started) / 60_000))} minutes`,
+  measured === 0
+    ? `nothing measured: all ${String(results.length)} attempts died for want of credit`
+    : `launched ${String(launched)}/${String(measured)} ` +
+        `(${((launched / measured) * 100).toFixed(0)}%) in ` +
+        `${String(Math.round((Date.now() - started) / 60_000))} minutes`,
 );
+if (incomplete) {
+  console.log(
+    `INCOMPLETE: the account ran dry mid-run — ${String(starved)} attempt(s) never reached a ` +
+      `model and ${String(skipped)} were not tried. Not comparable with a full run.`,
+  );
+}
 if (correct !== launched) {
   console.log(
     `of those, ${String(launched - correct)} charge a fee the prompt did not ask for — ` +
-      `${String(correct)}/${String(results.length)} are both launchable and right`,
+      `${String(correct)}/${String(measured)} are both launchable and right`,
   );
 }
 console.log("=".repeat(78));
@@ -530,6 +627,17 @@ const record = {
   launched,
   correct,
   total: results.length,
+  /*
+   * Whether this run is evidence.
+   *
+   * Read by everything that compares runs, so a starved run stops being cited as a
+   * regression. `measured` is the denominator the rate was taken over; `starved` and
+   * `skipped` are what it excludes.
+   */
+  incomplete,
+  measured,
+  starved,
+  skipped,
   results,
 };
 
@@ -542,17 +650,31 @@ await writeFile(resolve(RESULTS_ROOT, `${stamp}.json`), `${JSON.stringify(record
 const sameDriver: (typeof record)[] = [];
 for (const file of earlier) {
   const read = JSON.parse(await readFile(resolve(RESULTS_ROOT, file), "utf8")) as typeof record;
-  if ((read.driver ?? "openai") === driver) sameDriver.push(read);
+  if ((read.driver ?? "openai") !== driver) continue;
+
+  /*
+   * Skip runs that measured nothing.
+   *
+   * Older records predate the `incomplete` field, so starvation is also detected the way it
+   * has to be read off the history: by the failure code on the attempts themselves. Four runs
+   * on file are entirely this, and comparing against one reports every market as broken.
+   */
+  const dry = read.results.filter((result) => result.failureCode === "MODEL_UNAVAILABLE").length;
+  if (read.incomplete === true || dry > 0) continue;
+
+  sameDriver.push(read);
 }
 
 const comparable = sameDriver.at(-1) ?? null;
 
-if (comparable !== null) {
+if (incomplete) {
+  console.log("\nnot compared against earlier runs: this one is incomplete.");
+} else if (comparable !== null) {
   const previous = comparable;
 
   console.log(
-    `\nprevious run: ${String(previous.launched)}/${String(previous.total)} launched` +
-      ` — now ${String(launched)}/${String(results.length)}`,
+    `\nprevious complete run: ${String(previous.launched)}/${String(previous.measured ?? previous.total)} launched` +
+      ` — now ${String(launched)}/${String(measured)}`,
   );
 
   const was = new Map(previous.results.map((result) => [result.symbol, result.launched]));
@@ -564,4 +686,9 @@ if (comparable !== null) {
 }
 
 console.log(`\nwritten to generated/_benchmarks/${stamp}.json`);
-process.exit(correct === results.length ? 0 : 1);
+
+// Two is "this did not measure anything", distinct from one, which is "markets were lost".
+// A caller that treats a dry account as a test failure will chase a regression that is a
+// billing problem, which is exactly what happened by hand for two days.
+if (incomplete) process.exit(2);
+process.exit(correct === measured ? 0 : 1);

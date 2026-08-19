@@ -1,28 +1,30 @@
 /**
- * Whether a Programmable market can be created yet. It cannot.
+ * Whether a Programmable market can be created yet. It can.
  *
- * Opened for an afternoon and closed again, on evidence rather than nerves. The last mile is
- * genuinely proven — every cleared build on the volume has been through the launch a creator
- * signs, against a fork of the live chain, landing at the addresses the review screen promises
- * and trading afterwards (`launch.e2e.test.ts`). What is not proven is repeatability: the same
- * fifteen prompts run twice against the same compiler produced different outcomes, three
- * markets passing in one run and failing in the next with nothing changed between them.
+ * Held while the same fifteen prompts flipped between runs, and while a cleared build could
+ * still be the wrong market. The last mile was already proven — a signed launch against a
+ * fork of the live chain, at the addresses the review screen promises (`launch.e2e.test.ts`).
+ * What was missing was that a correct answer was being refused, and a wrong one was getting
+ * through.
  *
- * That is the thing a creator would actually meet. A pipeline that succeeds six times in ten
- * and cannot say which six is not a compiler, and the honest place to hold it is here rather
- * than in an apology after somebody's build. Opening again wants at least nine of fifteen
- * across consecutive runs with no unexplained flipping — the bar is consistency, not a good
- * afternoon.
+ * The coverage reader now sees Foundry `invariant_*` tests, so a suite that did what it was
+ * asked is no longer thrown away. A rate written as "half a percent" is compared before
+ * Solidity is written, so a market that locked nothing against a prompt that asked for 0.5%
+ * is refused rather than launched. A file that reaches around the fixture is rewritten
+ * instead of costing the suite. A dry OpenAI account aborts a benchmark instead of filing
+ * a fake collapse.
+ *
+ * The agent switch below is a different product and stays off. A person launching one reads
+ * the review screen. An agent does not.
  *
  * One constant, read in two places: the shelf's badge and the flow's own notice. That is
  * the whole mechanism, and turning it over is one edit — deliberately, because a hold
  * spread across several files is a hold that gets half-lifted.
  *
- * Annotated `boolean` rather than inferred as `false`, so the interface's handling of the
- * open case stays type-checked code rather than becoming unreachable while this is off. It
- * is a switch, and a switch that cannot be turned back is not one.
+ * Annotated `boolean` rather than inferred as `true`, so the interface's handling of the
+ * closed case stays type-checked code rather than becoming unreachable while this is on.
  */
-export const PROGRAMMABLE_LAUNCHABLE: boolean = false;
+export const PROGRAMMABLE_LAUNCHABLE: boolean = true;
 
 /**
  * Whether an *agent* may launch a Programmable market. It may not.

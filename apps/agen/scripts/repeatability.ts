@@ -25,16 +25,39 @@
  * The second kind is the honest kind: it can be reproduced, diagnosed and fixed. The first kind
  * is what has to be driven out before a score is worth quoting.
  *
+ * ## Where the divergence starts
+ *
+ * A stage is where an outcome *ended up*, which is not the same as where the runs started to
+ * differ. So each prompt's artefacts are compared across runs as well: the locked specification,
+ * the generated Solidity, and the generated tests. That separates the three questions worth
+ * asking separately —
+ *
+ *   - identical prompt, different specification: interpretation is where the variance enters, and
+ *     everything downstream is building a different market;
+ *   - identical specification, different Solidity: interpretation held and generation drifted;
+ *   - identical specification and Solidity, different tests: the market is reproducible and only
+ *     the suite written to judge it is not, which is the cheapest kind to be left with.
+ *
+ * Compared by content hash, and only for prompts with an artefact in more than one run. Equality
+ * is stricter than it needs to be — two specifications can differ in wording and describe the
+ * same market — so a difference reported here is a question to look at, not a verdict.
+ *
  * Usage:
  *   node scripts/repeatability.ts                    the last 3 runs of the production provider
  *   node scripts/repeatability.ts --runs 4           the last 4
  *   node scripts/repeatability.ts --driver anthropic runs driven by Claude
  */
 
+import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-const ROOT = resolve(import.meta.dirname, "../../../generated/_benchmarks");
+import type { Behaviour, MarketSpecification } from "@verdant/market-compiler";
+import { behaviour, claimDifferences, divergences } from "@verdant/market-compiler";
+
+const GENERATED = resolve(import.meta.dirname, "../../../generated");
+const ROOT = resolve(GENERATED, "_benchmarks");
+const JOBS = resolve(GENERATED, "_jobs");
 
 const argument = (name: string, fallback: string): string => {
   const at = process.argv.indexOf(`--${name}`);
@@ -46,6 +69,7 @@ const driver = argument("driver", "openai");
 
 interface Result {
   readonly symbol: string;
+  readonly jobId: string;
   readonly register: string;
   readonly launched: boolean;
   readonly stage: string;
@@ -78,6 +102,68 @@ function outcomeOf(result: Result): string | null {
   if (result.failureCode === "MODEL_UNAVAILABLE") return null;
 
   return `failed at ${result.failureStage ?? "?"} (${result.failureCode ?? "?"})`;
+}
+
+/** A short content hash, which is all that is needed to say "the same" or "not the same". */
+function digest(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 12);
+}
+
+/**
+ * What a build produced, as three hashes.
+ *
+ * From the job store rather than the workspace, because that is the record of what the build
+ * actually accepted at each stage. A job whose record is gone is silence, not a difference.
+ */
+interface Artefacts {
+  readonly specification: string | null;
+  /**
+   * The market the specification describes, field by field, as opposed to how it was written.
+   *
+   * Kept as separate fields rather than one hash so the report can say what moved. "The
+   * specification differs" is true of any two model answers and says nothing useful; "the fee
+   * changed" and "the rules were named differently" are different findings with different fixes.
+   */
+  readonly market: Behaviour | null;
+  readonly sources: string | null;
+  readonly tests: string | null;
+}
+
+async function artefactsOf(jobId: string): Promise<Artefacts | null> {
+  if (jobId === "") return null;
+
+  let job: {
+    specification?: MarketSpecification | null;
+    sources?: readonly { readonly path: string; readonly content: string }[];
+    tests?: readonly { readonly path: string; readonly content: string }[];
+  };
+  try {
+    job = JSON.parse(await readFile(resolve(JOBS, `${jobId}.json`), "utf8"));
+  } catch {
+    return null;
+  }
+
+  const sources = job.sources ?? [];
+  const tests = job.tests ?? [];
+
+  const specification = job.specification ?? null;
+
+  return {
+    specification: specification === null ? null : digest(specification),
+    /*
+     * What the market does, rather than how the specification says it.
+     *
+     * This started as names and counts, and it could not tell a renamed rule from a changed fee: it
+     * reported eleven of twelve prompts as unstable, nearly all of it wording, which is a finding
+     * that sends you to fix the wrong stage. `behaviour` compares fees, what each side of a trade
+     * experiences, thresholds, where value ends up, phase boundaries and state transitions, and
+     * treats one rule on any trade as equal to a buy rule and a sell rule that say the same thing.
+     */
+    market: specification === null ? null : behaviour(specification),
+    // Paths and contents, sorted, so a file written in a different order is not a difference.
+    sources: sources.length === 0 ? null : digest([...sources].map((file) => [file.path, file.content]).sort()),
+    tests: tests.length === 0 ? null : digest([...tests].map((file) => [file.path, file.content]).sort()),
+  };
 }
 
 const files = (await readdir(ROOT)).filter((name) => name.endsWith(".json")).sort();
@@ -113,6 +199,14 @@ const stable: string[] = [];
 const flipping: { readonly symbol: string; readonly outcomes: readonly string[] }[] = [];
 /** Prompts with fewer than two usable observations: nothing to conclude either way. */
 const thin: string[] = [];
+/**
+ * How often a prompt produced its most common outcome.
+ *
+ * Reported per prompt because the interesting cases are not symmetrical: a prompt that launched
+ * four times out of five is one flake away from reliable, and a prompt that launched once out of
+ * five is a prompt that got lucky. A single score cannot tell those apart.
+ */
+const rate = new Map<string, { readonly runs: number; readonly agreed: number; readonly common: string }>();
 
 console.log("\nper prompt:");
 for (const symbol of symbols) {
@@ -121,6 +215,13 @@ for (const symbol of symbols) {
     return found === undefined ? null : outcomeOf(found);
   });
   const outcomes = seen.filter((entry): entry is string => entry !== null);
+
+  if (outcomes.length > 0) {
+    const tally = new Map<string, number>();
+    for (const outcome of outcomes) tally.set(outcome, (tally.get(outcome) ?? 0) + 1);
+    const [common, agreed] = [...tally].sort((a, b) => b[1] - a[1])[0]!;
+    rate.set(symbol, { runs: outcomes.length, agreed, common });
+  }
 
   if (outcomes.length < 2) {
     thin.push(symbol);
@@ -181,6 +282,95 @@ const readyEveryRun = stable.filter((symbol) => held(symbol, (found) => found.la
 const clarifyEveryRun = stable.filter((symbol) =>
   held(symbol, (found) => found.stage === "awaiting_clarification"),
 );
+
+/*
+ * Where identical prompts stopped agreeing.
+ *
+ * Read in order — specification, then Solidity, then tests — and reported at the first stage that
+ * differs, because everything after a different specification is a different market and saying
+ * "the Solidity differs too" adds nothing.
+ */
+const divergence = new Map<string, string[]>();
+/** What moved, per prompt, so the summary can be read without opening two job files. */
+const details = new Map<string, string[]>();
+
+for (const symbol of symbols) {
+  const seen: Artefacts[] = [];
+  for (const run of compared) {
+    const found = run.results.find((r) => r.symbol === symbol);
+    if (found === undefined) continue;
+    const artefacts = await artefactsOf(found.jobId ?? "");
+    if (artefacts !== null) seen.push(artefacts);
+  }
+
+  if (seen.length < 2) continue;
+
+  const differs = (pick: (entry: Artefacts) => string | null): boolean => {
+    const values = seen.map(pick).filter((value): value is string => value !== null);
+    return values.length > 1 && new Set(values).size > 1;
+  };
+
+  /*
+   * Compared against the first run rather than pairwise across all of them: the question is whether
+   * a prompt produces one market repeatedly, so one reading disagreeing with the first is enough to
+   * answer it, and naming every pair would bury that in combinations.
+   */
+  const markets = seen.map((entry) => entry.market).filter((entry): entry is Behaviour => entry !== null);
+  const behavioural = markets.slice(1).flatMap((entry) => divergences(markets[0]!, entry));
+  const promised = markets.slice(1).flatMap((entry) => claimDifferences(markets[0]!, entry));
+
+  if (behavioural.length > 0) {
+    for (const entry of behavioural) {
+      const what = `the market itself differs — ${entry.what}`;
+      divergence.set(what, [...(divergence.get(what) ?? []), symbol]);
+      details.set(symbol, [...(details.get(symbol) ?? []), `${entry.what}: ${entry.detail}`]);
+    }
+    continue;
+  }
+
+  const at =
+    differs((entry) => entry.sources)
+      ? "same market, different Solidity — generation drifted"
+      : differs((entry) => entry.tests)
+        ? "same market and Solidity, different tests — only the suite is unstable"
+        : promised.length > 0
+          ? "the same market, held to a different set of invariants"
+          : differs((entry) => entry.specification)
+            ? "the same market, worded differently — interpretation is stable in substance"
+            : null;
+
+  if (promised.length > 0) {
+    details.set(symbol, [...(details.get(symbol) ?? []), `invariants: ${promised[0]!.detail}`]);
+  }
+
+  if (at === null) continue;
+  divergence.set(at, [...(divergence.get(at) ?? []), symbol]);
+}
+
+console.log("\nwhere identical prompts stopped agreeing:");
+if (divergence.size === 0) {
+  console.log("  nothing to compare — no prompt has artefacts recorded in two runs");
+} else {
+  for (const [where, prompts] of divergence) {
+    console.log(`  ${String(prompts.length).padStart(2)}  ${where}: ${prompts.join(", ")}`);
+  }
+}
+
+if (details.size > 0) {
+  console.log("\nwhat moved, per prompt:");
+  for (const [symbol, moved] of details) {
+    console.log(`  ${symbol}`);
+    for (const entry of moved) console.log(`      ${entry.slice(0, 300)}`);
+  }
+}
+
+console.log("\nrepeatability rate per prompt:");
+for (const [symbol, entry] of [...rate].sort((a, b) => a[1].agreed / a[1].runs - b[1].agreed / b[1].runs)) {
+  const percent = Math.round((entry.agreed / entry.runs) * 100);
+  console.log(
+    `  ${String(percent).padStart(3)}%  ${symbol.padEnd(8)} ${String(entry.agreed)}/${String(entry.runs)} runs  ${entry.common}`,
+  );
+}
 
 console.log("\nvariance introduced by stage (prompts whose outcome moved):");
 if (varianceByStage.size === 0) {

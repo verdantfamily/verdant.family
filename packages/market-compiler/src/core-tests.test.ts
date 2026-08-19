@@ -100,6 +100,117 @@ describe("the fee a specification states outright", () => {
   });
 
   /**
+   * STORY: "buying should cost you nothing at all, selling costs half a percent". The rule fired on
+   * any trade, the effect carried both rates, and the model also attached a condition of kind
+   * `tradeSide` reading "apply the zero rate to buys and the 0.5% rate to sells". That is the
+   * effect's own sidedness written twice, not a gate — but any condition abandoned the flat reading,
+   * so nothing asserted the half percent, and the benchmark reported a correct market as charging
+   * nothing on the side the whole prompt was about.
+   */
+  it("reads through a condition that only says which side of the trade it is", () => {
+    const sided = market([
+      {
+        id: "asymmetric-trade-fee",
+        title: "SELL FEE, BUYS FREE",
+        when: { kind: "trade", description: "On each buy or sell" },
+        conditions: [
+          {
+            kind: "tradeSide",
+            description: "Apply the zero rate to buys and the 0.5% rate to sells.",
+            parameters: { buySide: "buy", sellSide: "sell" },
+          },
+        ],
+        then: [
+          {
+            kind: "chargeTradeFee",
+            description: "half a percent on sells",
+            parameters: { buyFeePpm: 0, sellFeePpm: 5_000 },
+          },
+        ],
+      },
+    ]);
+
+    expect(statedFee(sided, "sell")).toBe(5_000);
+    expect(statedFee(sided, "buy")).toBe(0);
+  });
+
+  /**
+   * And not through anything that actually gates the fee. Reading a threshold as decoration would
+   * assert a flat rate against a market that waives it — failing a market for being right, which is
+   * the one mistake this file must never make.
+   */
+  it("still abandons the flat reading for a condition that gates on something", () => {
+    const gated = (clause: {
+      readonly kind: string;
+      readonly description: string;
+      readonly parameters?: Record<string, unknown>;
+    }) =>
+      market([
+        {
+          id: "sell-fee",
+          title: "SELL FEE",
+          when: { kind: "sell", description: "Somebody sells" },
+          conditions: [clause],
+          then: [
+            {
+              kind: "chargeFee",
+              description: "half a percent",
+              parameters: { feePpm: 5_000 },
+            },
+          ],
+        },
+      ]);
+
+    // A side-named condition that counts something is a gate, whatever it is called.
+    expect(
+      statedFee(
+        gated({ kind: "tradeSide", description: "sells above ten", parameters: { minimum: 10 } }),
+        "sell",
+      ),
+    ).toBeNull();
+
+    expect(
+      statedFee(gated({ kind: "buyStreak", description: "after ten buys with no sell" }), "sell"),
+    ).toBeNull();
+
+    expect(
+      statedFee(
+        gated({ kind: "tradeSize", description: "more than one percent of liquidity" }),
+        "sell",
+      ),
+    ).toBeNull();
+  });
+
+  /**
+   * HOLD: 0.3% on every swap, paid out to holders when they claim. The payout rule mentions fees
+   * because that is what it distributes, and it made the one number the market is built on
+   * unreadable. A claim happens because somebody asked for it, never because somebody traded.
+   */
+  it("reads a flat fee past a rule a trade cannot trigger", () => {
+    const distributing = market([
+      {
+        id: "swap-fee-collection",
+        title: "SWAP FEE",
+        when: { kind: "swap", description: "Anybody trades" },
+        conditions: [],
+        then: [
+          { kind: "collectFee", description: "0.3% of the swap", parameters: { feePpm: 3_000 } },
+        ],
+      },
+      {
+        id: "holder-fee-distribution",
+        title: "HOLDERS CLAIM",
+        when: { kind: "claim", description: "A holder claims their share" },
+        conditions: [{ kind: "minBalance", description: "holds at least a thousand" }],
+        then: [{ kind: "distributeFees", description: "pay out what was collected" }],
+      },
+    ]);
+
+    expect(statedFee(distributing, "sell")).toBe(3_000);
+    expect(statedFee(distributing, "buy")).toBe(3_000);
+  });
+
+  /**
    * The other half of the same rule: an effect that names only the side you did not ask about
    * has not told you this side is free, it has told you its shape is not understood here.
    */

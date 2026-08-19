@@ -169,7 +169,28 @@ export class ModelError extends Error {
  */
 async function refusal(response: Response): Promise<string | null> {
   try {
-    const body = (await response.clone().json()) as { error?: { type?: unknown } };
+    const body = (await response.clone().json()) as {
+      error?: { type?: unknown; message?: unknown };
+    };
+
+    /*
+     * The one case where the prose has to be read.
+     *
+     * Anthropic reports an empty balance as a plain `invalid_request_error` — the same code as a
+     * malformed request — and says which it is only in the message. Read as a bad request, an
+     * exhausted account looks like a defect in Agen: a whole benchmark run reported "the model
+     * provider answered 400 Bad Request" for five markets while the answer was "add credits",
+     * and finding that out took a hand-written probe.
+     *
+     * Matched, not quoted. The message is tested against a fixed phrase and then discarded, so
+     * nothing a third party wrote — and nothing of the request it may have echoed — is passed
+     * on; the caller emits Agen's own sentence.
+     */
+    const message = body.error?.message;
+    if (typeof message === "string" && /credit balance is too low/i.test(message)) {
+      return "credit_balance_too_low";
+    }
+
     const type = body.error?.type;
     return typeof type === "string" && /^[a-z_]{1,40}$/.test(type) ? type : null;
   } catch {

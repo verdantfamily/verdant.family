@@ -835,6 +835,58 @@ describe("the test repair loop", () => {
     expect(repairCall?.input).not.toContain("Buys since the last sell");
   });
 
+  /**
+   * SIMPLE: interpreted, planned, compiled, deployed and ran its suite, and then three rounds of
+   * repair rewrote its hook and the last one left the file not compiling. The build was reported
+   * unrepairable — a market lost eight minutes after the version that compiled was on the record.
+   *
+   * A repair is allowed to edit contracts, because a failing test is often a real bug in the
+   * market. What it is not allowed to do is have the last word: a market that does not compile has
+   * not been tested, so nothing can be concluded from it while a version that did compile exists.
+   */
+  it("puts back the contracts that compiled rather than losing the market to a repair", async () => {
+    const brokenHook = GOOD_HOOK.replace("consecutiveBuys += 1;", "consecutiveBuys += 1");
+
+    const { options } = pipeline([
+      ...interpretationAnswers(),
+      matchAnswer(),
+      planAnswer(),
+      sources(GOOD_HOOK),
+      tests(FAILING_TESTS),
+      // Every round edits the hook, and the edit does not compile. The tests are corrected on the
+      // way, so a market restored to its compiling contracts has a green suite waiting for it.
+      {
+        diagnosis: "the hook miscounts the streak",
+        files: [
+          { path: "contracts/StreakHook.sol", content: brokenHook },
+          { path: "test/StreakHook.t.sol", content: GOOD_TESTS },
+        ],
+        giveUp: false,
+      },
+      {
+        diagnosis: "the hook still miscounts the streak",
+        files: [{ path: "contracts/StreakHook.sol", content: brokenHook }],
+        giveUp: false,
+      },
+      {
+        diagnosis: "the hook still miscounts the streak",
+        files: [{ path: "contracts/StreakHook.sol", content: brokenHook }],
+        giveUp: false,
+      },
+    ]);
+
+    const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
+
+    // The market that compiled is the market that launched.
+    expect(job.sources.find((source) => source.path.endsWith("StreakHook.sol"))?.content).toBe(
+      GOOD_HOOK,
+    );
+    expect(job.stage).toBe(Stage.DeploymentReady);
+    expect(job.stages.some((record) => (record.detail ?? "").includes("restored to the version"))).toBe(
+      true,
+    );
+  });
+
   it("cannot pass by deleting the failing test", async () => {
     // The repair returns only a trimmed test file. Because merging never removes
     // files, the original still exists — a model cannot make a red suite green by
@@ -1439,6 +1491,68 @@ describe("a rule that came back doing nothing", () => {
     expect(interpreting.at(-1)?.detail).toContain("filled in the effects of 1 rule");
   }, 120_000);
 
+  /**
+   * EMBR — "charge a 3% fee on sells and a 1% fee on buys", about as plain as a prompt gets — came
+   * back with both rates in English and neither in data: `tradeFee` described as "charge a buy fee
+   * of 1% (100 basis points)", with no parameters at all. Everything downstream reads the
+   * parameters, so the market's own fees were invisible to the assertions written to hold it to
+   * them, and to the gate that compares the market against the request. Effects were present, so
+   * the repair that exists for an empty rule never ran.
+   */
+  it("asks again when a rule's numbers are in its prose and not in its parameters", async () => {
+    const { summary: _summary, rules: _rules, ...frame } = specificationAnswer();
+    const effects = specificationAnswer().rules[0]!.then;
+
+    const inProseOnly = () => {
+      const { summary, rules } = specificationAnswer();
+      return {
+        summary,
+        rules: rules.map((rule, index) =>
+          index === 0
+            ? {
+                ...rule,
+                then: rule.then.map((effect) => ({
+                  ...effect,
+                  description: "Charge a fee of 1% (100 basis points) of the input amount.",
+                  parameters: [],
+                })),
+              }
+            : rule,
+        ),
+      };
+    };
+
+    // What a good answer looks like: the same effects, with the rate recorded as data.
+    const withNumbers = effects.map((effect) => ({
+      ...effect,
+      parameters: [{ key: "feeBps", value: 100 }],
+    }));
+
+    const { options, provider } = pipeline([
+      behavioursAnswer(),
+      inProseOnly(),
+      { then: withNumbers },
+      frame,
+      { suggestions: [] },
+      matchAnswer(),
+      planAnswer(),
+      sources(GOOD_HOOK),
+      tests(GOOD_TESTS),
+    ]);
+
+    const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
+
+    expect(job.stage).toBe(Stage.DeploymentReady);
+
+    // The rate is in the specification as a number, where everything downstream can read it.
+    expect(job.specification?.rules[0]?.then[0]?.parameters).toEqual({ feeBps: 100 });
+
+    // Asked at the scale of one rule, and told what was actually wrong with it.
+    const asked = provider.calls.filter((call) => call.stage === "interpreting");
+    expect(asked).toHaveLength(5);
+    expect(asked[2]?.input).toContain("missing its numbers");
+  }, 120_000);
+
   it("gives up on that rule after a bounded number of asks, and says which one", async () => {
     const { options, provider } = pipeline([
       behavioursAnswer(),
@@ -1593,6 +1707,44 @@ describe("showing the creator their market before the slow checks finish", () =>
     expect(reviewed).toBe(true);
     expect(job.stage).toBe(Stage.Failed);
     expect(job.failure?.stage).toBe(Stage.DeepValidation);
+  }, 360_000);
+
+  it("lets the search be answered once, and ships when the answer holds", async () => {
+    // The other half of the round above. PULSE was refused on one model-authored invariant
+    // asserting its streak equalled the number of buys, which is not what its specification
+    // says happens after ten — a wrong assertion, not a broken market, and no round existed in
+    // which anyone could say so. Same keying as the test above: the fixture fails only in the
+    // deep pass, so what reaches deployment is a market that was searched after the repair
+    // rather than one that inherited a pass from the shallower run before it.
+    const FUZZ_FINDS_IT = GOOD_TESTS.replace(
+      "        trades = uint8(bound(trades, 1, 12));",
+      `        if (vm.envOr("FOUNDRY_FUZZ_RUNS", uint256(0)) == 0) assertEq(uint256(1), uint256(0));
+        trades = uint8(bound(trades, 1, 12));`,
+    );
+
+    const { options, provider } = pipeline([
+      ...interpretationAnswers(),
+      matchAnswer(),
+      planAnswer(),
+      sources(GOOD_HOOK),
+      tests(FUZZ_FINDS_IT),
+      {
+        diagnosis: "the invariant asserted a ceiling the market never promised",
+        files: [{ path: "test/StreakHook.t.sol", content: GOOD_TESTS }],
+        giveUp: false,
+      },
+    ]);
+
+    const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
+
+    expect(job.failure).toBeNull();
+    expect(job.stage).toBe(Stage.DeploymentReady);
+
+    // Narrow on purpose: the creator has already been shown this market, so the round may
+    // correct an assertion about it and may not quietly rewrite the market itself.
+    const repair = provider.calls.find((call) => call.stage === "test_repair");
+    expect(repair).toBeDefined();
+    expect(job.sources.find((file) => file.path.endsWith("StreakHook.sol"))?.content).toBe(GOOD_HOOK);
   }, 360_000);
 });
 

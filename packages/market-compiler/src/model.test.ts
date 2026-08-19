@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { StructuredRequest } from "./model.js";
 import {
+  anthropicProvider,
   array,
   bounded,
   fallbackProvider,
@@ -235,6 +236,55 @@ describe("the Responses provider", () => {
     const failure = provider.generate({ ...REQUEST, timeoutMs: 20 });
     await expect(failure).rejects.toThrow(/did not answer within 20ms/);
     await expect(failure).rejects.toMatchObject({ retryable: true });
+  });
+});
+
+describe("the Anthropic provider", () => {
+  /**
+   * An empty Anthropic balance arrives as a plain `invalid_request_error` — the same code a
+   * malformed request gets — and says which it is only in the message. Read as a bad request, an
+   * account that needs topping up looks like a defect in Agen: a benchmark run reported "the
+   * model provider answered 400 Bad Request" for five markets while the answer was "add credits".
+   */
+  it("reads an empty balance out of a 400 that calls itself a bad request", async () => {
+    const provider = anthropicProvider({
+      apiKey: "sk-ant-test",
+      model: "claude-sonnet-4",
+      fetch: respond(
+        {
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message:
+              "Your credit balance is too low to access the Anthropic API. Please go to " +
+              "Plans & Billing to upgrade or purchase credits.",
+          },
+        },
+        { status: 400, statusText: "Bad Request" },
+      ),
+    });
+
+    const error = await provider.generate(REQUEST).catch((thrown: unknown) => thrown);
+
+    expect((error as ModelError).message).toContain("no credits left");
+    // Nothing waiting will fix it, and the fallback provider should get its turn.
+    expect(error).toMatchObject({ retryable: false });
+  });
+
+  it("still says only the status for a request that was genuinely malformed", async () => {
+    const provider = anthropicProvider({
+      apiKey: "sk-ant-test",
+      model: "claude-sonnet-4",
+      fetch: respond(
+        { error: { type: "invalid_request_error", message: "your prompt was: charge 2% on sells" } },
+        { status: 400, statusText: "Bad Request" },
+      ),
+    });
+
+    const error = await provider.generate(REQUEST).catch((thrown: unknown) => thrown);
+
+    expect((error as ModelError).message).toContain("400");
+    expect((error as ModelError).message).not.toContain("charge 2%");
   });
 });
 

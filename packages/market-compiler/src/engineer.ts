@@ -255,18 +255,57 @@ export class ArtefactError extends Error {
    * it. Optional because most stages return a document rather than files.
    */
   readonly files: readonly GeneratedSource[] | undefined;
+  /**
+   * Set when the only thing wrong was that some invariant had no test behind it.
+   *
+   * A suite that is incomplete and a suite that is wrong want different second attempts, and
+   * telling them apart is what lets the next one keep the work. `problems` cannot be used for
+   * this: they are sentences written for the model, and deciding how to retry by matching words in
+   * them would be a guess that silently stops working the day the wording improves.
+   */
+  readonly missingCoverage: readonly string[] | undefined;
+  /**
+   * Set when the suite proves everything and some file reaches around the fixture to do it.
+   *
+   * A third kind of second attempt, and it has to be its own: `missingCoverage` means "keep all
+   * of this and add a test", which is exactly the wrong instruction here. A file that misuses the
+   * fixture has to be *replaced*, and asking only for additions would leave it in the suite
+   * forever while the retries ran out — the hazard the add-only path is deliberately kept narrow
+   * to avoid.
+   *
+   * Only set when nothing else is wrong, on the same reasoning as `missingCoverage`: a suite that
+   * also cites tests it never declared is not a suite with one bad file in it.
+   *
+   * The offending files are usually droppable, and are dropped where the proof survives without
+   * them. This is the case where it does not — the file that misuses the fixture is also the only
+   * thing standing behind an invariant — which used to end the build with the market never in
+   * question. EMBR and STORY are both this.
+   */
+  readonly manualInfrastructure: readonly string[] | undefined;
 
   constructor(
     stage: string,
     problems: readonly string[],
     raw: string,
     files?: readonly GeneratedSource[],
+    /**
+     * What the next attempt can be asked for without throwing this answer away.
+     *
+     * An object rather than two more positional arguments, because the two are mutually
+     * exclusive and a call site passing the wrong one by position would be silent.
+     */
+    repairable?: {
+      readonly missingCoverage?: readonly string[];
+      readonly manualInfrastructure?: readonly string[];
+    },
   ) {
     super(`the model's ${stage} output did not validate: ${problems.slice(0, 5).join("; ")}`);
     this.name = "ArtefactError";
     this.problems = problems;
     this.raw = raw;
     this.files = files;
+    this.missingCoverage = repairable?.missingCoverage;
+    this.manualInfrastructure = repairable?.manualInfrastructure;
   }
 }
 
@@ -431,27 +470,43 @@ function tryParse(value: string): unknown {
  * already has a validator behind it that says so in the stage's own words. So a missing list
  * becomes the complaint it was always going to be, instead of a stack trace.
  */
+/**
+ * Whether a schema of this type is worth walking into, however the type was widened.
+ *
+ * `optional(...)` widens a type to `["array", "null"]` or `["object", "null"]`, and a check for
+ * the bare string reads that as neither: the walk stops at the field and every list nested under
+ * it keeps whatever the model sent, or nothing. `parameters` is spelled that way throughout the
+ * rules schema, so an effect's parameters were reached and the `writes` beside them were not.
+ *
+ * Traversal only. Whether a field that is *absent* gets an empty list is a separate question,
+ * and for a nullable list the answer stays no: null is an answer there, and the readers behind
+ * it already distinguish "no parameters" from "did not say".
+ */
+function walkable(type: string | readonly string[] | undefined, name: "array" | "object"): boolean {
+  return Array.isArray(type) ? type.includes(name) : type === name;
+}
+
 export function fillMissingArrays(value: unknown, schema: JsonSchema): unknown {
   const shape = schema as {
-    type?: string;
+    type?: string | readonly string[];
     properties?: Record<string, JsonSchema>;
     items?: JsonSchema;
   };
 
-  if (shape.type === "array") {
+  if (walkable(shape.type, "array")) {
     if (!Array.isArray(value)) return value;
     return shape.items === undefined
       ? value
       : value.map((entry) => fillMissingArrays(entry, shape.items!));
   }
 
-  if (shape.type !== "object" || shape.properties === undefined) return value;
+  if (!walkable(shape.type, "object") || shape.properties === undefined) return value;
   if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
 
   const filled: Record<string, unknown> = { ...(value as Record<string, unknown>) };
 
   for (const [key, property] of Object.entries(shape.properties)) {
-    const declared = property as { type?: string };
+    const declared = property as { type?: string | readonly string[] };
     const present = filled[key];
 
     if (present === undefined || present === null) {
@@ -1316,9 +1371,17 @@ export async function repairEffects(
     const output = await ask<{ then: RawRule["then"] }>(provider, {
       stage: "interpreting",
       instructions:
-        `The rule "${rule.id}" was written without any effects, so as it stands it does ` +
-        "nothing. Say what it DOES: the fee it charges, the value it moves, the variable " +
-        "it changes. Return only those effects.\n\n" +
+        (rule.then.length === 0
+          ? `The rule "${rule.id}" was written without any effects, so as it stands it does ` +
+            "nothing. Say what it DOES: the fee it charges, the value it moves, the variable " +
+            "it changes. Return only those effects.\n\n"
+          : `The rule "${rule.id}" describes what it does in English and records none of it as ` +
+            "data. Every number in those descriptions has to be a parameter: a rate as ppm, basis " +
+            "points or percent named as such, a threshold as the number it is compared against, a " +
+            "duration in seconds. Return the same effects with their numbers in `parameters`.\n\n" +
+            "Nothing but Agen's own prose reads a description. The tests that hold this market to " +
+            "its fee are written from these parameters, so a rate that stays in a sentence is a " +
+            "rate nothing checks.\n\n") +
         "Its substance may already be sitting in the trigger or the conditions — a " +
         "percentage recorded as a trigger parameter is an effect written in the wrong " +
         "place. Move it here. Name every number. Do not restate the trigger as an effect: " +
@@ -1326,7 +1389,7 @@ export async function repairEffects(
       input: [
         creator,
         "",
-        "The rule, missing its effects:",
+        rule.then.length === 0 ? "The rule, missing its effects:" : "The rule, missing its numbers:",
         JSON.stringify(rule, null, 2),
       ].join("\n"),
       schemaName: "rule_effects",
@@ -1778,7 +1841,29 @@ async function continueInterpretation({
   // Fill in any rule that came back doing nothing, before the frame is asked for: the
   // frame declares state from what the rules write, so a rule with no effects would have
   // it declaring state for a mechanic that is not there yet.
-  const empty = rules.value.rules.filter((rule) => rule.then.length === 0);
+  /*
+   * Two shapes of the same failure, and the second one is worse.
+   *
+   * A rule with no effects at all is obvious and has been repaired here for a while. A rule whose
+   * effects exist but carry no parameters is not obvious, and it is how EMBR — "charge a 3% fee on
+   * sells and a 1% fee on buys", about as plain as a prompt gets — reached the end of interpretation
+   * with both rates living only in English: `tradeFee` with a description reading "charge a buy fee
+   * of 1% (100 basis points)" and nothing in the data. Everything downstream reasons about the
+   * parameters. The fee assertions are written from them, the gate that compares the market to the
+   * request reads them, and the Solidity generator is left to lift the number out of prose.
+   *
+   * The remedy is the one that already exists, asked at the same small scale: this rule, its
+   * effects, again. Being wide here is cheap — a rule that mentions a number and records none is
+   * asked once more and usually comes back with it — and being narrow is expensive, because the
+   * alternative to asking is refusing a market that was understood correctly and written down
+   * carelessly.
+   */
+  const hollow = (rule: RawRules["rules"][number]): boolean =>
+    rule.then.length > 0 &&
+    rule.then.every((effect) => Object.keys(effect.parameters ?? {}).length === 0) &&
+    rule.then.some((effect) => /\d/.test(effect.description ?? ""));
+
+  const empty = rules.value.rules.filter((rule) => rule.then.length === 0 || hollow(rule));
   const repaired = await Promise.all(
     empty.map(async (rule) => repairEffects(provider, { rule, creator, attempts: effectsAttempts })),
   );
@@ -3370,6 +3455,8 @@ export async function generateTests(
     core = [],
     validationProblems,
     previous = [],
+    missingCoverage,
+    manualInfrastructure,
     timeoutMs = STAGE_TIMEOUTS.generateTests,
   }: {
     readonly specification: MarketSpecification;
@@ -3397,13 +3484,83 @@ export async function generateTests(
      * much smaller job than writing one, and it is the same job every time.
      */
     readonly previous?: readonly GeneratedSource[];
+    /**
+     * Invariants the previous suite left unproven, when that was the only thing wrong with it.
+     *
+     * The difference between this and `validationProblems` is the difference between a suite that
+     * is wrong and a suite that is incomplete, and it is worth a separate path because incomplete
+     * was the common case and re-rolling was the wrong answer to it. A suite whose tests compile,
+     * use the fixture correctly and prove nine of ten invariants is nine tenths of a good answer;
+     * asking for a new one throws that away and rolls again on every part of it, which is how the
+     * same market came back refused for a different missing invariant each time.
+     *
+     * So the accepted files are kept as they are and the model is asked for one more test. Nothing
+     * else is up for revision, and the merge below enforces that rather than trusting it.
+     */
+    readonly missingCoverage?: readonly string[];
+    /**
+     * The files that reach around the fixture, with the rule each one broke.
+     *
+     * Selects the third kind of second attempt: keep the suite, rewrite only these files. The
+     * suite is not re-rolled, because everything else in it was accepted and the market itself was
+     * never in question — EMBR lost a build to one security test that declared its own `PoolKey`,
+     * on both attempts, with its other files fine.
+     */
+    readonly manualInfrastructure?: readonly string[];
     readonly timeoutMs?: number;
   },
 ): Promise<StageOutput<TestSuite>> {
+  /*
+   * Coverage repair keeps the suite and asks for the gap. See `missingCoverage`.
+   */
+  const targeted = missingCoverage !== undefined && missingCoverage.length > 0 && previous.length > 0;
+
+  /*
+   * Fixture repair keeps the suite and asks for the named files back. See `manualInfrastructure`.
+   *
+   * Checked after `targeted` and used only when that is off, so the two instructions can never
+   * both be in the prompt: one says "add a test and change nothing", the other says "change these
+   * files". A model given both does neither reliably.
+   */
+  const rewriting =
+    !targeted &&
+    manualInfrastructure !== undefined &&
+    manualInfrastructure.length > 0 &&
+    previous.length > 0;
+
+  /** Either repair keeps the files the answer leaves out. */
+  const keeping = targeted || rewriting;
   const output = await ask<RawTestSuite>(provider, {
     stage: "test_generation",
     instructions:
-      (validationProblems === undefined
+      (targeted
+        ? "The test suite below is yours, it was accepted, and it stays. Every invariant in this " +
+          "market has a test standing behind it except these:\n" +
+          missingCoverage!.map((problem) => `  - ${problem}`).join("\n") +
+          "\nAdd the smallest set of tests that proves them, and nothing else. Return only the " +
+          "file you added, or the one existing file you extended with the new test in it — not " +
+          "the rest of the suite. Any file you leave out is kept exactly as it is, which is what " +
+          "should happen to all of them. Do not rewrite a test that was not named above, do not " +
+          "rename anything, and do not change the contracts: they are not in question here and " +
+          "the market has already been reviewed against them. The coverage field must still " +
+          "account for every invariant, including the ones proved by tests you are not " +
+          "returning.\n\n"
+        : rewriting
+        ? "The test suite below is yours and it stays. It proves what this market claims, and " +
+          "every file in it is accepted except the ones named here, which reach around the test " +
+          "fixture to do their work:\n" +
+          manualInfrastructure!.map((problem) => `  - ${problem}`).join("\n") +
+          "\nReturn corrected versions of exactly those files and nothing else. Every file you " +
+          "leave out is kept as it is. Keep each test that is already there, under the name it " +
+          "already has, proving what it already proves — the market has been reviewed against " +
+          "this suite and a renamed or deleted test loses that. Change only how the test reaches " +
+          "the market: use the canonical launch, key, router and trade helpers the fixture " +
+          "already gives you, rather than declaring, deploying, wiring or funding anything " +
+          "yourself. Where a test proved something by calling a hook callback directly, prove " +
+          "the same thing through a trade. Do not change the contracts: they are not in " +
+          "question. The coverage field must still account for every invariant, including the " +
+          "ones proved by tests you are not returning.\n\n"
+        : validationProblems === undefined
         ? ""
         : "A previous test suite was rejected before compilation for these structural reasons:\n" +
           validationProblems.map((problem) => `  - ${problem}`).join("\n") +
@@ -3471,7 +3628,11 @@ export async function generateTests(
       ...(previous.length === 0
         ? []
         : [
-            "Your previous answer, which was rejected for the problems listed above:",
+            targeted
+              ? "Your suite, which is accepted and which you are adding to:"
+              : rewriting
+              ? "Your suite, which is accepted apart from the files named above:"
+              : "Your previous answer, which was rejected for the problems listed above:",
             previous.map((file) => `--- ${file.path} ---\n${file.content}`).join("\n\n"),
             "",
           ]),
@@ -3488,9 +3649,25 @@ export async function generateTests(
   // Anything the model returned at a path Agen owns is dropped rather than trusted. It was
   // told the core suite is read-only; a copy of it coming back would otherwise overwrite the
   // one test file in the project that is not up for negotiation.
-  const returned = asSources(output.value, "test")
+  const answered = asSources(output.value, "test")
     .filter((file) => !core.some((mine) => mine.path === file.path))
     .map((file) => normalisePinnedV4Api(file));
+
+  /*
+   * In either repair the answer is a change to a suite, not a replacement for one.
+   *
+   * Enforced here rather than asked for: a model that returns two files when it was told to
+   * return one is not a reason to lose the eight tests it did not mention. Files it did return
+   * replace theirs by path — that is the "extend one existing file" case, and the "here is the
+   * corrected file" one — and everything else survives untouched, so a test that was passing
+   * cannot silently become a different test.
+   */
+  const returned = keeping
+    ? [
+        ...previous.filter((file) => !answered.some((entry) => entry.path === file.path)),
+        ...answered,
+      ]
+    : answered;
   /*
    * A claim names a test; how it spells it is not the point.
    *
@@ -3567,7 +3744,23 @@ export async function generateTests(
     testEnvironment === undefined ? [] : manualTestInfrastructureProblems(tests);
   const problems = [...invented, ...untested, ...infrastructure];
   if (problems.length > 0) {
-    throw new ArtefactError("test generation", problems, output.raw, tests);
+    // Incomplete, rather than wrong: everything else about this suite was accepted, so the next
+    // attempt can keep it and be asked only for what is missing. See `missingCoverage`.
+    const coverageOnly = untested.length > 0 && invented.length === 0 && infrastructure.length === 0;
+
+    /*
+     * Wrong in one file, rather than wrong throughout. See `manualInfrastructure`.
+     *
+     * Deliberately not folded into `coverageOnly`: this one replaces the files it names, and the
+     * two instructions contradict each other. A suite missing a test and misusing the fixture is
+     * repaired here first, because the coverage check runs again on the corrected suite anyway.
+     */
+    const fixableInfrastructure = infrastructure.length > 0 && invented.length === 0;
+
+    throw new ArtefactError("test generation", problems, output.raw, tests, {
+      ...(coverageOnly ? { missingCoverage: untested } : {}),
+      ...(fixableInfrastructure ? { manualInfrastructure: infrastructure } : {}),
+    });
   }
 
   return { ...output, value: { files: tests, core: annotatedCore, discarded } };

@@ -646,6 +646,19 @@ const compact = (value: string): string => value.toLowerCase().replace(/[^a-z0-9
  * Comments count only where they are attached to a declaration. A file-header list of
  * invariants is a table of contents, not evidence, and reading one as coverage is the
  * failure this gate exists to catch.
+ *
+ * ## Why `invariant_` declarations count
+ *
+ * Because forge only runs them under that name. Generation asks, in as many words, for "a fuzz
+ * or invariant test" behind every invariant, and a Foundry invariant test has to be called
+ * `invariant_*` — the prefix is how the runner finds it. Matching only `test*` therefore refused
+ * suites for doing exactly what they were told.
+ *
+ * It cost FRAG a build and PULSE another. FRAG's model wrote `invariant_sell_fee`,
+ * `invariant_tax_free_buys` and `invariant_direction_exclusive`, named all three correctly in
+ * the coverage field, and was told "no test stands behind the invariant sell-fee". It was asked
+ * again three times, returned the same correct answer every time, and the build ended — the one
+ * failure a retry cannot fix, because nothing was wrong with the answer.
  */
 export function invariantCoverage({
   invariantIds,
@@ -662,7 +675,7 @@ export function invariantCoverage({
 
     lines.forEach((line, index) => {
       if (isComment(line)) return;
-      const declared = /function\s+(test[A-Za-z0-9_$]*)\s*\(/.exec(line);
+      const declared = /function\s+((?:test|invariant)[A-Za-z0-9_$]*)\s*\(/.exec(line);
       if (declared === null) return;
 
       const name = declared[1]!;

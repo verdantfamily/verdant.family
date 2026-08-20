@@ -23,14 +23,14 @@
     "@verdant/config": "workspace:*",
     "@verdant/market-compiler": "workspace:*",
     "@verdant/sdk": "workspace:*",
-    "@wagmi/connectors": "8.0.26",
-    "lightweight-charts": "^5.2.0",
+    "@wagmi/connectors": "8.1.0",
+    "lightweight-charts": "^5.2.1",
     "next": "^15.5.4",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "server-only": "^0.0.1",
-    "viem": "^2.55.10",
-    "wagmi": "^3.7.5"
+    "viem": "^2.55.16",
+    "wagmi": "^3.7.6"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.6",

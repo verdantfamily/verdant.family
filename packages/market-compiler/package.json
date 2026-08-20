@@ -28,7 +28,7 @@
   "dependencies": {
     "@verdant/config": "workspace:*",
     "undici": "^7.16.0",
-    "viem": "^2.40.0"
+    "viem": "^2.55.16"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",

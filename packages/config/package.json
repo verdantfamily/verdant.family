@@ -19,7 +19,7 @@
     "test": "echo \"@verdant/config is data only; covered by consumers\" && exit 0"
   },
   "dependencies": {
-    "viem": "^2.40.0"
+    "viem": "^2.55.16"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

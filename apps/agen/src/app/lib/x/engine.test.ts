@@ -841,6 +841,28 @@ describe("handleMention, trading", () => {
     expect(recorder.replies[0]?.text).toContain(`Your Agen wallet: ${String(wallet?.address)}`);
     expect(recorder.replies[0]?.text).toContain("2.5 ETH");
   });
+
+  it("says trading is live when asked who has to enable it", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    withModel(LAUNCH_ANSWER);
+
+    const outcome = await handleMention(
+      {
+        command: post({
+          id: "1900000000000000049",
+          text: "@useagen who needs to enable trading execution",
+        }),
+        source: null,
+      },
+      { store, client: client(recorder) as never },
+    );
+
+    expect(outcome.outcome).toBe("answered");
+    expect(recorder.replies[0]?.text).toContain("Trading is live");
+    expect(recorder.replies[0]?.text).toContain("buy 0.01 ETH");
+    expect(executeSponsoredLaunch).not.toHaveBeenCalled();
+  });
 });
 
 // --- the protections ---------------------------------------------------------

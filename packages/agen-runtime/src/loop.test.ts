@@ -550,7 +550,7 @@ describe("research cannot spend money", () => {
     });
 
     const instructions = asked[0]?.instructions ?? "";
-    expect(instructions).toContain("Execution is NOT permitted");
+    expect(instructions).toContain("Launching a token is not permitted");
     expect(instructions).toContain("execution is not permitted for this request");
     // The catalogue marker, not the word: the EXECUTION paragraph names `[EXECUTES]` on purpose to
     // say those tools will refuse. What must be absent is a tool in the list wearing the marker.

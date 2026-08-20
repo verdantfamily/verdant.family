@@ -111,6 +111,20 @@ export function topUpReply(wallet: string, _balanceWei = 0n): string {
  * are listed rather than summed: a value in ether would be a price this reply cannot vouch for
  * a second after posting, and a quantity is a fact.
  */
+/**
+ * Trading is on. Said in those words, because the last time this question reached a
+ * model it answered as though a switch still had to be flipped.
+ */
+export function tradingLiveReply(): string {
+  return [
+    "Trading is live. Nobody needs to turn it on.",
+    "",
+    "buy 0.01 ETH of <contract or $TICKER>",
+    "sell it",
+    "my wallet",
+  ].join("\n");
+}
+
 export function walletReply(holdings: AgentHoldings): string {
   const lines = [`Your Agen wallet: ${holdings.address}`, "", `${ethText(holdings.ethWei)} ETH`];
 

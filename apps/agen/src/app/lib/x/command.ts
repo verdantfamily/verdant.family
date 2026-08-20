@@ -46,6 +46,14 @@ export interface ParsedCommand {
   readonly trade: TradeIntent | null;
   /** Whether the text is asking what this account's wallet holds. */
   readonly asksWallet: boolean;
+  /**
+   * Whether they are asking if trading is on, who has to turn it on, or how to enable it.
+   *
+   * A real buy or sell is {@link trade}. This is the question that used to reach the model
+   * and come back as "trading is not enabled yet" — which was the model reading a launch
+   * permit, not the product.
+   */
+  readonly asksTradingStatus: boolean;
   /** Whether the text is addressed to the bot at all. */
   readonly mentionsBot: boolean;
 }
@@ -379,6 +387,24 @@ export function asksWallet(body: string): boolean {
   return /^(?:wallet|balance|holdings|portfolio)\b[\s?!.]*$/i.test(body.trim());
 }
 
+/**
+ * Whether they are asking if they can trade, not asking to trade.
+ *
+ * The live failure: "who needs to enable trading execution" reached the model, the model
+ * read "execution is not permitted" (which is about launches) and told a public thread
+ * that trading was off. That question is this function, and the answer is a fixed sentence
+ * — trading is on — not a model call.
+ */
+export function asksTradingStatus(body: string): boolean {
+  if (/\benable\s+(?:trading|execution|buys?|sells?)\b/i.test(body)) return true;
+  if (/\b(?:trading|execution)\s+(?:enabled|on|available|live|off|disabled)\b/i.test(body)) {
+    return true;
+  }
+  if (/\bwho\b.{0,48}\benable\b/i.test(body)) return true;
+  if (/\b(?:is|can|does)\b.{0,24}\b(?:trad(?:e|ing)|buy|sell)\b/i.test(body)) return true;
+  return false;
+}
+
 export function parseCommand(text: string, handle: string, context = ""): ParsedCommand {
   const mentionsBot = new RegExp(`@${escape(handle)}\\b`, "i").test(text);
 
@@ -403,6 +429,7 @@ export function parseCommand(text: string, handle: string, context = ""): Parsed
     // way spends the person's ether on a token they had not asked for yet.
     trade: looksLikeLaunch ? null : parseTrade(body, context),
     asksWallet: asksWallet(body),
+    asksTradingStatus: asksTradingStatus(body),
     mentionsBot,
   };
 }
@@ -417,6 +444,7 @@ export function parseCommand(text: string, handle: string, context = ""): Parsed
 export function needsSource(parsed: ParsedCommand): boolean {
   if (parsed.trade !== null) return false;
   if (parsed.asksWallet) return false;
+  if (parsed.asksTradingStatus) return false;
   return true;
 }
 

@@ -24,7 +24,8 @@ describe("instructionsFor", () => {
       execution: false,
     });
 
-    expect(text).toContain("Execution is NOT permitted");
+    expect(text).toContain("Launching a token is not permitted");
+    expect(text).toContain("Trading is already");
     expect(text).toContain("inspect_token");
   });
 
@@ -78,6 +79,7 @@ describe("instructionsFor", () => {
     // The capability, because a model that denies it would contradict a bot that has just
     // filled somebody's buy.
     expect(text).toContain("BUYING AND SELLING");
+    expect(text).toContain("Trading is live");
     expect(text).toContain("handled before you see the post");
     // The last time this block listed example commands, the model quoted them back at a
     // person who had just asked to buy. The instruction is now to write one sentence of its

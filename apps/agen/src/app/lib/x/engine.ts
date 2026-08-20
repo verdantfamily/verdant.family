@@ -46,7 +46,7 @@ import { executeSponsoredLaunch, ensureSeat } from "./launch";
 import { publicClient } from "../onchain";
 import { readAgentHoldings } from "../agents/holdings";
 import { agentStore, type AgentStore } from "../agents/store";
-import { launchReply, refusalReply, tradeReply, walletReply } from "./reply";
+import { launchReply, refusalReply, tradeReply, tradingLiveReply, walletReply } from "./reply";
 import { seatFor } from "./seat";
 import { assertSponsorFunded } from "./sponsor";
 import { xStore, type XStore } from "./store";
@@ -162,6 +162,7 @@ export async function handleMention(
 
     if (parsed.trade !== null) return await trade(mention, parsed.trade, traders);
     if (parsed.asksWallet) return await tellWallet(mention, traders);
+    if (parsed.asksTradingStatus) return await tellTradingLive(mention, traders);
 
     const enriched = await enrichMention(mention, client);
     const routed = await routeMention(enriched, undefined, { client });
@@ -550,6 +551,36 @@ async function trade(
       retryable: false,
     };
   }
+}
+
+/**
+ * Trading is on. Said here so a question about a switch never reaches a model that
+ * was told launches are not permitted and answers as though buying is off too.
+ */
+async function tellTradingLive(
+  mention: XMention,
+  deps: TradeHandlers,
+): Promise<MentionOutcome> {
+  const { store, client } = deps;
+  const replyPostId = await postReply(client, mention.command.id, tradingLiveReply());
+  store.settleMention({
+    commandPostId: mention.command.id,
+    intent: "QUESTION",
+    outcome: "answered",
+    code: null,
+    replyPostId,
+    error: null,
+  });
+
+  return {
+    outcome: "answered",
+    intent: "QUESTION",
+    launchId: null,
+    token: null,
+    replyPostId,
+    code: null,
+    retryable: false,
+  };
 }
 
 /**

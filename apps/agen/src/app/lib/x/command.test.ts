@@ -240,10 +240,23 @@ describe("parseTrade", () => {
     });
   });
 
+  it("treats 'who needs to enable trading' as a status question, not a mystery", () => {
+    for (const text of [
+      "@useagen who needs to enable trading execution",
+      "@useagen is trading enabled",
+      "@useagen can you trade",
+      "@useagen enable trading",
+    ]) {
+      expect(parseCommand(text, BOT).asksTradingStatus, text).toBe(true);
+      expect(parseCommand(text, BOT).trade, text).toBe(null);
+    }
+  });
+
   it("does not wait on a parent when the trade or the wallet is already named", () => {
     expect(needsSource(parseCommand("@useagen buy 0.001 ETH of $DOG", BOT))).toBe(false);
     expect(needsSource(parseCommand("@useagen sell $DOG", BOT))).toBe(false);
     expect(needsSource(parseCommand("@useagen my wallet", BOT))).toBe(false);
+    expect(needsSource(parseCommand("@useagen is trading enabled", BOT))).toBe(false);
     expect(needsSource(parseCommand("@useagen now buy 0.005 ETH of it", BOT))).toBe(true);
     expect(needsSource(parseCommand("@useagen launch this", BOT))).toBe(true);
   });

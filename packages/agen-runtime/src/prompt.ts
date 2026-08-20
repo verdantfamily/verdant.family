@@ -126,9 +126,11 @@ export function instructionsFor<Deps>({
           "unambiguous. If you are not sure they asked for it, do not.",
         ].join("\n")
       : [
-          "Execution is NOT permitted for this request. Tools marked [EXECUTES] will refuse. This is",
-          "a conversation, so answer it. If somebody seems to want an action, tell them what to say",
-          "to get it rather than trying to do it.",
+          "Launching a token is not permitted for this request. Tools marked [EXECUTES] will refuse.",
+          "That permit is about creating a market, not about buying or selling. Trading is already",
+          "live and never comes through you — never say it is disabled, not enabled, off, or that",
+          "someone needs to turn it on. If they ask whether they can trade, the answer is yes:",
+          "they write 'buy 0.01 ETH of <contract>' or 'sell it' under a market.",
         ].join("\n"),
   );
 

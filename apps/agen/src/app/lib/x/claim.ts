@@ -38,10 +38,13 @@ import { getAddress, isAddress, type Address } from "viem";
 import { abi, instant as instantSdk } from "@verdant/sdk";
 
 import { publicClient } from "../onchain";
+import { readAgentHoldings } from "../agents/holdings";
+import { agentStore } from "../agents/store";
 import { XError } from "./errors";
 import { assertSeatBelongsTo, seatFor } from "./seat";
 import { seatOpenerAddress, sendAsSeatOpener, sendSponsoredToSeat, sponsorAddress } from "./sponsor";
 import { xStore, type XStore } from "./store";
+import { isClaimed, linkXWalletOwner } from "./wallet";
 import type { XIdentity, XLaunchRecord } from "./types";
 
 /** One market as the dashboard shows it: the record, plus what the chain says about the money. */
@@ -66,9 +69,30 @@ export interface SeatSummary {
   readonly claimed: boolean;
 }
 
+/**
+ * The account's trading wallet, when it has one.
+ *
+ * `owner` is the field that matters and it is reported rather than hidden: until an address is
+ * linked, nothing can withdraw from this wallet, and somebody who has funded it is entitled to
+ * know that before they add more. It becomes their address the moment they claim a seat.
+ */
+export interface WalletSummary {
+  readonly address: Address;
+  readonly ethWei: bigint;
+  readonly positions: readonly {
+    readonly token: Address;
+    readonly symbol: string;
+    readonly amount: string;
+  }[];
+  /** The address that may withdraw, or null while none has been proved. */
+  readonly owner: Address | null;
+}
+
 export interface CreatorView {
   readonly identity: XIdentity;
   readonly seat: SeatSummary;
+  /** Null when this account has never traded, because a wallet is made on first use. */
+  readonly wallet: WalletSummary | null;
   readonly launches: readonly ClaimableLaunch[];
   readonly totals: {
     readonly launches: number;
@@ -140,12 +164,41 @@ export async function creatorView(
   return {
     identity,
     seat: await seatSummary(identity),
+    wallet: await walletSummary(identity.xUserId, store),
     launches,
     totals: {
       launches: records.filter((record) => record.status === "launched").length,
       earnedWei: launches.reduce((sum, entry) => sum + entry.earnedWei, 0n),
       claimableWei: launches.reduce((sum, entry) => sum + entry.claimableWei, 0n),
     },
+  };
+}
+
+/**
+ * This account's trading wallet, or null if it has never made one.
+ *
+ * Deliberately does not create one. A wallet appears when somebody asks to trade or asks for
+ * their address, and making one for every visitor to the dashboard would generate keys for
+ * people who never asked for an account.
+ */
+async function walletSummary(xUserId: string, store: XStore): Promise<WalletSummary | null> {
+  const row = store.walletFor(xUserId);
+  if (row === null) return null;
+
+  const agents = agentStore();
+  const agent = agents.getAgent(row.agentId);
+  if (agent === null) return null;
+
+  const holdings = await readAgentHoldings(agents, agent);
+  return {
+    address: row.address,
+    ethWei: holdings.ethWei,
+    positions: holdings.positions.map((position) => ({
+      token: position.token,
+      symbol: position.symbol,
+      amount: position.amount,
+    })),
+    owner: isClaimed(agent) ? agent.ownerAddress : null,
   };
 }
 
@@ -225,6 +278,10 @@ export async function offerSeat(
     // handover is done, and told it by the chain rather than by a stored flag.
     store.setClaimWallet(identity.xUserId, state.beneficiary);
     store.setClaimStatusForUser(identity.xUserId, "claimed", state.beneficiary);
+    // The strongest proof available that this address is theirs: they took the seat, which
+    // needed a signature from it. If they also have a trading wallet, this is the address that
+    // may empty it.
+    linkXWalletOwner(identity.xUserId, state.beneficiary, { store });
     return {
       seat: derived.seat,
       wallet: state.beneficiary,
@@ -244,6 +301,19 @@ export async function offerSeat(
   }
 
   store.setClaimStatusForUser(identity.xUserId, "offered", wallet);
+  /*
+   * The address a signed-in account nominated, recorded as the one that may withdraw from its
+   * trading wallet.
+   *
+   * Weaker proof than the branch above — nothing here has signed from that address yet — and
+   * accepted at the same level of trust the seat handover already runs at, because it is the
+   * same decision by the same verified identity: this is the wallet I want my money to go to.
+   * What stops it being a way in is that naming an address grants nothing on its own. Recovery
+   * still demands a signature from it, so the worst a mistake here can do is point a person's
+   * own funds at an address they typed wrong, and the worst an X account takeover can do is
+   * what it could already do to that account's fee stream.
+   */
+  linkXWalletOwner(identity.xUserId, wallet, { store });
 
   return {
     seat: derived.seat,

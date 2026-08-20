@@ -576,6 +576,7 @@ describe("agent wallets and sessions", () => {
         ownerAddress: OWNER,
         walletAddress: OWNER,
         status: "paused",
+        kind: "agent",
         createdAt: 0,
         updatedAt: 0,
       }),

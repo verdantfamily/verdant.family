@@ -10,6 +10,18 @@
 export const AGENT_STATUSES = ["active", "paused", "archived"] as const;
 export type AgentStatus = (typeof AGENT_STATUSES)[number];
 
+/**
+ * What an agent row is for.
+ *
+ * `agent` is the product: a named account somebody created, with a profile and a directory
+ * entry. `x_wallet` is one X account's trading wallet, which reuses this table for the
+ * things that are genuinely the same — an isolated encrypted key, an allowlisted signer, a
+ * spend ledger, an owner who can withdraw — and is not a published agent. The distinction
+ * exists so that listings can ask for the first without excluding by convention.
+ */
+export const AGENT_KINDS = ["agent", "x_wallet"] as const;
+export type AgentKind = (typeof AGENT_KINDS)[number];
+
 export const LAUNCH_KINDS = ["instant", "programmable"] as const;
 export type LaunchKind = (typeof LAUNCH_KINDS)[number];
 
@@ -59,6 +71,7 @@ export interface AgentRecord {
   readonly ownerAddress: `0x${string}`;
   readonly walletAddress: `0x${string}`;
   readonly status: AgentStatus;
+  readonly kind: AgentKind;
   readonly createdAt: number;
   readonly updatedAt: number;
 }

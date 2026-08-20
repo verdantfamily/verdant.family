@@ -24,6 +24,8 @@
  * chain.
  */
 
+import { getAddress, isAddress, parseEther, type Address } from "viem";
+
 import { BOUNDS } from "@verdant/config";
 
 /** What the text asked for, as far as the text alone can say. */
@@ -36,8 +38,40 @@ export interface ParsedCommand {
   readonly explicitName: string | null;
   /** Whether the words look like a request to launch something. A hint, never a decision. */
   readonly looksLikeLaunch: boolean;
+  /**
+   * A trade the text asked for outright, or null.
+   *
+   * Unlike `looksLikeLaunch` this one *is* the decision — see {@link parseTrade}.
+   */
+  readonly trade: TradeIntent | null;
+  /** Whether the text is asking what this account's wallet holds. */
+  readonly asksWallet: boolean;
   /** Whether the text is addressed to the bot at all. */
   readonly mentionsBot: boolean;
+}
+
+/**
+ * Which token a trade is about.
+ *
+ * An address is the whole answer. A ticker is a lookup somebody else has to do, and it is
+ * kept as a ticker here rather than resolved, because resolving it needs the market list and
+ * this file is pure — and because the two cases fail differently: an address that is not a
+ * market is a mistake, and a ticker matching two markets is a question.
+ */
+export type TradeTarget =
+  | { readonly kind: "address"; readonly token: Address }
+  | { readonly kind: "ticker"; readonly ticker: string };
+
+export interface TradeIntent {
+  readonly side: "buy" | "sell";
+  readonly target: TradeTarget;
+  /**
+   * Ether to spend, for a buy. Null when they asked to buy without saying how much, which
+   * is answered with a question rather than a guess.
+   */
+  readonly amountWei: bigint | null;
+  /** Share of the holding to sell, for a sell. 1 means all of it. */
+  readonly fraction: number | null;
 }
 
 /**
@@ -177,6 +211,129 @@ function findName(body: string): string | null {
   return null;
 }
 
+/**
+ * The verbs that mean money moves, and the ones that only mean it might.
+ *
+ * "buy" and "sell" are here. "get", "grab" and "want" are not, and that is the line: this
+ * parse is the authorisation for spending somebody's balance, so a word that is a request
+ * half the time is a word that would spend money half the time.
+ */
+const BUY_VERBS = /\b(?:buy|ape|aping|bought)\b/i;
+const SELL_VERBS = /\b(?:sell|dump|selling)\b/i;
+
+/** An amount of ether: `0.001`, `.5`, `2`. Written before the unit, as people write it. */
+const ETH_AMOUNT = /(\d+(?:\.\d+)?|\.\d+)\s*(?:eth\b|ether\b|Ξ)/i;
+
+/** A contract address, wherever it sits in the sentence and whatever brackets are round it. */
+const CONTRACT = /0x[a-fA-F0-9]{40}\b/;
+
+/**
+ * What somebody asked to trade, or null.
+ *
+ * ## Why this is the decision and the launch hint is not
+ *
+ * A launch spends Agen's gas on a guess, so a wrong guess costs Agen a market nobody wanted
+ * and the model gets a say in whether to make one. A trade spends the person's own ether at a
+ * price they cannot take back, so nothing may infer one: the amount, the side and the token
+ * all come from characters they typed, and anything short of that returns null and becomes an
+ * ordinary answer. There is no reading of this function under which a model's output can
+ * choose what to buy.
+ *
+ * Questions are excluded for the same reason. "how do I buy 0.1 eth of $DOG" contains an
+ * amount, a side and a token, and is not an instruction.
+ */
+export function parseTrade(body: string): TradeIntent | null {
+  if (ASKS_ABOUT.some((pattern) => pattern.test(body))) return null;
+
+  const buy = BUY_VERBS.exec(body);
+  const sell = SELL_VERBS.exec(body);
+  if (buy === null && sell === null) return null;
+
+  // Both words in one post — "sell $DOG and buy $CAT" — is not something to guess at. The
+  // earlier verb wins only when the other one has no token of its own to be about; here the
+  // token search is shared, so two verbs mean the sentence is ambiguous and it is left alone.
+  if (buy !== null && sell !== null) return null;
+
+  const target = tradeTarget(body);
+  if (target === null) return null;
+
+  if (sell !== null) return { side: "sell", target, amountWei: null, fraction: sellFraction(body) };
+
+  return { side: "buy", target, amountWei: buyAmount(body), fraction: null };
+}
+
+function tradeTarget(body: string): TradeTarget | null {
+  const contract = CONTRACT.exec(body);
+  if (contract !== null) {
+    const raw = contract[0];
+    // EIP-55 used for what it is for. A mixed-case address carries a checksum, so one that
+    // fails it is a character that got mistyped or mangled in transit — and the token at the
+    // address as typed is not the token that was meant. An address in one case throughout
+    // carries no checksum to test, which is normal and is accepted.
+    const mixed = raw !== raw.toLowerCase() && raw.slice(2) !== raw.slice(2).toUpperCase();
+    if (mixed && !isAddress(raw, { strict: true })) return null;
+    return { kind: "address", token: getAddress(raw) };
+  }
+
+  const ticker = findTicker(body);
+  return ticker === null ? null : { kind: "ticker", ticker };
+}
+
+/**
+ * The ether a buy should spend, or null when they did not say.
+ *
+ * Null rather than a default. Every default here is somebody's money: a small one spends less
+ * than they meant on a market that may have moved by the time they notice, and a large one is
+ * indefensible. Being asked "how much?" costs a round trip.
+ */
+function buyAmount(body: string): bigint | null {
+  const found = ETH_AMOUNT.exec(body);
+  if (found === null) return null;
+  try {
+    const value = parseEther(found[1]!);
+    return value > 0n ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * How much of a holding to sell.
+ *
+ * Defaults to all of it, because "sell $DOG" means sell the position — and unlike a buy there
+ * is no way for that default to spend more than the person has. A percentage is honoured, and
+ * a token quantity is deliberately not read: "sell 1000 $DOG" reads as a quantity to a person
+ * and as an ambiguity to a parser that cannot know the decimals, so it sells the position.
+ */
+function sellFraction(body: string): number {
+  const percent = /(\d{1,3}(?:\.\d+)?)\s*%/.exec(body);
+  if (percent !== null) {
+    const value = Number(percent[1]);
+    if (Number.isFinite(value) && value > 0 && value <= 100) return value / 100;
+  }
+  if (/\bhalf\b/i.test(body)) return 0.5;
+  return 1;
+}
+
+/**
+ * Whether they are asking about their own wallet.
+ *
+ * Answered without a model because the answer is a balance, and a model asked "what is my
+ * balance" would either invent one or call a tool to read the same figure this reads. Kept
+ * narrow: it has to be about *their* wallet or a balance, so "the wallet that launched this"
+ * stays an ordinary question.
+ */
+export function asksWallet(body: string): boolean {
+  if (/\b(?:my|our)\s+(?:agen\s+)?(?:wallet|balance|address|portfolio|holdings|positions)\b/i.test(body)) {
+    return true;
+  }
+  if (/\bwallet\s+(?:balance|address)\b/i.test(body)) return true;
+  if (/\b(?:deposit|funding|top[\s-]?up)\s+address\b/i.test(body)) return true;
+  // A bare "balance?" or "wallet?" addressed to the bot is about theirs; there is nothing
+  // else it could be about when the whole instruction is that one word.
+  return /^(?:wallet|balance|holdings|portfolio)\b[\s?!.]*$/i.test(body.trim());
+}
+
 export function parseCommand(text: string, handle: string): ParsedCommand {
   const mentionsBot = new RegExp(`@${escape(handle)}\\b`, "i").test(text);
 
@@ -187,6 +344,7 @@ export function parseCommand(text: string, handle: string): ParsedCommand {
 
   const asks = ASKS_ABOUT.some((pattern) => pattern.test(body));
   const commands = LAUNCH_PHRASES.some((pattern) => pattern.test(body));
+  const looksLikeLaunch = commands && !asks;
 
   return {
     body,
@@ -194,7 +352,12 @@ export function parseCommand(text: string, handle: string): ParsedCommand {
     explicitName: findName(body),
     // "can you launch this?" is imperative despite the question mark, so the interrogative
     // patterns are what withdraw the hint rather than the punctuation.
-    looksLikeLaunch: commands && !asks,
+    looksLikeLaunch,
+    // A post that asks for both — "launch $DOG then buy 0.1 eth of it" — is treated as the
+    // launch. Guessing wrong that way spends Agen's gas on a market; guessing wrong the other
+    // way spends the person's ether on a token they had not asked for yet.
+    trade: looksLikeLaunch ? null : parseTrade(body),
+    asksWallet: asksWallet(body),
     mentionsBot,
   };
 }

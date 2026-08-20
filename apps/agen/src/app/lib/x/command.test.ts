@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { getAddress, parseEther } from "viem";
 
 import { normaliseName, normaliseTicker, parseCommand } from "./command";
 import { seatLabel } from "./seat";
@@ -120,6 +121,135 @@ describe("parseCommand", () => {
   it("knows when it is not being addressed", () => {
     expect(parseCommand("agen launched a token today", BOT).mentionsBot).toBe(false);
     expect(parseCommand("@useagenda launch this", BOT).mentionsBot).toBe(false);
+  });
+});
+
+/**
+ * The one parse that spends somebody's money.
+ *
+ * Tested harder than the launch grammar and in the opposite direction. There, a miss costs a
+ * model call; here, a false positive is a stranger's ether spent on a token they were talking
+ * about rather than asking for — so most of these cases are about *not* trading.
+ */
+describe("parseTrade", () => {
+  const TOKEN = "0x1111111111111111111111111111111111111111";
+
+  it("reads the buy people will actually type", () => {
+    const parsed = parseCommand(`@useagen buy 0.001 ETH of ${TOKEN}`, BOT);
+    expect(parsed.trade).toEqual({
+      side: "buy",
+      target: { kind: "address", token: getAddress(TOKEN) },
+      amountWei: parseEther("0.001"),
+      fraction: null,
+    });
+  });
+
+  it("reads the amount however it is written", () => {
+    for (const [text, expected] of [
+      ["buy 0.5 eth of $DOG", parseEther("0.5")],
+      ["buy .25 ETH of $DOG", parseEther("0.25")],
+      ["buy 2 ether of $DOG", parseEther("2")],
+      ["ape 0.01 eth into $DOG", parseEther("0.01")],
+    ] as const) {
+      expect(parseCommand(`@useagen ${text}`, BOT).trade?.amountWei, text).toBe(expected);
+    }
+  });
+
+  it("takes a contract address out of the brackets people put it in", () => {
+    const parsed = parseCommand(`@useagen buy 0.001 ETH of (${TOKEN})`, BOT);
+    expect(parsed.trade?.target).toEqual({ kind: "address", token: getAddress(TOKEN) });
+  });
+
+  it("keeps a ticker as a ticker, for somebody else to resolve", () => {
+    expect(parseCommand("@useagen buy 0.01 eth of $DOG", BOT).trade?.target).toEqual({
+      kind: "ticker",
+      ticker: "DOG",
+    });
+  });
+
+  it("asks how much rather than choosing an amount", () => {
+    const parsed = parseCommand("@useagen buy $DOG", BOT);
+    expect(parsed.trade?.side).toBe("buy");
+    expect(parsed.trade?.amountWei).toBe(null);
+  });
+
+  it("sells the position by default and honours a share when given one", () => {
+    expect(parseCommand("@useagen sell $DOG", BOT).trade?.fraction).toBe(1);
+    expect(parseCommand("@useagen sell all my $DOG", BOT).trade?.fraction).toBe(1);
+    expect(parseCommand("@useagen sell 50% of $DOG", BOT).trade?.fraction).toBe(0.5);
+    expect(parseCommand("@useagen sell half my $DOG", BOT).trade?.fraction).toBe(0.5);
+  });
+
+  it("does not read a question about buying as an instruction to buy", () => {
+    for (const text of [
+      "@useagen how do i buy 0.1 eth of $DOG",
+      "@useagen what happens when i buy $DOG",
+      "@useagen why would anyone buy 1 eth of $DOG",
+      "@useagen when should i sell $DOG",
+    ]) {
+      expect(parseCommand(text, BOT).trade, text).toBe(null);
+    }
+  });
+
+  it("refuses to guess when a post asks for both sides", () => {
+    expect(parseCommand("@useagen sell $DOG and buy $CAT", BOT).trade).toBe(null);
+  });
+
+  it("does not trade on a post with no token in it", () => {
+    expect(parseCommand("@useagen buy 0.1 eth", BOT).trade).toBe(null);
+    expect(parseCommand("@useagen i bought the dip", BOT).trade).toBe(null);
+  });
+
+  it("lets a launch win when a post asks for both", () => {
+    // Guessing wrong this way costs Agen gas. Guessing wrong the other way costs the person
+    // ether they had not asked to spend yet.
+    const parsed = parseCommand("@useagen launch $DOG then buy 0.1 eth of it", BOT);
+    expect(parsed.looksLikeLaunch).toBe(true);
+    expect(parsed.trade).toBe(null);
+  });
+
+  it("will not buy a mistyped address", () => {
+    // `0x…1aAa` is the checksummed form; `0x…1AAa` is the same address with one letter's case
+    // flipped, which is what a mangled copy-paste looks like. The token at the address as typed
+    // is not the token that was meant, so it is refused rather than corrected.
+    expect(
+      parseCommand("@useagen buy 0.1 eth of 0x1111111111111111111111111111111111111AAa", BOT).trade,
+    ).toBe(null);
+  });
+
+  it("still accepts an address written in one case throughout", () => {
+    // Lower case carries no checksum to fail, and it is how most addresses are pasted.
+    const lower = "0x1111111111111111111111111111111111111aaa";
+    expect(parseCommand(`@useagen buy 0.1 eth of ${lower}`, BOT).trade?.target).toEqual({
+      kind: "address",
+      token: getAddress(lower),
+    });
+  });
+});
+
+describe("asksWallet", () => {
+  it("recognises somebody asking about their own wallet", () => {
+    for (const text of [
+      "@useagen my wallet",
+      "@useagen what's my balance",
+      "@useagen wallet balance",
+      "@useagen my holdings",
+      "@useagen deposit address",
+      "@useagen wallet?",
+      "@useagen balance",
+    ]) {
+      expect(parseCommand(text, BOT).asksWallet, text).toBe(true);
+    }
+  });
+
+  it("leaves questions about other wallets to the model", () => {
+    for (const text of [
+      "@useagen which wallet launched this",
+      "@useagen is the treasury wallet public",
+      "@useagen what does this wallet hold",
+    ]) {
+      expect(parseCommand(text, BOT).asksWallet, text).toBe(false);
+    }
   });
 });
 

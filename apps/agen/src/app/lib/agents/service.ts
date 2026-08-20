@@ -101,6 +101,7 @@ export function createAgent(
       ownerAddress: owner,
       walletAddress: wallet.address,
       status: "active",
+      kind: "agent",
       createdAt: now,
       updatedAt: now,
     },

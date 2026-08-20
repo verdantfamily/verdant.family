@@ -49,6 +49,30 @@ export type XErrorCode =
   | "WRONG_CHAIN"
   /** The chain refused the launch. */
   | "LAUNCH_REVERTED"
+  /* --- trading, where the money is the person's own ------------------------ */
+  /** Trading is switched off on this deployment. */
+  | "TRADING_DISABLED"
+  /** Their wallet does not hold enough for what they asked, gas included. */
+  | "WALLET_UNFUNDED"
+  /** They asked to buy without saying how much. */
+  | "AMOUNT_MISSING"
+  /** The token named is not a market that can be traded here. */
+  | "TOKEN_NOT_FOUND"
+  /** A ticker that names more than one market. Never resolved by picking one. */
+  | "TOKEN_AMBIGUOUS"
+  /** A sell of something the wallet does not hold. */
+  | "NOTHING_TO_SELL"
+  /** The chain refused the swap. Gas was spent and nothing else was. */
+  | "TRADE_REVERTED"
+  /**
+   * A swap whose outcome could not be confirmed.
+   *
+   * Kept apart from `TRADE_REVERTED` because the two are different things to tell somebody
+   * about their own money. A revert is a fact: it did not happen. This is an admission: the
+   * transaction may have been mined after the receipt stopped being waited for, so the reply
+   * says to check rather than claiming nothing was spent.
+   */
+  | "TRADE_FAILED"
   /** A transaction was sent and its outcome is unknown. Never retried. */
   | "LAUNCH_INDETERMINATE"
   | "X_UNAVAILABLE"
@@ -92,6 +116,11 @@ export class XError extends Error {
  * The test is whether the person can act on it. "There is no post above this one to launch"
  * is useful and cannot be gamed. "You have had three launches today" tells a farm to spread
  * out; "that account is too new" tells it to age its accounts. Those stay in the log.
+ *
+ * Every trading refusal is speakable, and that is not an exception to the rule above but the
+ * rule applied: somebody who asked to spend their own ether and did not spend it is owed the
+ * reason, none of these reveal a limit worth gaming, and silence after "buy 0.01 ETH of this"
+ * is the one outcome that would leave a person wondering whether their money had moved.
  */
 export function speakable(code: XErrorCode): boolean {
   switch (code) {
@@ -102,6 +131,14 @@ export function speakable(code: XErrorCode): boolean {
     case "NO_IMAGE":
     case "LAUNCHES_DISABLED":
     case "LAUNCH_REVERTED":
+    case "TRADING_DISABLED":
+    case "WALLET_UNFUNDED":
+    case "AMOUNT_MISSING":
+    case "TOKEN_NOT_FOUND":
+    case "TOKEN_AMBIGUOUS":
+    case "NOTHING_TO_SELL":
+    case "TRADE_REVERTED":
+    case "TRADE_FAILED":
       return true;
     default:
       return false;

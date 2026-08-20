@@ -162,6 +162,28 @@ const MIGRATIONS: readonly { readonly version: number; readonly sql: string }[] 
       CREATE INDEX IF NOT EXISTS idx_x_events_seen ON x_events(seen_at);
     `,
   },
+  {
+    // Where an X account's money is.
+    //
+    // Only the mapping is here. The key itself, its encryption, the spend ledger and the
+    // allowlisted signer are the agent store's, because that is a wallet Agen already knows
+    // how to hold safely and a second implementation of it would be a second thing to get
+    // wrong. This table is the join: one X id, one agent row, and the address a person is
+    // told to send ether to.
+    //
+    // `agent_id` is unique as well as `x_user_id` being the key, so two accounts cannot end
+    // up sharing a wallet however badly a caller behaves. There is no foreign key because
+    // the row it would point at is in another database file.
+    version: 2,
+    sql: `
+      CREATE TABLE IF NOT EXISTS x_wallets (
+        x_user_id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL UNIQUE,
+        address TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 /** UTC, like the agent store's, so a day boundary is the same one everywhere. */
@@ -219,6 +241,16 @@ export interface XDayUsage {
   readonly day: string;
   readonly launches: number;
   readonly gasWei: bigint;
+}
+
+/** One X account's trading wallet, as this database knows it. */
+export interface XWalletRow {
+  readonly xUserId: string;
+  /** The agent row that holds the encrypted key and the spend ledger. */
+  readonly agentId: string;
+  /** Where a person sends ether to fund it. */
+  readonly address: Address;
+  readonly createdAt: number;
 }
 
 export interface XIdentityRow {
@@ -329,7 +361,7 @@ export class XStore {
   settleMention(input: {
     readonly commandPostId: string;
     readonly intent: XIntent | null;
-    readonly outcome: "launched" | "answered" | "ignored" | "refused" | "failed";
+    readonly outcome: "launched" | "answered" | "traded" | "ignored" | "refused" | "failed";
     readonly code: string | null;
     readonly replyPostId: string | null;
     readonly error: string | null;
@@ -664,6 +696,72 @@ export class XStore {
     this.db
       .prepare("UPDATE x_identities SET claim_wallet = ?, claimed_at = ? WHERE x_user_id = ?")
       .run(wallet, now(), xUserId);
+  }
+
+  // --- trading wallets ------------------------------------------------------
+
+  /** The trading wallet this account already has, if it has one. */
+  walletFor(xUserId: string): XWalletRow | null {
+    const row = this.db.prepare("SELECT * FROM x_wallets WHERE x_user_id = ?").get(xUserId) as
+      | Record<string, unknown>
+      | undefined;
+
+    if (row === undefined) return null;
+
+    const address = optionalAddress(row.address);
+    if (address === null) throw new XError("VALIDATION_FAILED", "That wallet row has no address.");
+
+    return {
+      xUserId: String(row.x_user_id),
+      agentId: String(row.agent_id),
+      address,
+      createdAt: Number(row.created_at),
+    };
+  }
+
+  /**
+   * Claim the wallet slot for an account, or report who already holds it.
+   *
+   * The insert is the lock, exactly as it is for a mention. Two mentions from the same
+   * person arriving together would otherwise both find no wallet, both generate a key, and
+   * one of the two keys would end up unreferenced with whatever the person had deposited
+   * behind it. So the loser of the race is *told* it lost — `inserted: false` with the
+   * winner's row — and the caller discards the key it made rather than storing it.
+   */
+  claimWallet(input: {
+    readonly xUserId: string;
+    readonly agentId: string;
+    readonly address: Address;
+  }): { readonly row: XWalletRow; readonly inserted: boolean } {
+    this.db.exec("BEGIN IMMEDIATE;");
+    try {
+      const existing = this.walletFor(input.xUserId);
+      if (existing !== null) {
+        this.db.exec("COMMIT;");
+        return { row: existing, inserted: false };
+      }
+
+      const at = now();
+      this.db
+        .prepare(
+          "INSERT INTO x_wallets (x_user_id, agent_id, address, created_at) VALUES (?, ?, ?, ?)",
+        )
+        .run(input.xUserId, input.agentId, getAddress(input.address), at);
+      this.db.exec("COMMIT;");
+
+      return {
+        row: {
+          xUserId: input.xUserId,
+          agentId: input.agentId,
+          address: getAddress(input.address),
+          createdAt: at,
+        },
+        inserted: true,
+      };
+    } catch (error) {
+      this.db.exec("ROLLBACK;");
+      throw error;
+    }
   }
 
   // --- launches -------------------------------------------------------------

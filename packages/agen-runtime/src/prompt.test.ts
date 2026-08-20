@@ -66,6 +66,27 @@ describe("instructionsFor", () => {
     expect(text).toContain("from the tools you have been given in this request");
   });
 
+  it("knows people can trade through it, and that it does not decide the trade", () => {
+    const text = instructionsFor({
+      tools: [inspect],
+      unavailable: [],
+      maxTurns: 6,
+      maxReplyChars: 240,
+      execution: false,
+    });
+
+    // The capability, because a model that denies it would contradict a bot that has just
+    // filled somebody's buy.
+    expect(text).toContain("BUYING AND SELLING");
+    expect(text).toContain("'buy 0.001 ETH of <contract>'");
+    // And the limit of it: the amount is read from the words, not inferred here, so the model
+    // must not answer as though it were about to spend anything.
+    expect(text).toContain("Those commands never reach you");
+    expect(text).toContain("never quote an amount");
+    // Still not a money manager, which is a different claim from "cannot trade".
+    expect(text).toContain("You do not manage anybody's money");
+  });
+
   it("asks for the market's page, and only one a tool returned", () => {
     const text = instructionsFor({
       tools: [inspect],

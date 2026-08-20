@@ -29,6 +29,7 @@ import type {
   AgentChatTurn,
   AgentDecision,
   AgentFeedback,
+  AgentKind,
   AgentLaunchRecord,
   AgentMandate,
   AgentMemory,
@@ -376,6 +377,24 @@ const MIGRATIONS: readonly { readonly version: number; readonly sql: string }[] 
       CREATE INDEX IF NOT EXISTS idx_trades_agent ON agent_trades(agent_id, created_at);
     `,
   },
+  {
+    // What an agent row is *for*.
+    //
+    // Until now every row here was a named agent somebody created on the site, so listing
+    // them all and listing the ones worth showing were the same query. The X bot's trading
+    // wallets are also agent rows — deliberately, because that is where the encrypted key,
+    // the signer allowlist, the spend ledger and the owner's way out already live — but they
+    // are one person's wallet rather than an agent with a profile, and putting them in the
+    // directory would fill it with rows nobody chose to publish.
+    //
+    // Defaulting to 'agent' is what makes this migration safe on a database that already has
+    // rows: everything that existed before was created through `createAgent`, which is
+    // exactly what that value means.
+    version: 5,
+    sql: `
+      ALTER TABLE agents ADD COLUMN kind TEXT NOT NULL DEFAULT 'agent';
+    `,
+  },
 ];
 
 const STALE_RESERVATION_SECONDS = 10 * 60;
@@ -507,6 +526,7 @@ function agentFromRow(row: Record<string, unknown>): AgentRecord {
     ownerAddress: asAddress(String(row.owner_address)),
     walletAddress: asAddress(String(row.wallet_address)),
     status: String(row.status) as AgentStatus,
+    kind: (row.kind === null || row.kind === undefined ? "agent" : String(row.kind)) as AgentKind,
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
@@ -596,8 +616,8 @@ export class AgentStore {
       this.db
         .prepare(
           `INSERT INTO agents
-            (id, username, name, description, image_url, owner_address, wallet_address, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (id, username, name, description, image_url, owner_address, wallet_address, status, kind, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.agent.id,
@@ -608,6 +628,7 @@ export class AgentStore {
           input.agent.ownerAddress,
           input.agent.walletAddress,
           input.agent.status,
+          input.agent.kind,
           input.agent.createdAt,
           input.agent.updatedAt,
         );
@@ -692,9 +713,12 @@ export class AgentStore {
     return row === undefined ? null : agentFromRow(row);
   }
 
+  /** The directory. Trading wallets are excluded: nobody published them. */
   listPublicAgents(): readonly AgentRecord[] {
     return this.db
-      .prepare("SELECT * FROM agents WHERE status != 'archived' ORDER BY created_at DESC")
+      .prepare(
+        "SELECT * FROM agents WHERE status != 'archived' AND kind = 'agent' ORDER BY created_at DESC",
+      )
       .all()
       .map((row) => agentFromRow(row as Record<string, unknown>));
   }
@@ -730,6 +754,28 @@ export class AgentStore {
       .run(next.name, next.description, next.imageUrl, next.status, next.updatedAt, id);
 
     return next;
+  }
+
+  /**
+   * Point a wallet at the address that may withdraw from it.
+   *
+   * Deliberately not part of `updateAgent`'s patch. The owner is who the recovery path pays
+   * and the only identity `owned()` accepts, so a caller editing a profile must not be able
+   * to reassign it by passing an extra field. The one legitimate use is an X trading wallet
+   * whose person has since proved which address is theirs — it is created before anybody
+   * knows that, and this is how it is learned.
+   */
+  setOwnerAddress(agentId: string, owner: Address): AgentRecord {
+    const current = this.getAgent(agentId);
+    if (current === null) throw new AgentError("AGENT_NOT_FOUND", "No such agent.");
+
+    const next = getAddress(owner);
+    const at = Math.floor(Date.now() / 1000);
+    this.db
+      .prepare("UPDATE agents SET owner_address = ?, updated_at = ? WHERE id = ?")
+      .run(next, at, agentId);
+
+    return { ...current, ownerAddress: next, updatedAt: at };
   }
 
   getPermissions(agentId: string): AgentPermissions {

@@ -34,8 +34,9 @@ import { randomUUID } from "node:crypto";
 
 import type { Address, Hex } from "viem";
 
-import { limits, repliesDisabled } from "./config";
+import { botUsername, limits, repliesDisabled } from "./config";
 import { xClient, type XClient } from "./client";
+import { parseCommand, type TradeIntent } from "./command";
 import { XError } from "./errors";
 import { prepareLaunch } from "./generate";
 import { assertMaySponsor, assertMentionAllowed, launchSubject, launchesStopped } from "./guards";
@@ -43,10 +44,14 @@ import { enrichMention } from "./context";
 import { routeMention } from "./intent";
 import { executeSponsoredLaunch, ensureSeat } from "./launch";
 import { publicClient } from "../onchain";
-import { launchReply, refusalReply } from "./reply";
+import { readAgentHoldings } from "../agents/holdings";
+import { agentStore, type AgentStore } from "../agents/store";
+import { launchReply, refusalReply, tradeReply, walletReply } from "./reply";
 import { seatFor } from "./seat";
 import { assertSponsorFunded } from "./sponsor";
 import { xStore, type XStore } from "./store";
+import { executeXTrade } from "./trade";
+import { xWalletFor } from "./wallet";
 import type { XIntent, XLaunchRecord, XMention } from "./types";
 
 /**
@@ -63,7 +68,14 @@ const BUDGETED_GAS_UNITS = 9_000_000n;
 
 /** What happened to a mention. Returned rather than thrown, because most of these are normal. */
 export interface MentionOutcome {
-  readonly outcome: "launched" | "answered" | "ignored" | "refused" | "duplicate" | "failed";
+  readonly outcome:
+    | "launched"
+    | "answered"
+    | "traded"
+    | "ignored"
+    | "refused"
+    | "duplicate"
+    | "failed";
   readonly intent: XIntent | null;
   readonly launchId: string | null;
   readonly token: Address | null;
@@ -76,7 +88,15 @@ export interface MentionOutcome {
 export interface EngineDeps {
   readonly store?: XStore;
   readonly client?: XClient;
+  /** The agent store, which is where an X account's trading wallet lives. */
+  readonly agents?: AgentStore;
+  /** The swap itself, injectable for the same reason a launch is: it needs a live pool. */
+  readonly trade?: typeof executeXTrade;
 }
+
+/** What the two wallet paths need: the stores, somewhere to reply, and the swap. */
+type TradeHandlers = Required<Pick<EngineDeps, "store" | "client">> &
+  Pick<EngineDeps, "agents" | "trade">;
 
 /**
  * Handle one mention.
@@ -123,6 +143,26 @@ export async function handleMention(
   store.touchIdentity(author.id, author.username);
 
   try {
+    /*
+     * The two things the model is not asked about.
+     *
+     * A trade and a balance both concern a wallet that belongs to the person who posted, so
+     * both are decided by the parse of what they typed and neither waits on a model — which
+     * is also why they come first: there is no reason to spend a model call and a thread fetch
+     * on a post whose meaning is already unambiguous.
+     */
+    const parsed = parseCommand(mention.command.text, botUsername());
+
+    const traders: TradeHandlers = {
+      store,
+      client,
+      ...(deps.agents === undefined ? {} : { agents: deps.agents }),
+      ...(deps.trade === undefined ? {} : { trade: deps.trade }),
+    };
+
+    if (parsed.trade !== null) return await trade(mention, parsed.trade, traders);
+    if (parsed.asksWallet) return await tellWallet(mention, traders);
+
     const enriched = await enrichMention(mention, client);
     const routed = await routeMention(enriched, undefined, { client });
 
@@ -422,6 +462,133 @@ async function launch(
       retryable: false,
     };
   }
+}
+
+/**
+ * Buy or sell for the person who asked, from their own wallet.
+ *
+ * Shorter than the launch path and deliberately so: there is no budget to reserve, because the
+ * money is not Agen's and the only ceiling is what they funded; no seat to deploy, because
+ * nothing is being created; and no row to reconcile, because `agents/trade.ts` writes the trade
+ * and the audit entry itself once the receipt confirms.
+ *
+ * What it does not do is retry. Every outcome settles the mention — success and failure alike —
+ * so a post that asked to spend 0.01 ETH cannot be presented to this function twice by a
+ * delivery loop and spend 0.02.
+ */
+async function trade(
+  mention: XMention,
+  intent: TradeIntent,
+  deps: TradeHandlers,
+): Promise<MentionOutcome> {
+  const { store, client } = deps;
+
+  if (repliesDisabled()) {
+    // Same rule as a launch, and it matters more here: a trade the person is never told about
+    // is money moved in silence.
+    throw new XError("TRADING_DISABLED", "The bot cannot reply, so it will not trade.");
+  }
+
+  try {
+    const result = await (deps.trade ?? executeXTrade)(mention.command.author, intent, {
+      store,
+      ...(deps.agents === undefined ? {} : { agents: deps.agents }),
+    });
+
+    const replyPostId = await postReply(client, mention.command.id, tradeReply(result));
+    store.settleMention({
+      commandPostId: mention.command.id,
+      intent: "TRADE",
+      outcome: "traded",
+      code: null,
+      replyPostId,
+      error: null,
+    });
+
+    return {
+      outcome: "traded",
+      intent: "TRADE",
+      launchId: null,
+      token: result.outcome.token,
+      replyPostId,
+      code: null,
+      retryable: false,
+    };
+  } catch (error) {
+    const failure =
+      error instanceof XError
+        ? error
+        : new XError("TRADE_FAILED", error instanceof Error ? error.message : String(error));
+
+    /*
+     * Settled, never released, whatever went wrong.
+     *
+     * The launch path releases its claim on a retryable failure so a model outage does not
+     * swallow a post. A trade cannot borrow that reasoning: the failures that look transient
+     * here — an RPC that stopped answering, a receipt that never arrived — are exactly the ones
+     * where the swap may already have filled, and a retry would fill it again at a price
+     * nobody asked for. Somebody who wants to try again can post again, which is one tweet and
+     * is theirs to decide.
+     */
+    const spoken = await speak(client, mention.command.id, failure);
+    store.settleMention({
+      commandPostId: mention.command.id,
+      intent: "TRADE",
+      outcome: "refused",
+      code: failure.code,
+      replyPostId: spoken,
+      error: failure.message,
+    });
+
+    return {
+      outcome: "refused",
+      intent: "TRADE",
+      launchId: null,
+      token: null,
+      replyPostId: spoken,
+      code: failure.code,
+      retryable: false,
+    };
+  }
+}
+
+/**
+ * Tell somebody their wallet and what is in it.
+ *
+ * Creates the wallet if they have never had one, because the usual reason to ask is to fund it
+ * and an address that only appears after a failed buy would be a strange way to learn one. A
+ * wallet with nothing in it costs a row and a key; there is nothing to lose by having it.
+ */
+async function tellWallet(
+  mention: XMention,
+  deps: TradeHandlers,
+): Promise<MentionOutcome> {
+  const { store, client } = deps;
+  const agents = deps.agents ?? agentStore();
+  const author = mention.command.author;
+
+  const wallet = xWalletFor(author.id, author.username, { store, agents });
+  const holdings = await readAgentHoldings(agents, wallet.agent);
+
+  const replyPostId = await postReply(client, mention.command.id, walletReply(holdings));
+  store.settleMention({
+    commandPostId: mention.command.id,
+    intent: "WALLET",
+    outcome: "answered",
+    code: null,
+    replyPostId,
+    error: null,
+  });
+
+  return {
+    outcome: "answered",
+    intent: "WALLET",
+    launchId: null,
+    token: null,
+    replyPostId,
+    code: null,
+    retryable: false,
+  };
 }
 
 /**

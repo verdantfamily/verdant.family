@@ -17,8 +17,10 @@ import "server-only";
  * chain stopped honouring.
  */
 
+import type { AgentHoldings } from "../agents/holdings";
 import { INSTANT_FEE_PERCENTS } from "../instant";
 import { XError, speakable, type XErrorCode } from "./errors";
+import { ethText, tokenText, type XTradeResult } from "./trade";
 
 /**
  * Where a market lives on the site.
@@ -68,6 +70,68 @@ export function launchReply({
 }
 
 /**
+ * What a trade says.
+ *
+ * The figures first, because that is what the person is waiting for, and the market link last
+ * so they can see the position they now hold. No congratulation and no emoji: they spent their
+ * own money on a token, and the bot's job is to confirm the numbers.
+ */
+export function tradeReply(result: XTradeResult): string {
+  const { outcome } = result;
+  const amount = tokenText(result.tokenAmount);
+  const ether = ethText(outcome.quoteWei);
+
+  const first =
+    outcome.side === "buy"
+      ? `Bought ${amount} $${outcome.symbol} for ${ether} ETH.`
+      : `Sold ${amount} $${outcome.symbol} for ${ether} ETH.`;
+
+  return [first, "", marketUrl(outcome.token)].join("\n");
+}
+
+/**
+ * Where to send money, and nothing else.
+ *
+ * The wording the brief asked for, kept to the two things that matter — the sentence and the
+ * address — because this reply is read in order to copy an address out of it. The balance is
+ * included when there is one, since "top up" reads oddly to somebody who has funded the wallet
+ * and is short by gas.
+ */
+export function topUpReply(wallet: string, balanceWei = 0n): string {
+  const lines = [`Please top up your wallet: ${wallet}`];
+  if (balanceWei > 0n) {
+    lines.push("", `It holds ${ethText(balanceWei)} ETH, which won't cover that buy plus gas.`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * What the wallet is and what is in it.
+ *
+ * The address is always there, because the most common reason to ask is to fund it. Positions
+ * are listed rather than summed: a value in ether would be a price this reply cannot vouch for
+ * a second after posting, and a quantity is a fact.
+ */
+export function walletReply(holdings: AgentHoldings): string {
+  const lines = [`Your Agen wallet: ${holdings.address}`, "", `${ethText(holdings.ethWei)} ETH`];
+
+  const positions = holdings.positions.slice(0, 4);
+  for (const position of positions) {
+    lines.push(`${tokenText(position.amount)} $${position.symbol}`);
+  }
+
+  if (holdings.positions.length > positions.length) {
+    lines.push(`+${String(holdings.positions.length - positions.length)} more`);
+  }
+
+  if (holdings.ethWei === 0n && holdings.positions.length === 0) {
+    lines.push("", "Send ETH there and I can buy for you.");
+  }
+
+  return lines.join("\n");
+}
+
+/**
  * What to say when a launch was refused.
  *
  * Silence for anything a scripted account could learn from — see `speakable` in `errors.ts` —
@@ -82,11 +146,38 @@ export function launchReply({
  */
 export function refusalReply(error: XError): string | null {
   if (!speakable(error.code)) return null;
+
+  // The one refusal composed from the error's own details rather than from copy: an unfunded
+  // wallet has to name *which* wallet, and only the thrower knows that.
+  if (error.code === "WALLET_UNFUNDED") {
+    const wallet = error.details.wallet;
+    if (typeof wallet === "string" && wallet !== "") {
+      const balance = error.details.balanceWei;
+      return topUpReply(wallet, typeof balance === "string" ? BigInt(balance) : 0n);
+    }
+  }
+
   return sentenceFor(error.code) ?? error.message;
 }
 
 function sentenceFor(code: XErrorCode): string | null {
   switch (code) {
+    case "AMOUNT_MISSING":
+      return "How much? Say it like 'buy 0.01 ETH of $TICKER'.";
+    case "TOKEN_NOT_FOUND":
+      return "I can't find that market. Give me the contract address and I'll trade it.";
+    case "TOKEN_AMBIGUOUS":
+      return "More than one market goes by that ticker. Send the contract address instead.";
+    case "NOTHING_TO_SELL":
+      return "Your wallet doesn't hold any of that.";
+    case "TRADING_DISABLED":
+      return "Trading is off right now. Try again later.";
+    case "TRADE_REVERTED":
+      return "The chain refused that trade. Only gas was spent.";
+    case "TRADE_FAILED":
+      // Deliberately not "nothing was spent": this code means the outcome is unknown, and a
+      // reassurance that turned out to be wrong is worse than asking somebody to look.
+      return "I couldn't confirm that trade. Check your wallet before trying it again.";
     case "NO_SOURCE_POST":
       // Both ways of asking, because the person who hit this has done neither and there is no
       // way to tell which one they meant.

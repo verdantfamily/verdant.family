@@ -99,13 +99,16 @@ export interface XMention {
 /**
  * What the X surface recorded that it did.
  *
- * The runtime itself no longer thinks in these three words — it plans, calls tools, and
- * either replies or hands an execution to this surface. The store and the engine still
- * settle a mention as one of these, because a launch, an answer and a silence are the
- * three things X can actually do with a mention. New capabilities become new tools, not
- * new members here.
+ * The runtime does not think in these words — it plans, calls tools, and either replies or
+ * hands an execution to this surface. They are what the store settles a mention as.
+ *
+ * `LAUNCH`, `QUESTION` and `UNKNOWN` are the model's three outcomes, and new *capabilities* of
+ * the model are new tools rather than new members here. `TRADE` and `WALLET` are the
+ * exception, and they are one because they never involve the model at all: both are decided by
+ * the deterministic parse in `command.ts` before a model is called, because both spend or
+ * disclose the balance of a wallet belonging to the person who posted.
  */
-export type XIntent = "LAUNCH" | "QUESTION" | "UNKNOWN";
+export type XIntent = "LAUNCH" | "QUESTION" | "TRADE" | "WALLET" | "UNKNOWN";
 
 /**
  * A launch the model proposed, before anything has checked it.

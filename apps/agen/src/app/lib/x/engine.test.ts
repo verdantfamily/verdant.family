@@ -76,9 +76,13 @@ vi.mock("./sponsor", () => ({
   sponsorProblems: () => [],
 }));
 
+/** What a wallet holds, for the tests about trading. Reset in `beforeEach`. */
+let walletBalance = 0n;
+
 vi.mock("../onchain", () => ({
   publicClient: () => ({
     getGasPrice: async () => 1_000_000_000n,
+    getBalance: async () => walletBalance,
     getTransactionReceipt: async () => ({ status: "success" }),
     readContract: (...args: unknown[]) => readContract(...args),
   }),
@@ -134,6 +138,8 @@ const { routeMention } = await import("./intent");
 const { XStore } = await import("./store");
 const { XError } = await import("./errors");
 const { launchReply } = await import("./reply");
+const { AgentStore } = await import("../agents/store");
+const { xWalletFor } = await import("./wallet");
 
 type Store = InstanceType<typeof XStore>;
 type Mention = Parameters<typeof handleMention>[0];
@@ -237,6 +243,11 @@ function freshStore(): Store {
   return new XStore(join(mkdtempSync(join(tmpdir(), "agen-x-")), "x.db"));
 }
 
+/** The agent database, which is where an X account's trading wallet and key live. */
+function freshAgents(): InstanceType<typeof AgentStore> {
+  return new AgentStore(join(mkdtempSync(join(tmpdir(), "agen-x-agents-")), "agents.db"));
+}
+
 /** What the model will say to the next mention the engine handles. */
 function withModel(answer: Record<string, unknown>): void {
   answering = answer;
@@ -244,6 +255,7 @@ function withModel(answer: Record<string, unknown>): void {
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  walletBalance = 0n;
   executeSponsoredLaunch.mockReset();
   ensureSeat.mockReset();
   seatFor.mockReset();
@@ -587,6 +599,153 @@ describe("handleMention, launching", () => {
 
     expect(outcome.outcome).toBe("ignored");
     expect(recorder.replies).toHaveLength(0);
+  });
+});
+
+// --- trading, which spends the poster's own money -----------------------------
+
+describe("handleMention, trading", () => {
+  const CONTRACT = TOKEN;
+
+  function buyCommand(id = "1900000000000000040"): Post {
+    return post({ id, text: `@useagen buy 0.001 ETH of ${CONTRACT}` });
+  }
+
+  /** A stand-in for the swap, which needs a pool a test cannot have. */
+  function swap() {
+    return vi.fn().mockResolvedValue({
+      outcome: {
+        side: "buy",
+        token: TOKEN,
+        symbol: "TEST",
+        quoteWei: 1_000_000_000_000_000n,
+        tokenAmount: 5_000_000n * 10n ** 18n,
+        minAmountOut: 0n,
+        priceImpactBps: 10,
+        txHash: TX,
+        approvalTxHash: null,
+      },
+      wallet: WALLET,
+      symbol: "TEST",
+      tokenAmount: "5000000",
+    });
+  }
+
+  it("buys without asking a model what the post meant", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    const trade = swap();
+    // A model answer that would launch something. Nothing should consult it: the words are
+    // already unambiguous, and a model that could reinterpret them could reinterpret the
+    // amount.
+    withModel(LAUNCH_ANSWER);
+
+    const outcome = await handleMention(
+      { command: buyCommand(), source: null },
+      { store, client: client(recorder) as never, agents: freshAgents(), trade },
+    );
+
+    expect(outcome.outcome).toBe("traded");
+    expect(outcome.intent).toBe("TRADE");
+    expect(executeSponsoredLaunch).not.toHaveBeenCalled();
+    expect(trade).toHaveBeenCalledTimes(1);
+
+    const [, intent] = trade.mock.calls[0]!;
+    expect(intent).toMatchObject({
+      side: "buy",
+      amountWei: 1_000_000_000_000_000n,
+      target: { kind: "address", token: CONTRACT },
+    });
+
+    expect(recorder.replies[0]?.to).toBe("1900000000000000040");
+    expect(recorder.replies[0]?.text).toContain("Bought 5M $TEST");
+  });
+
+  it("does not buy twice when the same post is delivered twice", async () => {
+    const store = freshStore();
+    const agents = freshAgents();
+    const recorder: Recorder = { replies: [], asked: [] };
+    const trade = swap();
+    const command = buyCommand("1900000000000000041");
+
+    const first = await handleMention(
+      { command, source: null },
+      { store, client: client(recorder) as never, agents, trade },
+    );
+    const second = await handleMention(
+      { command, source: null },
+      { store, client: client(recorder) as never, agents, trade },
+    );
+
+    expect(first.outcome).toBe("traded");
+    expect(second.outcome).toBe("duplicate");
+    // The mention claim is what stops this, and it is taken before anything is spent.
+    expect(trade).toHaveBeenCalledTimes(1);
+    expect(recorder.replies).toHaveLength(1);
+  });
+
+  it("asks for a top-up, naming the wallet the poster should fund", async () => {
+    const store = freshStore();
+    const agents = freshAgents();
+    const recorder: Recorder = { replies: [], asked: [] };
+
+    // The wallet exists first, so the test can name the address the reply has to carry. What
+    // is under test here is the wiring — an unfunded refusal becoming the one reply this
+    // feature promises — and not the balance arithmetic, which `trading.test.ts` covers.
+    const wallet = xWalletFor("770077", "trencher", { store, agents });
+    const trade = vi.fn().mockRejectedValue(
+      new XError("WALLET_UNFUNDED", "That wallet cannot cover the buy.", {
+        details: { wallet: wallet.row.address },
+      }),
+    );
+
+    const outcome = await handleMention(
+      { command: buyCommand("1900000000000000042"), source: null },
+      { store, client: client(recorder) as never, agents, trade },
+    );
+
+    expect(outcome.outcome).toBe("refused");
+    expect(outcome.code).toBe("WALLET_UNFUNDED");
+    expect(recorder.replies[0]?.text).toBe(`Please top up your wallet: ${wallet.row.address}`);
+  });
+
+  it("settles a failed trade rather than letting it be tried again", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    const trade = vi.fn().mockRejectedValue(new XError("TRADE_FAILED", "no receipt"));
+
+    const outcome = await handleMention(
+      { command: buyCommand("1900000000000000043"), source: null },
+      { store, client: client(recorder) as never, agents: freshAgents(), trade },
+    );
+
+    // Not retryable, whatever went wrong: the swap may have filled, and a second attempt at
+    // "buy 0.001 ETH" is a second 0.001 ETH. A claim that stays settled is what enforces it.
+    expect(outcome.retryable).toBe(false);
+    expect(store.mentionExists("1900000000000000043")).toBe(true);
+
+    const again = await handleMention(
+      { command: buyCommand("1900000000000000043"), source: null },
+      { store, client: client(recorder) as never, agents: freshAgents(), trade },
+    );
+    expect(again.outcome).toBe("duplicate");
+    expect(trade).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells somebody their wallet and what is in it", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    walletBalance = 2_500_000_000_000_000_000n;
+
+    const outcome = await handleMention(
+      { command: post({ id: "1900000000000000044", text: "@useagen my wallet" }), source: null },
+      { store, client: client(recorder) as never, agents: freshAgents() },
+    );
+
+    expect(outcome.intent).toBe("WALLET");
+    const wallet = store.walletFor("770077");
+    expect(recorder.replies[0]?.text).toContain(`Your Agen wallet: ${String(wallet?.address)}`);
+    expect(recorder.replies[0]?.text).toContain("2.5 ETH");
   });
 });
 

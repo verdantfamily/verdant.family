@@ -56,6 +56,7 @@ const { executeXTrade } = await import("./trade");
 const { linkXWalletOwner, isClaimed, xWalletFor, UNCLAIMED_OWNER } = await import("./wallet");
 const { refusalReply, tradeReply, walletReply } = await import("./reply");
 const { readAgentHoldings } = await import("../agents/holdings");
+const { publicProfile } = await import("../agents/public");
 
 type Agents = InstanceType<typeof AgentStore>;
 type X = InstanceType<typeof XStore>;
@@ -189,6 +190,16 @@ describe("a wallet for an X account", () => {
     // These are one person's wallet, not a published agent. A directory full of them would be
     // a directory full of rows nobody chose to create.
     expect(agents.listPublicAgents()).toEqual([]);
+  });
+
+  it("cannot be named by a username anybody could register", async () => {
+    const { agents, store } = stores();
+    const wallet = xWalletFor("770077", "trencher", { store, agents });
+
+    // A person's username is letters, numbers and underscores, so a colon puts these rows
+    // outside the namespace entirely — no collision to lose a wallet to, and no profile page.
+    expect(wallet.agent.username).toBe("x:770077");
+    expect(await publicProfile("x:770077", agents)).toBe(null);
   });
 });
 

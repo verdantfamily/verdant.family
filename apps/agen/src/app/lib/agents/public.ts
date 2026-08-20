@@ -21,6 +21,10 @@ export async function publicProfile(
 ): Promise<Record<string, unknown> | null> {
   const agent = store.getAgentByUsername(username);
   if (agent === null || agent.status === "archived") return null;
+  // A trading wallet is one person's account, not a published agent. It has no profile to
+  // serve, and serving one would put somebody's X handle next to their wallet address on a
+  // page they never asked to exist.
+  if (agent.kind !== "agent") return null;
 
   const [summary, launches, activity, revenue, treasury] = await Promise.all([
     summariseAgent(store, agent),

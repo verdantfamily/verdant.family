@@ -110,17 +110,16 @@ export interface WalletDeps {
 /**
  * A username for a row nobody will ever see.
  *
- * `agents.username` is unique and not null, and these rows are excluded from every listing,
- * so this only has to be deterministic and collision-free. X ids are decimal integers, and
- * base 36 of the same integer is shorter, still unique, and fits the column's 20-character
- * shape without truncation — which is the property that matters, because a truncated id
- * would eventually collide and hand two people one wallet.
+ * `agents.username` is unique and not null, so this has to be deterministic and one-to-one —
+ * the X id in full, never a truncation of it, because a truncated id eventually collides and a
+ * collision here hands two people one wallet.
+ *
+ * The colon is the point. A username a person can register is `[a-z0-9_]` only, so a name with
+ * a colon in it cannot be taken by anybody and cannot be looked up as one: the uniqueness of
+ * these rows does not depend on nobody happening to want `xw3f5`.
  */
 export function walletUsername(xUserId: string): string {
-  if (/^\d+$/.test(xUserId)) return `xw${BigInt(xUserId).toString(36)}`;
-  // Not a number: only seen in tests and in whatever X does next. Hex of the bytes keeps it
-  // reversible-ish and, more importantly, keeps it one-to-one.
-  return `xw${Buffer.from(xUserId, "utf8").toString("hex").slice(0, 16)}`;
+  return `x:${xUserId}`;
 }
 
 /**

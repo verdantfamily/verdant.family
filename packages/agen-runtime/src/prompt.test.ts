@@ -61,6 +61,9 @@ describe("instructionsFor", () => {
     // Naming the system is branding; claiming to have trained it is a checkable assertion that
     // would be untrue, so the prompt declines the question rather than answering it falsely.
     expect(text).toContain("Do not claim you were trained from scratch");
+    // Declining the stack would be a dead end on its own, so capability is the answer offered
+    // instead — read out of the tools of this request rather than a list here that would rot.
+    expect(text).toContain("from the tools you have been given in this request");
   });
 
   it("asks for the market's page, and only one a tool returned", () => {

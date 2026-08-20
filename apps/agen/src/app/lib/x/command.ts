@@ -242,7 +242,7 @@ const CONTRACT = /0x[a-fA-F0-9]{40}\b/;
  * Questions are excluded for the same reason. "how do I buy 0.1 eth of $DOG" contains an
  * amount, a side and a token, and is not an instruction.
  */
-export function parseTrade(body: string): TradeIntent | null {
+export function parseTrade(body: string, context = ""): TradeIntent | null {
   if (ASKS_ABOUT.some((pattern) => pattern.test(body))) return null;
 
   const buy = BUY_VERBS.exec(body);
@@ -254,12 +254,57 @@ export function parseTrade(body: string): TradeIntent | null {
   // token search is shared, so two verbs mean the sentence is ambiguous and it is left alone.
   if (buy !== null && sell !== null) return null;
 
-  const target = tradeTarget(body);
+  const side = sell !== null ? "sell" : "buy";
+  const target = tradeTarget(body) ?? borrowedTarget(body, side, context);
   if (target === null) return null;
 
-  if (sell !== null) return { side: "sell", target, amountWei: null, fraction: sellFraction(body) };
+  if (side === "sell") return { side, target, amountWei: null, fraction: sellFraction(body) };
 
-  return { side: "buy", target, amountWei: buyAmount(body), fraction: null };
+  return { side, target, amountWei: buyAmount(body), fraction: null };
+}
+
+/**
+ * When the command names no token of its own, take one from the post it is answering.
+ *
+ * "buy 0.005 ETH of it" under a launch is a complete instruction: the amount is in the
+ * command, the token is in the parent. The same is true of a reply that is only an amount,
+ * because the thread is the subject. A past-tense aside ("i bought the dip") is not, even
+ * when the parent is a market — that sentence reports a trade, it does not place one.
+ *
+ * The parent has to name exactly one market. Two addresses is two answers, and guessing
+ * which one they meant is the same class of error as inventing an amount.
+ */
+function borrowedTarget(body: string, side: "buy" | "sell", context: string): TradeTarget | null {
+  if (context.trim() === "") return null;
+  if (side === "buy" && buyAmount(body) === null && !/\b(?:it|this|that)\b/i.test(body)) {
+    return null;
+  }
+  return contextTarget(context);
+}
+
+/**
+ * The one market a parent post is about, or null when it is not about exactly one.
+ *
+ * An address wins over a ticker because a launch reply carries both — `$TEST2` and the
+ * `agen.space/markets/0x…` link — and they name the same thing. Two distinct addresses
+ * do not.
+ */
+function contextTarget(context: string): TradeTarget | null {
+  const found: Address[] = [];
+  const seen = new Set<string>();
+  for (const match of context.matchAll(new RegExp(CONTRACT.source, "g"))) {
+    const target = tradeTarget(match[0]!);
+    if (target === null || target.kind !== "address") continue;
+    const key = target.token.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    found.push(target.token);
+  }
+  if (found.length === 1) return { kind: "address", token: found[0]! };
+  if (found.length > 1) return null;
+
+  const ticker = findTicker(context);
+  return ticker === null ? null : { kind: "ticker", ticker };
 }
 
 function tradeTarget(body: string): TradeTarget | null {
@@ -334,7 +379,7 @@ export function asksWallet(body: string): boolean {
   return /^(?:wallet|balance|holdings|portfolio)\b[\s?!.]*$/i.test(body.trim());
 }
 
-export function parseCommand(text: string, handle: string): ParsedCommand {
+export function parseCommand(text: string, handle: string, context = ""): ParsedCommand {
   const mentionsBot = new RegExp(`@${escape(handle)}\\b`, "i").test(text);
 
   // The bot's own handle goes wherever it appears, not just at the front: it is addressing
@@ -356,7 +401,7 @@ export function parseCommand(text: string, handle: string): ParsedCommand {
     // A post that asks for both — "launch $DOG then buy 0.1 eth of it" — is treated as the
     // launch. Guessing wrong that way spends Agen's gas on a market; guessing wrong the other
     // way spends the person's ether on a token they had not asked for yet.
-    trade: looksLikeLaunch ? null : parseTrade(body),
+    trade: looksLikeLaunch ? null : parseTrade(body, context),
     asksWallet: asksWallet(body),
     mentionsBot,
   };

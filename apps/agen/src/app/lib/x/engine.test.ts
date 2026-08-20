@@ -661,6 +661,44 @@ describe("handleMention, trading", () => {
     expect(recorder.replies[0]?.text).toContain("Bought 5M $TEST");
   });
 
+  it("buys 'it' when the reply sits under a market", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    const trade = swap();
+    // The model would have leaked its own instructions the last time this phrasing reached
+    // it. The parse has to take the token from the parent so the model is never asked.
+    withModel(LAUNCH_ANSWER);
+
+    const source = post({
+      id: "1900000000000000045",
+      text: `$TEST is live on Robinhood.\n\nhttps://agen.space/markets/${CONTRACT}`,
+      links: [`https://agen.space/markets/${CONTRACT}`],
+    });
+
+    const outcome = await handleMention(
+      {
+        command: post({
+          id: "1900000000000000046",
+          text: "@useagen now buy 0.005 ETH of it",
+          inReplyToPostId: source.id,
+        }),
+        source,
+      },
+      { store, client: client(recorder) as never, agents: freshAgents(), trade },
+    );
+
+    expect(outcome.outcome).toBe("traded");
+    expect(outcome.intent).toBe("TRADE");
+    expect(trade).toHaveBeenCalledTimes(1);
+    const [, intent] = trade.mock.calls[0]!;
+    expect(intent).toMatchObject({
+      side: "buy",
+      amountWei: 5_000_000_000_000_000n,
+      target: { kind: "address", token: CONTRACT },
+    });
+    expect(recorder.asked).toHaveLength(0);
+  });
+
   it("does not buy twice when the same post is delivered twice", async () => {
     const store = freshStore();
     const agents = freshAgents();

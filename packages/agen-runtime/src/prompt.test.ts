@@ -78,11 +78,12 @@ describe("instructionsFor", () => {
     // The capability, because a model that denies it would contradict a bot that has just
     // filled somebody's buy.
     expect(text).toContain("BUYING AND SELLING");
-    expect(text).toContain("'buy 0.001 ETH of <contract>'");
-    // And the limit of it: the amount is read from the words, not inferred here, so the model
-    // must not answer as though it were about to spend anything.
-    expect(text).toContain("Those commands never reach you");
-    expect(text).toContain("never quote an amount");
+    expect(text).toContain("handled before you see the post");
+    // The last time this block listed example commands, the model quoted them back at a
+    // person who had just asked to buy. The instruction is now to write one sentence of its
+    // own and never to recite this section.
+    expect(text).toContain("Do not start a reply with 'post:'");
+    expect(text).toContain("never invent an address");
     // Still not a money manager, which is a different claim from "cannot trade".
     expect(text).toContain("You do not manage anybody's money");
   });

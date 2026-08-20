@@ -200,6 +200,46 @@ describe("parseTrade", () => {
     expect(parseCommand("@useagen i bought the dip", BOT).trade).toBe(null);
   });
 
+  it("takes the token from the post being replied to when they said of it", () => {
+    // The live failure: a reply under a launch announcement, no address in the command.
+    // The parent is the launch reply itself — ticker plus the market link.
+    const parent = [
+      "$TEST2 is live on Robinhood.",
+      "You earn 1% of every trade. Happy trenching!",
+      "https://agen.space/markets/0xa20931BcA92deDdf725d4108721e683B7c2BCdD3",
+    ].join("\n");
+
+    const parsed = parseCommand("@useagen now buy 0.005 ETH of it", BOT, parent);
+    expect(parsed.trade).toEqual({
+      side: "buy",
+      target: { kind: "address", token: getAddress("0xa20931BcA92deDdf725d4108721e683B7c2BCdD3") },
+      amountWei: parseEther("0.005"),
+      fraction: null,
+    });
+  });
+
+  it("takes the token from a reply that is only an amount", () => {
+    const parsed = parseCommand("@useagen buy 0.1 eth", BOT, "check out $DOG");
+    expect(parsed.trade?.target).toEqual({ kind: "ticker", ticker: "DOG" });
+    expect(parsed.trade?.amountWei).toBe(parseEther("0.1"));
+  });
+
+  it("will not guess when the parent names two different markets", () => {
+    const parent =
+      "0x1111111111111111111111111111111111111111 vs 0x2222222222222222222222222222222222222222";
+    expect(parseCommand("@useagen buy 0.1 eth of it", BOT, parent).trade).toBe(null);
+  });
+
+  it("still will not treat 'i bought the dip' as a buy just because it is a reply", () => {
+    expect(
+      parseCommand(
+        "@useagen i bought the dip",
+        BOT,
+        "$DOG is live https://agen.space/markets/0x1111111111111111111111111111111111111111",
+      ).trade,
+    ).toBe(null);
+  });
+
   it("lets a launch win when a post asks for both", () => {
     // Guessing wrong this way costs Agen gas. Guessing wrong the other way costs the person
     // ether they had not asked to spend yet.

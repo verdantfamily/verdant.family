@@ -151,7 +151,7 @@ export async function handleMention(
      * is also why they come first: there is no reason to spend a model call and a thread fetch
      * on a post whose meaning is already unambiguous.
      */
-    const parsed = parseCommand(mention.command.text, botUsername());
+    const parsed = parseCommand(mention.command.text, botUsername(), tradeContext(mention));
 
     const traders: TradeHandlers = {
       store,
@@ -714,6 +714,25 @@ async function speak(
     // outcome and must not turn a refusal into an exception the delivery loop has to handle.
     return null;
   }
+}
+
+/**
+ * The post a trade might be *of*, as text the parser can read.
+ *
+ * The command itself is not included: a token named in the command is already taken by
+ * `parseTrade`, and folding the command back in would let a malformed address in the reply
+ * collide with a good one in the parent. Quoted posts are included when ingest already
+ * fetched them, so "buy this" under a quote of a market works the same way as a reply.
+ */
+function tradeContext(mention: XMention): string {
+  const parts: string[] = [];
+  if (mention.source !== null) {
+    parts.push(mention.source.text, ...mention.source.links);
+  }
+  if (mention.quoted) {
+    parts.push(mention.quoted.text, ...mention.quoted.links);
+  }
+  return parts.join(" ");
 }
 
 function outcomeFor(error: unknown, launchId: string | null): MentionOutcome {

@@ -54,6 +54,7 @@ WORKDIR /app
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY apps/agen/package.json apps/agen/
 COPY packages/market-compiler/package.json packages/market-compiler/
+COPY packages/agen-runtime/package.json packages/agen-runtime/
 COPY packages/config/package.json packages/config/
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/sdk/package.json packages/sdk/
@@ -113,11 +114,13 @@ ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL \
 # Only what serving needs, in dependency order: the packages the app imports, then the
 # app, then what the feed imports.
 #
-# `@verdant/sdk` is here because the token page cannot be built without it — it encodes
-# the launch transaction, quotes a trade and parses a candle series. It is easy to leave
-# out and hard to notice: a workspace package resolves to its `dist`, a laptop has one
-# left over from some earlier build, and the missing step only surfaces in a clean image
-# as four `Module not found` lines at the end of a ten-minute build.
+# Each is the dependency closure rather than a hand-written list, and the app's is a closure
+# because the list version failed the way lists here always do. `@verdant/agen-runtime` is
+# what the bot uses to turn a post into a market; it was added to the app and not to this
+# file, and it surfaced as `Module not found` at the end of a ten-minute build. Nothing local
+# can catch that — a workspace package resolves to its `dist`, and a laptop always has one
+# left over from an earlier build. A closure builds whatever the app picks up next without
+# anybody remembering this line exists.
 #
 # Both indexers' dependencies are built here too, because this image runs all three
 # processes. Railway uses a Dockerfile at the root for every service that has one, so the
@@ -126,17 +129,13 @@ ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL \
 # months behind the schema the site expects. `scripts/railway-start.sh` already chooses
 # which process to be from the service name; this is the other half of that.
 #
-# Written as the dependency closure rather than a list, so a package a feed picks up
-# later is built without anyone remembering this line exists. Neither indexer has a build
-# step of its own.
+# Neither indexer has a build step of its own.
 #
-# The two closures resolve to the same three packages today. Both are named anyway: the
-# reason there are two indexers is that a change to one must not depend on the other, and
-# a build line that only works while their dependencies happen to match is exactly the
-# coupling this split removed.
-RUN pnpm --filter @verdant/config build
-RUN pnpm --filter @verdant/sdk build
-RUN pnpm --filter @verdant/market-compiler build
+# The indexers' two closures resolve to the same three packages today. Both are named
+# anyway: the reason there are two indexers is that a change to one must not depend on the
+# other, and a build line that only works while their dependencies happen to match is
+# exactly the coupling that split removed.
+RUN pnpm --filter "@verdant/agen^..." build
 RUN pnpm --filter "@verdant/indexer^..." build
 RUN pnpm --filter "@verdant/instant-indexer^..." build
 RUN pnpm --filter @verdant/agen build

@@ -26,8 +26,8 @@ import { ingressSecret, writeCredentials } from "../../../lib/x/config";
 import { XError } from "../../../lib/x/errors";
 import { fail, ok } from "../../../lib/x/http";
 import { ingestPostId, postIdsFrom } from "../../../lib/x/ingest";
+import { authorise } from "../../../lib/x/ingress";
 import { xStore } from "../../../lib/x/store";
-import { authorise } from "../poll/route";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

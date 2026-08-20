@@ -47,6 +47,21 @@ describe("instructionsFor", () => {
     }
   });
 
+  it("asks for the market's page, and only one a tool returned", () => {
+    const text = instructionsFor({
+      tools: [inspect],
+      unavailable: [],
+      maxTurns: 6,
+      maxReplyChars: 240,
+      execution: false,
+    });
+
+    // An answer about a token with no link is a dead end on X, and a link the model assembled
+    // itself is worse than none: it looks real until somebody taps it.
+    expect(text).toContain("LINK THE MARKET");
+    expect(text).toContain("Only ever a url a tool gave you");
+  });
+
   it("asks for lower case including the pronoun, and for the first person about itself", () => {
     const text = instructionsFor({
       tools: [inspect],

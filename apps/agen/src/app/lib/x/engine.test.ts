@@ -661,6 +661,30 @@ describe("handleMention, trading", () => {
     expect(recorder.replies[0]?.text).toContain("Bought 5M $TEST");
   });
 
+  it("still buys from a standalone tweet when the account has been talking too fast", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    const trade = swap();
+    // Five mentions in the last minute is the cap that used to swallow a buy in silence.
+    for (let i = 0; i < 5; i += 1) {
+      store.reserveMention({
+        commandPostId: `19000000000000005${String(i)}0`,
+        xUserId: "770077",
+        xUsername: "trencher",
+        sourcePostId: null,
+      });
+    }
+
+    const outcome = await handleMention(
+      { command: buyCommand("1900000000000000599"), source: null },
+      { store, client: client(recorder) as never, agents: freshAgents(), trade },
+    );
+
+    expect(outcome.outcome).toBe("traded");
+    expect(trade).toHaveBeenCalledTimes(1);
+    expect(recorder.replies[0]?.text).toContain("Bought");
+  });
+
   it("buys 'it' when the reply sits under a market", async () => {
     const store = freshStore();
     const recorder: Recorder = { replies: [], asked: [] };

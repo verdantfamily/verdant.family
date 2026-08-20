@@ -394,6 +394,16 @@ export class XStore {
     this.db.prepare("DELETE FROM x_mentions WHERE command_post_id = ?").run(commandPostId);
   }
 
+  mentionRecord(commandPostId: string): {
+    readonly outcome: string | null;
+    readonly replyPostId: string | null;
+  } | null {
+    const row = this.db
+      .prepare("SELECT outcome, reply_post_id AS replyPostId FROM x_mentions WHERE command_post_id = ?")
+      .get(commandPostId) as { outcome: string | null; replyPostId: string | null } | undefined;
+    return row ?? null;
+  }
+
   mentionExists(commandPostId: string): boolean {
     const row = this.db
       .prepare("SELECT 1 AS found FROM x_mentions WHERE command_post_id = ?")

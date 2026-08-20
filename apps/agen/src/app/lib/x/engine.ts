@@ -36,7 +36,7 @@ import type { Address, Hex } from "viem";
 
 import { botUsername, limits, repliesDisabled } from "./config";
 import { xClient, type XClient } from "./client";
-import { parseCommand, type TradeIntent } from "./command";
+import { looksLikeTradeAttempt, parseCommand, type TradeIntent } from "./command";
 import { XError } from "./errors";
 import { prepareLaunch } from "./generate";
 import { assertMaySponsor, assertMentionAllowed, launchSubject, launchesStopped } from "./guards";
@@ -113,8 +113,12 @@ export async function handleMention(
   const client = deps.client ?? xClient();
   const author = mention.command.author;
 
+  const parsed = parseCommand(mention.command.text, botUsername(), tradeContext(mention));
+  const moneyMove =
+    parsed.trade !== null || parsed.asksWallet || looksLikeTradeAttempt(parsed.body);
+
   try {
-    assertMentionAllowed(store, mention);
+    assertMentionAllowed(store, mention, moneyMove ? { rateLimit: false } : {});
   } catch (error) {
     return outcomeFor(error, null);
   }
@@ -151,7 +155,6 @@ export async function handleMention(
      * is also why they come first: there is no reason to spend a model call and a thread fetch
      * on a post whose meaning is already unambiguous.
      */
-    const parsed = parseCommand(mention.command.text, botUsername(), tradeContext(mention));
 
     const traders: TradeHandlers = {
       store,
@@ -163,6 +166,14 @@ export async function handleMention(
     if (parsed.trade !== null) return await trade(mention, parsed.trade, traders);
     if (parsed.asksWallet) return await tellWallet(mention, traders);
     if (parsed.asksTradingStatus) return await tellTradingLive(mention, traders);
+    if (!parsed.looksLikeLaunch && looksLikeTradeAttempt(parsed.body)) {
+      throw new XError(
+        parsed.trade === null && !/\b0x[a-fA-F0-9]{40}\b/.test(parsed.body)
+          ? "TOKEN_NOT_FOUND"
+          : "AMOUNT_MISSING",
+        "That buy needs a token and an amount.",
+      );
+    }
 
     const enriched = await enrichMention(mention, client);
     const routed = await routeMention(enriched, undefined, { client });

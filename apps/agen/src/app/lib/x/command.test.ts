@@ -240,6 +240,19 @@ describe("parseTrade", () => {
     });
   });
 
+  it("treats a standalone buy of a contract as a complete trade", () => {
+    const parsed = parseCommand(
+      "@useagen buy 0.005 ETH of 0xa20931BcA92deDdf725d4108721e683B7c2BCdD3",
+      BOT,
+    );
+    expect(parsed.trade).toEqual({
+      side: "buy",
+      target: { kind: "address", token: getAddress("0xa20931BcA92deDdf725d4108721e683B7c2BCdD3") },
+      amountWei: parseEther("0.005"),
+      fraction: null,
+    });
+  });
+
   it("treats 'who needs to enable trading' as a status question, not a mystery", () => {
     for (const text of [
       "@useagen who needs to enable trading execution",

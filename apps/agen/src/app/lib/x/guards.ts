@@ -48,7 +48,11 @@ export function isSelf(post: XPost): boolean {
 }
 
 /** Refuse anything the bot should not be answering at all, launch or question. */
-export function assertMentionAllowed(store: XStore, mention: XMention): void {
+export function assertMentionAllowed(
+  store: XStore,
+  mention: XMention,
+  options: { readonly rateLimit?: boolean } = {},
+): void {
   if (isSelf(mention.command)) {
     throw new XError("ALREADY_HANDLED", "That is the bot's own post.");
   }
@@ -61,6 +65,10 @@ export function assertMentionAllowed(store: XStore, mention: XMention): void {
   if (configuredBlocklist().includes(author.id) || store.isBlocked(author.id)) {
     throw new XError("BLOCKED", "That account is blocked.");
   }
+
+  // Buys skip this. The per-minute cap exists so a farm cannot spend Agen's gas on
+  // launches; dropping a buy for it leaves somebody wondering whether their money moved.
+  if (options.rateLimit === false) return;
 
   const perMinute = limits().mentionsPerUserPerMinute;
   if (perMinute > 0 && store.recentMentionCount(author.id, 60) >= perMinute) {

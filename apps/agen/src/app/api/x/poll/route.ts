@@ -13,8 +13,9 @@
  */
 
 import { fail, ok } from "../../../lib/x/http";
-import { pollOnce } from "../../../lib/x/ingest";
+import { ingestPostId, pollOnce } from "../../../lib/x/ingest";
 import { authorise } from "../../../lib/x/ingress";
+import { xStore } from "../../../lib/x/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,7 +24,25 @@ async function run(request: Request): Promise<Response> {
   try {
     authorise(request);
 
-    const asked = Number(new URL(request.url).searchParams.get("limit") ?? "");
+    const url = new URL(request.url);
+    const id = url.searchParams.get("id")?.trim() ?? "";
+    if (/^\d{15,25}$/.test(id)) {
+      const store = xStore();
+      const previous = store.mentionRecord(id);
+      // A mention that never produced a reply and never spent is safe to try again.
+      // `traded` and `launched` are not: those already moved money.
+      if (
+        previous !== null &&
+        previous.replyPostId === null &&
+        previous.outcome !== "traded" &&
+        previous.outcome !== "launched"
+      ) {
+        store.releaseMention(id);
+      }
+      return ok({ id, ...(await ingestPostId(id, { store })) });
+    }
+
+    const asked = Number(url.searchParams.get("limit") ?? "");
     const bounded = Number.isFinite(asked) && asked > 0 ? Math.min(Math.floor(asked), 100) : null;
 
     return ok(await pollOnce(bounded === null ? {} : { limit: bounded }));

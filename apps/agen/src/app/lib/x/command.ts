@@ -395,6 +395,26 @@ export function asksWallet(body: string): boolean {
  * that trading was off. That question is this function, and the answer is a fixed sentence
  * — trading is on — not a model call.
  */
+/**
+ * Whether the words are trying to trade, even if the parse could not finish it.
+ *
+ * A standalone "buy 0.005 ETH of 0x…" is a complete {@link parseTrade}. This is the
+ * rest: a buy or sell that named an amount, a token, or "it", so the model is never
+ * asked and silence is never the answer.
+ */
+export function looksLikeTradeAttempt(body: string): boolean {
+  if (ASKS_ABOUT.some((pattern) => pattern.test(body))) return false;
+  if (asksTradingStatus(body)) return false;
+
+  const buy = BUY_VERBS.test(body);
+  const sell = SELL_VERBS.test(body);
+  if (buy === sell) return false;
+
+  if (CONTRACT.test(body) || findTicker(body) !== null) return true;
+  if (/\b(?:it|this|that)\b/i.test(body)) return true;
+  return buy && buyAmount(body) !== null;
+}
+
 export function asksTradingStatus(body: string): boolean {
   if (/\benable\s+(?:trading|execution|buys?|sells?)\b/i.test(body)) return true;
   if (/\b(?:trading|execution)\s+(?:enabled|on|available|live|off|disabled)\b/i.test(body)) {

@@ -235,7 +235,13 @@ function parsePost(raw: RawPost, includes: RawIncludes): XPost | null {
   return {
     id,
     text: text(raw.text) ?? "",
-    author: found === undefined ? UNKNOWN_AUTHOR : author(found),
+    // The id is on the post even when X omitted the user object. Dropping it used to
+    // make a standalone mention look authorless, which the engine refused in silence
+    // and then advanced the cursor past — a buy nobody ever heard about.
+    author:
+      found === undefined
+        ? { ...UNKNOWN_AUTHOR, id: authorId ?? "" }
+        : author(found),
     createdAt: text(raw.created_at),
     inReplyToPostId: replyTo === null ? null : text(replyTo.id),
     quotedPostId: quoted === null ? null : text(quoted.id),

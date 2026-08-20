@@ -47,6 +47,22 @@ describe("instructionsFor", () => {
     }
   });
 
+  it("gives the system a name and keeps the vendor out of it", () => {
+    const text = instructionsFor({
+      tools: [inspect],
+      unavailable: [],
+      maxTurns: 6,
+      maxReplyChars: 240,
+      execution: false,
+    });
+
+    expect(text).toContain("Agen C0.1");
+    expect(text).toContain("Never name a model vendor");
+    // Naming the system is branding; claiming to have trained it is a checkable assertion that
+    // would be untrue, so the prompt declines the question rather than answering it falsely.
+    expect(text).toContain("Do not claim you were trained from scratch");
+  });
+
   it("asks for the market's page, and only one a tool returned", () => {
     const text = instructionsFor({
       tools: [inspect],

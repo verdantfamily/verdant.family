@@ -17,6 +17,10 @@ import "server-only";
  * returns nothing rather than substituting a default: a token called "Token" with a blank
  * logo is garbage that cost real gas, and a refusal is a reply saying so.
  *
+ * The one thing filled in rather than refused is a missing name when a ticker was stated — see
+ * `nameFrom`. That is not a default: it is the word the asker themselves typed, and refusing a
+ * request that named its token is worse than answering it.
+ *
  * ## The picture
  *
  * A token needs a logo — `validate` requires one, because an Instant token's `metadataURI` is
@@ -166,6 +170,27 @@ async function findLogo(mention: XMention, client: XClient): Promise<string> {
 }
 
 /**
+ * A name made out of the ticker, for when nothing supplied one at all.
+ *
+ * Not a default, which is the distinction this whole file turns on. "@useagen launch $TEST" is a
+ * complete request that names the token exactly once, and a model asked to launch it returns the
+ * ticker and leaves the name empty — there is nothing else in the post to name it after.
+ * Refusing that with "i could not come up with a name" is the bot failing at something it was
+ * told how to do: the word is right there, and it is the asker's own.
+ *
+ * Only ever reached when no name was proposed. A name that *was* proposed and does not fit is
+ * still a refusal, because substituting a different one would launch something adjacent to the
+ * request rather than the request.
+ *
+ * `Test` rather than `TEST`, because a name is prose and a ticker is a symbol; the market page
+ * shows both and shouting in one of them looks like a mistake.
+ */
+function nameFrom(ticker: string | null): string | null {
+  if (ticker === null) return null;
+  return normaliseName(ticker.charAt(0) + ticker.slice(1).toLowerCase());
+}
+
+/**
  * The link back to the post a token came from.
  *
  * Written into the token's own metadata, which is the honest place for it: anybody looking at
@@ -215,8 +240,13 @@ export async function prepareLaunch(
   // again is two microseconds against an irreversible transaction: this is the last function
   // between a model's string and a token's name, and it should not be the one that assumes
   // somebody upstream checked.
-  const name = normaliseName(routed.token.name);
   const ticker = normaliseTicker(routed.token.ticker);
+  // A missing name falls back to the ticker; a name that was proposed and cannot be honoured does
+  // not. The two are different failures: nothing was named in the first, and in the second
+  // something was, so launching under a different name would be launching something adjacent to
+  // what was asked for.
+  const proposed = routed.token.name.trim();
+  const name = proposed === "" ? nameFrom(ticker) : normaliseName(proposed);
 
   if (name === null || ticker === null) {
     throw new XError("GENERATION_FAILED", "I could not come up with a valid name and ticker.", {

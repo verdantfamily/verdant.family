@@ -998,7 +998,13 @@ export function launchInstantTool(): Tool<AgenDeps> {
     kind: "execute",
     category: "other",
     parameters: [
-      { name: "name", type: "string", required: false, description: "Token name, if you are proposing one." },
+      {
+        name: "name",
+        type: "string",
+        required: false,
+        description:
+          "Token name. Propose one whenever you can — from the post, or from the ticker if the ticker is all there is.",
+      },
       { name: "ticker", type: "string", required: false, description: "Ticker, letters and numbers, no $." },
       {
         name: "description",

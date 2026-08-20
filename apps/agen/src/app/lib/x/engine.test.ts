@@ -467,6 +467,44 @@ describe("handleMention, launching", () => {
     expect(record?.commandPostId).toBe(command.id);
   });
 
+  it("names the token after the ticker when nothing else named it", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    // What the model actually does with "launch $TEST": there is nothing in the post to name the
+    // token after, so it returns the ticker and no name. Refusing that told somebody who had
+    // named their token that the bot could not come up with a name.
+    withModel({ ...LAUNCH_ANSWER, name: "", ticker: "TEST" });
+
+    const outcome = await handleMention(
+      { command: post({ id: "1900000000000000013", text: "@useagen launch $TEST" }), source: null },
+      { store, client: client(recorder) as never },
+    );
+
+    expect(outcome.outcome).toBe("launched");
+
+    const [prepared] = executeSponsoredLaunch.mock.calls[0] as [
+      { readonly name: string; readonly ticker: string },
+    ];
+    expect(prepared.ticker).toBe("TEST");
+    // Prose case, not the symbol shouted back: the page shows the two side by side.
+    expect(prepared.name).toBe("Test");
+  });
+
+  it("still refuses when there is neither a name nor a ticker to work from", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    withModel({ ...LAUNCH_ANSWER, name: "", ticker: "" });
+
+    const outcome = await handleMention({ command: COMMAND, source: SOURCE }, {
+      store,
+      client: client(recorder) as never,
+    });
+
+    expect(outcome.outcome).toBe("refused");
+    expect(outcome.code).toBe("GENERATION_FAILED");
+    expect(executeSponsoredLaunch).not.toHaveBeenCalled();
+  });
+
   it("uses a picture in the post that tagged it as the logo", async () => {
     const store = freshStore();
     const recorder: Recorder = { replies: [], asked: [], media: [] };

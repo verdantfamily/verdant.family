@@ -20,6 +20,13 @@ export async function register(): Promise<void> {
     console.log("[agents] scheduler started");
   }
 
+  const { startMentionPoller } = await import("./app/lib/x/poller");
+  const poller = startMentionPoller();
+
+  if (poller !== null) {
+    console.log(`[x] mention poller started every ${String(poller.health().pollSeconds)}s`);
+  }
+
   await warmShelf();
 }
 

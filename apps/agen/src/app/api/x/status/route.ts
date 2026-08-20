@@ -14,6 +14,7 @@
 
 import { botUsername, ingressProblems, killedByEnvironment, limits, mentionDelivery } from "../../../lib/x/config";
 import { fail, ok } from "../../../lib/x/http";
+import { pollerInstance } from "../../../lib/x/poller";
 import { keySeparation, sponsorProblems } from "../../../lib/x/sponsor";
 import { xStore } from "../../../lib/x/store";
 
@@ -50,6 +51,11 @@ export async function GET(): Promise<Response> {
         gasAllowedWei: config.gasPerDayWei.toString(),
       },
       cursor: store.sinceId(),
+      // Counts and timestamps only, on this endpoint's rule. Null means no in-process loop,
+      // which on a polling deployment means mentions arrive only when something calls
+      // `/api/x/poll` — the difference between a bot that is listening and one that is merely
+      // configured to be able to.
+      poller: pollerInstance()?.health() ?? null,
       // Launches whose transaction outcome is unknown. Should be zero; anything else is the one
       // state in this feature that wants a human to look.
       unresolved: store.indeterminateLaunches().length,

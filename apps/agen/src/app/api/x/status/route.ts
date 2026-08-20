@@ -12,6 +12,7 @@
  * — and the reasons say so in words rather than leaving an operator to infer it.
  */
 
+import { parseCommand } from "../../../lib/x/command";
 import { botUsername, ingressProblems, killedByEnvironment, limits, mentionDelivery } from "../../../lib/x/config";
 import { fail, ok } from "../../../lib/x/http";
 import { pollerInstance } from "../../../lib/x/poller";
@@ -32,6 +33,16 @@ export async function GET(): Promise<Response> {
     return ok({
       handle: `@${botUsername()}`,
       delivery: mentionDelivery(),
+      /*
+       * What this build of the bot can be asked to do.
+       *
+       * Here because "the code is deployed" turned out to be an assumption worth being able to
+       * check. Two uploads of the same service raced, an older snapshot won, and the running bot
+       * silently lacked a capability it was believed to have — which from the outside looked
+       * exactly like a bug in the capability. A list derived from the parser means a build can be
+       * asked what it understands instead of being taken on trust.
+       */
+      understands: understood(),
       // Answering questions and launching tokens fail independently, and an operator needs to
       // know which half is down: a bot that can reply but not launch is degraded, not broken.
       canAnswer: ingress.length === 0,
@@ -63,4 +74,28 @@ export async function GET(): Promise<Response> {
   } catch (error) {
     return fail(error);
   }
+}
+
+/**
+ * Asks the parser, rather than a hand-written list, so the answer is true by construction: a build
+ * whose parser cannot read a buy cannot claim to understand one.
+ */
+function understood(): readonly string[] {
+  const at = `@${botUsername()}`;
+  const probes: ReadonlyArray<readonly [string, string, (text: string) => boolean]> = [
+    ["launch", `${at} launch Internet Dog $IDOG`, (text) => parseCommand(text, botUsername()).looksLikeLaunch],
+    [
+      "buy",
+      `${at} buy 0.01 ETH of 0x0000000000000000000000000000000000000001`,
+      (text) => parseCommand(text, botUsername()).trade?.side === "buy",
+    ],
+    [
+      "sell",
+      `${at} sell all of 0x0000000000000000000000000000000000000001`,
+      (text) => parseCommand(text, botUsername()).trade?.side === "sell",
+    ],
+    ["wallet", `${at} wallet balance`, (text) => parseCommand(text, botUsername()).asksWallet],
+  ];
+
+  return probes.filter(([, text, reads]) => reads(text)).map(([name]) => name);
 }

@@ -38,7 +38,7 @@ import { limits, repliesDisabled } from "./config";
 import { xClient, type XClient } from "./client";
 import { XError } from "./errors";
 import { prepareLaunch } from "./generate";
-import { assertMaySponsor, assertMentionAllowed, assertSourceUsable, launchesStopped } from "./guards";
+import { assertMaySponsor, assertMentionAllowed, launchSubject, launchesStopped } from "./guards";
 import { enrichMention } from "./context";
 import { routeMention } from "./intent";
 import { executeSponsoredLaunch, ensureSeat } from "./launch";
@@ -230,7 +230,9 @@ async function launch(
   }
 
   assertMaySponsor(mention);
-  assertSourceUsable(mention);
+  // Called for the refusal it can raise — a token made of one of the bot's own posts — before
+  // anything is reserved. The subject itself is resolved again where it is used.
+  launchSubject(mention);
 
   const config = limits();
   const estimateWei = await budgetedGasWei();

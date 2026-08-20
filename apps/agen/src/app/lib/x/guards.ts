@@ -109,17 +109,23 @@ export function launchesStopped(store: XStore): boolean {
 }
 
 /**
- * The parent post exists, is readable, and is not the bot's.
+ * The post a token gets made of.
  *
- * The last of those is not obvious and is worth stating: a token made *of a reply the bot
+ * The parent when the command replies to one, and the command itself when it does not.
+ * Requiring a parent made the most obvious way to ask — posting "@useagen launch Internet Dog
+ * $IDOG" on its own — an error message, and a standalone post is not missing anything: it has
+ * words, often a picture, and an author who is unambiguously the person asking.
+ *
+ * The one post that is never a subject is the bot's own. A token made *of a reply the bot
  * posted* is a token about Agen announcing a token, which is a loop that produces markets
  * nobody asked for. A person can still launch from any real post, including their own.
+ *
+ * Whether the subject has enough in it to be worth launching is a separate question, and it is
+ * `generate.ts` that asks it — the answer differs depending on which post this returned.
  */
-export function assertSourceUsable(mention: XMention): XPost {
+export function launchSubject(mention: XMention): XPost {
   const source = mention.source;
-  if (source === null) {
-    throw new XError("NO_SOURCE_POST", "There is no post above that one to launch.");
-  }
+  if (source === null) return mention.command;
   if (isSelf(source)) {
     throw new XError("SOURCE_UNAVAILABLE", "That is one of the bot's own posts.");
   }

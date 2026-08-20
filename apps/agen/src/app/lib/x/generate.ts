@@ -21,9 +21,17 @@ import "server-only";
  *
  * A token needs a logo — `validate` requires one, because an Instant token's `metadataURI` is
  * immutable and a market with a broken image is a market with a broken image forever. The post
- * usually has one, so the order is: the source post's own media, then the requesting
- * account's avatar, then refuse. Nothing is generated: an image model in this path would add
- * seconds and a second failure mode to something the post itself almost always answers.
+ * usually has one, so the order is: the parent post's media, the command's own media, then the
+ * requesting account's avatar, then refuse. Nothing is generated: an image model in this path
+ * would add seconds and a second failure mode to something the post itself almost always
+ * answers.
+ *
+ * ## Which post the token is about
+ *
+ * The parent when the command replies to one, and the command itself when it does not — see
+ * `launchSubject`. That is why the emptiness check is not a single rule: a parent post is
+ * material, whereas a command post is material *plus* an instruction, and "launch this" with
+ * the instruction removed is nothing at all.
  */
 
 import type { Address } from "viem";
@@ -39,6 +47,7 @@ import {
 import { normaliseName, normaliseTicker } from "./command";
 import { xClient, type XClient } from "./client";
 import { XError } from "./errors";
+import { launchSubject } from "./guards";
 import { LAUNCH_CONFIDENCE_FLOOR } from "./intent";
 import type { RoutedMention, XMention, XPost } from "./types";
 
@@ -74,6 +83,46 @@ export function sourceIsUsable(source: XPost): boolean {
 }
 
 /**
+ * The words of a command that are the instruction rather than the material.
+ *
+ * Only used to judge emptiness. "@useagen launch this" is a request containing nothing to make a
+ * token of, and it has to be told apart from "@useagen launch the guy who ate the internet",
+ * which is a request that also says what the token is. Stripping the imperative is the only way
+ * to see the difference, since both are the same shape and similar lengths.
+ */
+const INSTRUCTION_WORDS =
+  /\b(?:launch|tokeni[sz]e|create|deploy|make|mint|please|pls|plz|this|it|that|a|an|the|token|coin|market|for|me|now|can|you|do)\b/gi;
+
+/**
+ * Whether the subject has enough in it to be worth launching.
+ *
+ * A parent post is judged on its own contents, exactly as before. The command post is judged
+ * more carefully, because it contains a reason for existing that has nothing to do with the
+ * token: strip the instruction out of "launch this" and nothing is left, whereas "launch $IDOG"
+ * has already said what the token is, and a picture is material on its own.
+ *
+ * The stated name or ticker is what makes the common case work. Somebody who posts "@useagen
+ * launch Internet Dog $IDOG" has specified the token completely, and no amount of surrounding
+ * prose would tell us more than they just did.
+ */
+export function subjectIsUsable(
+  mention: XMention,
+  subject: XPost,
+  explicit: RoutedMention["explicit"],
+): boolean {
+  if (subject.id !== mention.command.id) return sourceIsUsable(subject);
+  if (subject.media.length > 0) return true;
+  if (explicit.ticker !== null || explicit.name !== null) return true;
+
+  const material = subject.text
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/@\w+/g, "")
+    .replace(INSTRUCTION_WORDS, "")
+    .trim();
+  return material.length >= MIN_SOURCE_CHARS;
+}
+
+/**
  * Find a logo and store it on this origin.
  *
  * Stored rather than linked, and that is not a preference. X's media URLs are not promised to
@@ -85,6 +134,12 @@ async function findLogo(mention: XMention, client: XClient): Promise<string> {
   const candidates: string[] = [];
 
   for (const item of mention.source?.media ?? []) {
+    if (item.url !== null) candidates.push(item.url);
+  }
+  // The command's own pictures, which matter when the command *is* the subject: somebody who
+  // posts a picture and "@useagen launch this" has handed over the logo, and falling through to
+  // their avatar would ignore the one thing they attached.
+  for (const item of mention.command.media) {
     if (item.url !== null) candidates.push(item.url);
   }
   const avatar = mention.command.author.avatarUrl;
@@ -139,11 +194,15 @@ export async function prepareLaunch(
   if (routed.intent !== "LAUNCH" || routed.token === null) {
     throw new XError("GENERATION_FAILED", "That was not a launch request.");
   }
-  if (mention.source === null) {
-    throw new XError("NO_SOURCE_POST", "Reply to the post you want to launch and tag me there.");
-  }
-  if (!sourceIsUsable(mention.source)) {
-    throw new XError("SOURCE_TOO_THIN", "There is not enough in that post to make a token of.");
+  const subject = launchSubject(mention);
+  if (!subjectIsUsable(mention, subject, routed.explicit)) {
+    // Two different refusals for two different situations. A parent post that is too thin is a
+    // post the person can see; a command with nothing in it is a person who has not yet said
+    // what they want, and telling them to reply to something would be answering a question they
+    // did not ask.
+    throw subject.id === mention.command.id
+      ? new XError("NO_SOURCE_POST", "There is nothing in that post to make a token of.")
+      : new XError("SOURCE_TOO_THIN", "There is not enough in that post to make a token of.");
   }
 
   if (routed.token.confidence < LAUNCH_CONFIDENCE_FLOOR) {
@@ -168,7 +227,7 @@ export async function prepareLaunch(
   const imageUrl = await findLogo(mention, client);
   const description =
     routed.token.description.trim() === ""
-      ? `Launched from a post by @${mention.source.author.username}.`
+      ? `Launched from a post by @${subject.author.username}.`
       : routed.token.description.trim();
 
   const draft: InstantDraft = {
@@ -185,7 +244,7 @@ export async function prepareLaunch(
     feeReceiver: seat,
     useConnectedWallet: false,
     boostCapable: false,
-    linkX: sourceUrl(mention.source),
+    linkX: sourceUrl(subject),
   };
 
   // The launch form's own validator, on the launch form's own draft type. A rule added there

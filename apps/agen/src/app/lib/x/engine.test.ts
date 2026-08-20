@@ -186,6 +186,9 @@ const COMMAND = post({
 interface Recorder {
   readonly replies: { readonly text: string; readonly to: string }[];
   readonly asked: string[];
+  /** Picture URLs fetched, for the tests that care which candidate the logo came from.
+   * Optional so the many recorders that do not care stay two fields long. */
+  readonly media?: string[];
 }
 
 function client(recorder: Recorder, posts: readonly Post[] = [SOURCE, COMMAND]) {
@@ -200,7 +203,10 @@ function client(recorder: Recorder, posts: readonly Post[] = [SOURCE, COMMAND]) 
       recorder.replies.push({ text, to });
       return "1900000000000000999";
     },
-    media: async () => PNG.buffer.slice(PNG.byteOffset, PNG.byteOffset + PNG.byteLength),
+    media: async (url: string) => {
+      recorder.media?.push(url);
+      return PNG.buffer.slice(PNG.byteOffset, PNG.byteOffset + PNG.byteLength);
+    },
   };
 }
 
@@ -412,11 +418,13 @@ describe("handleMention, launching", () => {
     expect(recorder.replies).toHaveLength(1);
   });
 
-  it("refuses a launch with no parent post, and says why", async () => {
+  it("refuses a standalone launch that does not say what to launch", async () => {
     const store = freshStore();
     const recorder: Recorder = { replies: [], asked: [] };
     withModel(LAUNCH_ANSWER);
 
+    // No parent, no picture, no stated ticker: "launch this" with the instruction removed is
+    // nothing, and a token named by a model out of nothing is the garbage the brief forbids.
     const outcome = await handleMention(
       { command: post({ id: "1900000000000000010", text: "@useagen launch this" }), source: null },
       { store, client: client(recorder) as never },
@@ -425,7 +433,60 @@ describe("handleMention, launching", () => {
     expect(outcome.outcome).toBe("refused");
     expect(outcome.code).toBe("NO_SOURCE_POST");
     expect(executeSponsoredLaunch).not.toHaveBeenCalled();
-    expect(recorder.replies[0]?.text).toContain("Reply to the post");
+    expect(recorder.replies[0]?.text).toContain("Tell me what to launch");
+  });
+
+  it("launches from the post that tagged it when there is no parent", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    withModel(LAUNCH_ANSWER);
+
+    // The commonest way to ask, and it used to be refused: a post that names the token is a
+    // complete request, and there is no post above it because there does not need to be one.
+    const command = post({ id: "1900000000000000011", text: "@useagen launch Internet Dog $IDOG" });
+    const outcome = await handleMention({ command, source: null }, {
+      store,
+      client: client(recorder) as never,
+    });
+
+    expect(outcome.outcome).toBe("launched");
+    expect(outcome.token).toBe(TOKEN);
+    expect(executeSponsoredLaunch).toHaveBeenCalledTimes(1);
+
+    const [prepared] = executeSponsoredLaunch.mock.calls[0] as [
+      { readonly ticker: string; readonly draft: { readonly linkX: string; readonly description: string } },
+    ];
+    expect(prepared.ticker).toBe("IDOG");
+    // Provenance points at the only post there is, so the market still says where it came from.
+    expect(prepared.draft.linkX).toContain(command.id);
+
+    const [record] = store.launchesByUser("770077");
+    // Null rather than the command's id: there was no parent, and recording one would describe a
+    // reply that never happened.
+    expect(record?.sourcePostId).toBe(null);
+    expect(record?.commandPostId).toBe(command.id);
+  });
+
+  it("uses a picture in the post that tagged it as the logo", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [], media: [] };
+    withModel(LAUNCH_ANSWER);
+
+    // A picture is material on its own, so this launches without a stated ticker — and the
+    // attached picture is what it must reach for rather than the author's avatar.
+    const command = post({
+      id: "1900000000000000012",
+      text: "@useagen launch this",
+      media: [{ kind: "photo", url: "https://pbs.x.com/media/dog.png", altText: null }],
+    });
+
+    const outcome = await handleMention({ command, source: null }, {
+      store,
+      client: client(recorder) as never,
+    });
+
+    expect(outcome.outcome).toBe("launched");
+    expect(recorder.media).toContain("https://pbs.x.com/media/dog.png");
   });
 
   it("does not launch when the model is unsure, and keeps the post for a retry of nothing", async () => {

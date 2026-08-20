@@ -88,7 +88,9 @@ export function refusalReply(error: XError): string | null {
 function sentenceFor(code: XErrorCode): string | null {
   switch (code) {
     case "NO_SOURCE_POST":
-      return "Reply to the post you want launched and tag me there.";
+      // Both ways of asking, because the person who hit this has done neither and there is no
+      // way to tell which one they meant.
+      return "Tell me what to launch — 'launch Internet Dog $IDOG' — or tag me under the post you want launched.";
     case "SOURCE_UNAVAILABLE":
       return "Can't read the post above this one, so there's nothing to launch.";
     case "SOURCE_TOO_THIN":

@@ -994,7 +994,7 @@ export function launchInstantTool(): Tool<AgenDeps> {
   return defineTool({
     name: "launch_instant",
     summary:
-      "Propose an Instant launch of the referenced post. Only when the person clearly asked to launch, tokenize, or make a market. Does not send the transaction — the surface does.",
+      "Propose an Instant launch. The subject is the post being replied to, or the asker's own post when there is no post above it — a standalone 'launch Internet Dog $IDOG' is a complete request. Only when the person clearly asked to launch, tokenize, or make a market. Does not send the transaction — the surface does.",
     kind: "execute",
     category: "other",
     parameters: [

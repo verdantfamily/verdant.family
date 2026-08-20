@@ -10,11 +10,16 @@
  * mentions with the credentials in a developer's environment, and could end in a sponsored launch.
  */
 
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { XError } from "./errors";
-import type { PollResult } from "./ingest";
+import { skipExistingMentions, type PollResult } from "./ingest";
 import { backoffFrom, MentionPoller, pollerInstance, startMentionPoller } from "./poller";
+import { XStore } from "./store";
 
 const POLLER_KEY = Symbol.for("agen.x.poller");
 
@@ -206,8 +211,14 @@ describe("starting the loop", () => {
     configured();
     process.env.X_POLL_SECONDS = "45";
 
-    const first = startMentionPoller({ poll: vi.fn().mockResolvedValue(quiet()) });
-    const second = startMentionPoller({ poll: vi.fn().mockResolvedValue(quiet()) });
+    const first = startMentionPoller({
+      poll: vi.fn().mockResolvedValue(quiet()),
+      skipExisting: async () => null,
+    });
+    const second = startMentionPoller({
+      poll: vi.fn().mockResolvedValue(quiet()),
+      skipExisting: async () => null,
+    });
 
     expect(first).not.toBeNull();
     expect(second).toBe(first);
@@ -219,14 +230,20 @@ describe("starting the loop", () => {
     configured();
     process.env.X_POLL_SECONDS = "not-a-number";
 
-    const poller = startMentionPoller({ poll: vi.fn().mockResolvedValue(quiet()) });
+    const poller = startMentionPoller({
+      poll: vi.fn().mockResolvedValue(quiet()),
+      skipExisting: async () => null,
+    });
     expect(poller?.health().pollSeconds).toBe(10);
     poller?.stop();
   });
 
   it("polls every ten seconds unless told otherwise", () => {
     configured();
-    const poller = startMentionPoller({ poll: vi.fn().mockResolvedValue(quiet()) });
+    const poller = startMentionPoller({
+      poll: vi.fn().mockResolvedValue(quiet()),
+      skipExisting: async () => null,
+    });
     expect(poller?.health().pollSeconds).toBe(10);
     poller?.stop();
   });
@@ -234,8 +251,40 @@ describe("starting the loop", () => {
   it("will not poll faster than five seconds", () => {
     configured();
     process.env.X_POLL_SECONDS = "2";
-    const poller = startMentionPoller({ poll: vi.fn().mockResolvedValue(quiet()) });
+    const poller = startMentionPoller({
+      poll: vi.fn().mockResolvedValue(quiet()),
+      skipExisting: async () => null,
+    });
     expect(poller?.health().pollSeconds).toBe(5);
     poller?.stop();
+  });
+
+  it("skips the timeline that already exists, once, before it answers anything", async () => {
+    const skip = vi.fn().mockResolvedValue("2090544373683323219");
+    const poll = vi.fn().mockResolvedValue(quiet({ seen: 1 }));
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const poller = new MentionPoller({ poll, skipExisting: skip });
+
+    await poller.pass();
+    await poller.pass();
+
+    expect(skip).toHaveBeenCalledTimes(1);
+    expect(poll).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("skipExistingMentions", () => {
+  it("advances the cursor to the newest mention and handles none of them", async () => {
+    const store = new XStore(join(mkdtempSync(join(tmpdir(), "agen-x-skip-")), "x.db"));
+    const mentions = vi.fn().mockResolvedValue([{ id: "10" }, { id: "30" }, { id: "20" }]);
+
+    const newest = await skipExistingMentions({
+      store,
+      client: { mentions } as never,
+    });
+
+    expect(newest).toBe("30");
+    expect(store.sinceId()).toBe("30");
+    expect(mentions).toHaveBeenCalledWith(null, 5);
   });
 });

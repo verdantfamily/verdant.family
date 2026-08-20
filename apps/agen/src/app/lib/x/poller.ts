@@ -39,7 +39,7 @@ import "server-only";
 
 import { ingressProblems } from "./config";
 import { XError } from "./errors";
-import { pollOnce, type PollResult } from "./ingest";
+import { pollOnce, skipExistingMentions, type PollResult } from "./ingest";
 
 /**
  * How often a pass runs.
@@ -66,6 +66,11 @@ export interface PollerOptions {
   readonly pollSeconds?: number;
   /** Injected by tests so the loop can be exercised without X. */
   readonly poll?: typeof pollOnce;
+  /**
+   * First thing a live poller does: jump the cursor to the newest mention already on
+   * the timeline. Tests pass a no-op so they do not touch X.
+   */
+  readonly skipExisting?: typeof skipExistingMentions;
 }
 
 export interface PollerHealth {
@@ -112,12 +117,14 @@ export function backoffFrom(error: unknown, at: number = now()): number | null {
 export class MentionPoller {
   private readonly pollSeconds: number;
   private readonly poll: typeof pollOnce;
+  private readonly skipExisting: typeof skipExistingMentions;
 
   private timer: NodeJS.Timeout | null = null;
   private stopped = true;
   /** A pass asked for directly is legitimate work even when no timer is armed, so this is the
    * narrower question the pass itself cares about: have we been told to wind down? */
   private passing = false;
+  private caughtUp = false;
 
   private startedAt: number | null = null;
   private lastPassAt: number | null = null;
@@ -132,6 +139,9 @@ export class MentionPoller {
   constructor(options: PollerOptions = {}) {
     this.pollSeconds = options.pollSeconds ?? DEFAULT_POLL_SECONDS;
     this.poll = options.poll ?? pollOnce;
+    // A no-op unless the production starter wires the real skip. A constructed-in-tests
+    // poller that defaulted to the live skip would read the real account on the first pass.
+    this.skipExisting = options.skipExisting ?? (async () => null);
   }
 
   start(): void {
@@ -189,6 +199,13 @@ export class MentionPoller {
     this.lastPassAt = at;
 
     try {
+      if (!this.caughtUp) {
+        const after = await this.skipExisting({});
+        this.caughtUp = true;
+        if (after !== null) {
+          console.info(`[x] starting after ${after}; older mentions will not be answered`);
+        }
+      }
       const result = await this.poll({});
       this.seen += result.seen;
       this.handled += result.handled;
@@ -280,6 +297,7 @@ export function startMentionPoller(options: PollerOptions = {}): MentionPoller |
 
   const poller = new MentionPoller({
     pollSeconds: pollIntervalSeconds(),
+    skipExisting: skipExistingMentions,
     ...options,
   });
   slot()[POLLER_KEY] = poller;

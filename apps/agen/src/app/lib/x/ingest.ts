@@ -149,6 +149,35 @@ export async function pollOnce(options: PollOptions = {}): Promise<PollResult> {
 }
 
 /**
+ * Move the cursor to the newest mention that already exists, without handling any of them.
+ *
+ * A redeploy used to open the mentions timeline and treat everything still in the window
+ * as new work. That is how a buy from ten minutes ago got answered again after a restart.
+ * The timeline that is already there is finished business. Only posts newer than this
+ * cursor are a request this process is responsible for.
+ */
+export async function skipExistingMentions(options: PollOptions = {}): Promise<string | null> {
+  const store = options.store ?? xStore();
+  const client = options.client ?? xClient();
+
+  const posts = await client.mentions(null, 5);
+  let newest = store.sinceId();
+  for (const post of posts) {
+    if (newest === null || snowflakeAfter(post.id, newest)) newest = post.id;
+  }
+  if (newest !== null) store.advanceCursor(newest);
+  return newest;
+}
+
+function snowflakeAfter(left: string, right: string): boolean {
+  try {
+    return BigInt(left) > BigInt(right);
+  } catch {
+    return left > right;
+  }
+}
+
+/**
  * Handle one mention named by id.
  *
  * The webhook's path, and a support tool: an operator handed a post that should have worked can

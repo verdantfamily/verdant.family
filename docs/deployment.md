@@ -248,6 +248,132 @@ output references `node_modules/.pnpm/...` paths that exist above `apps/web` and
 above what a deploy from `apps/web` uploads. It reports the first one as a missing file rather
 than as a missing directory tree.
 
+## 11. The X bot
+
+Turning `@useagen` on is four things in order, and the order matters because the third one is
+irreversible per market. See [ADR-017](decisions/017-a-tweet-is-a-launch.md) for why it is built
+this way.
+
+**Deploy `CreatorSeatFactory`, and record it.** Nothing else in this section works without it. Its
+address goes in `packages/config/src/deployments.ts` under `addons.creatorSeatFactory`, or in
+`NEXT_PUBLIC_CREATOR_SEAT_FACTORY` for a deployment being tried out. Until it is set,
+`sponsorProblems()` reports the bot as unable to launch, and the bot answers questions and refuses
+launches rather than launching something whose fees nobody can claim.
+
+**Fund two wallets, and understand why they are two.** Both are fresh keys that hold only gas, and
+they must not be the same key — `sponsorProblems()` refuses the deployment if they are.
+
+`X_SPONSOR_PRIVATE_KEY` is the hot key. It submits every launch, pays every gas bill, and signs
+constantly. Treat it as rotatable: replace it on a schedule or the afternoon you suspect it leaked,
+fund the new one, and nothing else in this section changes. No creator entitlement depends on it.
+
+`X_CREATOR_SEAT_OPENER_PRIVATE_KEY` is the opposite kind of key, and this is the part worth reading
+twice. It is the initial occupant of every X creator seat, and seat addresses are derived from it
+(`seatOf(opener, label)`), so it is named immutably in the vault of every market ever launched from
+X. **It is effectively permanent.** Rotating it derives a new population of seats and leaves every
+existing market paying seats only the old key can hand over, so **keep the old key** if you ever
+change it: it is not a signing key that becomes worthless, it is the key to every existing
+creator's handover. Keep it offline-grade — separate secret store, no reuse anywhere else — and
+fund it lightly. It signs one cheap transaction per creator, ever: the `offer` that starts a
+handover. `sponsor.ts` refuses it any other call, by selector, so it cannot be used as a general
+signer even by a caller inside this codebase.
+
+The split exists so those two sentences can both be true. Sharing one key meant an ordinary hot-key
+rotation silently stranded every unclaimed entitlement older than it — fees still accruing to seats
+Agen could no longer hand over.
+
+To mint both at once, `node scripts/make-x-keys.mjs` from `apps/agen` writes the four variables into
+`.env.local` and prints only the two addresses to fund. It prints no private key — the opener cannot
+be rotated, so it is the last secret that should exist in terminal scrollback — and it refuses to run
+if either key is already set, because generating a second opener over a live one renames every seat.
+
+**Set the credentials.** Three sets, because X needs three:
+
+| Variable | What it is for | Without it |
+|---|---|---|
+| `X_BOT_USERNAME` | The handle the bot answers as. Defaults to `useagen`. | Production default is correct |
+| `X_BOT_USER_ID` | The bot's numeric id, so it cannot answer itself | The self-check fails open |
+| `X_BEARER_TOKEN` | App-only reads: mentions, parent posts, search | No mentions can be read |
+| `BRAVE_SEARCH_API_KEY` | Optional. Lets @useagen search the open web when a question needs a current fact | `web_search` is reported unavailable; Agen still answers from context and its own tools |
+| `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET` | OAuth 1.0a, for posting as the bot | The bot cannot reply, so it will not launch |
+| `X_OAUTH_CLIENT_ID`, `X_OAUTH_CLIENT_SECRET` | OAuth 2.0 PKCE, for "sign in with X" | Nobody can claim their fees |
+| `X_OAUTH_REDIRECT_URI` | Defaults to `${NEXT_PUBLIC_SITE_URL}/api/x/auth/callback` | Derived |
+| `X_INGRESS_SECRET` | Bearer secret for `/api/x/poll` and `/api/x/webhook` | Both endpoints refuse every request |
+| `X_SPONSOR_PRIVATE_KEY` | The rotatable hot wallet that submits launches and pays all gas | No launches |
+| `X_SPONSOR_ADDRESS` | Optional. Checked against the key and refused if it disagrees | Derived from the key |
+| `X_CREATOR_SEAT_OPENER_PRIVATE_KEY` | The permanent occupant of every X creator seat. Must differ from the sponsor | No launches; seats would have no occupant able to hand them over |
+| `X_CREATOR_SEAT_OPENER_ADDRESS` | Optional. Checked against the key; a mismatch is refused rather than deriving unreachable seats | Derived from the key |
+| `X_SESSION_SECRET` | Optional. Signs X sessions; derived from `AGENT_WALLET_MASTER_KEY` otherwise | Derived |
+| `AGENT_WALLET_MASTER_KEY` | Already required for agents; the session key derives from it | Sessions cannot be signed |
+| `NEXT_PUBLIC_SITE_URL` | Where a token's metadata and picture are recorded, permanently | Launches refuse |
+
+**Choose how mentions arrive.** `X_MENTION_DELIVERY=polling` is the default and works on every
+access tier; point a cron at `POST /api/x/poll` with the ingress secret every minute. Set
+`webhook` instead when the account's tier includes activity webhooks and point X at
+`/api/x/webhook`; `GET` on that route answers the CRC challenge. Both doors end in the same
+`handleMention`, so switching is configuration.
+
+The limits, all optional, all spend controls rather than politeness:
+
+| Variable | Default | What it bounds |
+|---|---|---|
+| `X_MAX_LAUNCHES_PER_USER_PER_DAY` | 3 | One account's sponsored launches per day |
+| `X_MAX_LAUNCHES_PER_DAY` | 200 | The platform's, per day |
+| `X_MAX_GAS_PER_DAY_WEI` | 0.5 ETH | Gas the platform will spend per day |
+| `X_USER_COOLDOWN_SECONDS` | 60 | Interval between one account's launches |
+| `X_MAX_MENTIONS_PER_USER_PER_MINUTE` | 5 | Mentions answered per account per minute |
+| `X_MIN_ACCOUNT_AGE_DAYS` | 7 | How old an account must be to be sponsored |
+| `X_MIN_FOLLOWERS` | 0 | Followers required to be sponsored |
+| `X_BLOCKLIST` | empty | Comma-separated X user **ids**, never handles |
+| `X_LAUNCHES_DISABLED` | unset | `1` stops launches. Needs a redeploy, which is the point |
+| `X_REPLIES_DISABLED` | unset | `1` stops replies, and therefore launches |
+
+The stored kill switch is separate and faster: it lives in the bot's own SQLite database and either
+one being set stops launches, so the fast switch cannot overrule the deliberate one.
+
+**What it can find out, and what it says when it cannot.** Answering is a research loop, not a
+lookup: the model picks which source a question belongs to from a catalogue where each tool declares
+its kind — Agen's own markets, the chain, X itself, the open web, one named page. The advice it reads
+about *where to look* is generated from the tools actually configured, so an unavailable capability
+is reported to the model as unavailable and produces "I can't check that" rather than a confident
+guess. Two consequences worth knowing before reading the logs:
+
+- Without `BRAVE_SEARCH_API_KEY`, questions about news, companies or anything else current are
+  answered from the model's training data or refused. Everything about Agen markets, the chain and X
+  still works.
+- Several X capabilities depend on the access tier, not on configuration: quote posts, likers and
+  follower relationships are commonly restricted. Those tools report themselves unavailable, and
+  `x_follows` in particular answers "could not determine" rather than "no" when it cannot finish the
+  check — a wrong "no" there is a fabricated claim about two real people.
+
+Depth is read off the wording. `thoughts?` is a few turns; `research this` gathers from more than one
+source; `investigate this` is told to cross-check and to say where its sources disagree. That is a
+ceiling on cost per mention, not a target: the ceiling is 12 model calls, and an ordinary mention
+spends one or two. Images in the conversation are sent to the model to be looked at, which costs
+image tokens on any mention carrying a picture. An answer that will not fit in one post may be posted
+as a chain of up to three; the first post always stands alone, so a chain that fails part-way has
+still answered the question.
+
+To see the routing behaviour on a live model without posting anything:
+
+```
+set -a && . ./.env.local && set +a
+X_ROUTING_PROBE=1 pnpm vitest run src/app/lib/x/routing.probe.test.ts
+```
+
+**Check it from anywhere.** `GET /api/x/status` needs no credential and reports no values: which
+variables are missing, whether the bot can answer and launch, today's launch and gas counts against
+their limits, and `keys`, which says whether both platform keys are present and `separated`. A
+configured deployment showing `separated: false` is the one to act on — it is running on a single
+key, and rotating it later would strand every unclaimed entitlement.
+
+**Rotating the sponsor.** Which is now an ordinary operation, and the reason for the split. Fund a
+new key, set `X_SPONSOR_PRIVATE_KEY` (and `X_SPONSOR_ADDRESS` if you set it), redeploy. Leave
+`X_CREATOR_SEAT_OPENER_PRIVATE_KEY` alone. Existing seats keep their occupant, unclaimed creators
+can still be offered their fees, and the only visible change is which address submits the next
+launch. Token addresses are mined against the sponsor as `msg.sender`, so vanity prefixes and salts
+differ after a rotation; nothing already launched is affected.
+
 ## If something is wrong afterwards
 
 There is no recovery path and that is deliberate. The response to a mis-deployment is a

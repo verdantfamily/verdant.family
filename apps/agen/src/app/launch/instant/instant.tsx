@@ -34,6 +34,8 @@ import {
 import { LogoField } from "./logo-field";
 import { Preview } from "./preview";
 
+const FIRST_BUY_PRESETS = ["0.01", "0.05", "0.1", "0.5"] as const;
+
 export function Instant() {
   const { address } = useAccount();
 
@@ -198,6 +200,25 @@ export function Instant() {
               }}
             />
             <em>{chain.nativeCurrency.symbol}</em>
+          </div>
+          {/*
+            The sizes people actually first-buy. Typing 0.05 is a decision they already
+            made on every other launchpad; making them type it here is how they launch
+            with zero and then wonder why the chart is flat.
+          */}
+          <div className="ax-buy-presets" role="group" aria-label="first buy size">
+            {FIRST_BUY_PRESETS.map((size) => (
+              <button
+                key={size}
+                type="button"
+                className={draft.initialBuy === size ? "on" : undefined}
+                onClick={() => {
+                  set("initialBuy", size);
+                }}
+              >
+                {size} {chain.nativeCurrency.symbol}
+              </button>
+            ))}
           </div>
         </div>
 

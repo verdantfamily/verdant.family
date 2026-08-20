@@ -111,6 +111,13 @@ const OWN: readonly { readonly contract: string; readonly binding: string }[] = 
   // platform 0.50% can be routed by code rather than by promise. Generated because
   // `platformStateOf` returns a seven-field struct an interface renders directly.
   { contract: "BoostTreasury", binding: "boostTreasuryAbi" },
+
+  // The seat a market can name in place of a wallet, so its creator fee can change hands
+  // without the market changing. Both are generated because off chain has to encode the
+  // handover — `offer` and `take` — and because a seat's address is derived rather than
+  // stored, so `seatOf` is read before a launch names its answer. See ADR-016.
+  { contract: "CreatorSeat", binding: "creatorSeatAbi" },
+  { contract: "CreatorSeatFactory", binding: "creatorSeatFactoryAbi" },
 ];
 
 /**

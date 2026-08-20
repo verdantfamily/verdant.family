@@ -24,15 +24,28 @@
 
 import { useState } from "react";
 
-import type { MarketSpecification } from "@verdant/market-compiler/browser";
+import type { FeeCollection, MarketSpecification } from "@verdant/market-compiler/browser";
 import { asPercent, behaviourCards, materialAssumptions } from "@verdant/market-compiler/browser";
 
 import type { PublicJob } from "../lib/builds";
 import { Launch as LaunchPanel } from "./launch";
 
-/** What the market does, as cards rather than as a specification. */
-function Behaviour({ specification }: { readonly specification: MarketSpecification }) {
-  const cards = behaviourCards(specification);
+/**
+ * What the market does, as cards rather than as a specification.
+ *
+ * `collection` is passed rather than inferred because the specification does not contain it:
+ * whether a fee is collected by the pool for its liquidity or taken by the hook into the
+ * market's own accounts is a fact about the deployment. Cards left to guess said the
+ * liquidity kept it, which contradicted the decision note directly underneath them.
+ */
+function Behaviour({
+  specification,
+  collection,
+}: {
+  readonly specification: MarketSpecification;
+  readonly collection: FeeCollection;
+}) {
+  const cards = behaviourCards(specification, { collection });
   if (cards.length === 0) return null;
 
   return (
@@ -388,7 +401,12 @@ export function Review({
         </p>
       </header>
 
-      {specification === null ? null : <Behaviour specification={specification} />}
+      {specification === null ? null : (
+        <Behaviour
+          specification={specification}
+          collection={job.launch?.feeCollection ?? "unknown"}
+        />
+      )}
 
       {specification === null ? null : (
         <Decisions specification={specification} adaptations={job.plan?.adaptations ?? []} />

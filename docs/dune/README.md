@@ -37,10 +37,24 @@ was deployed by the same contract.** The trenches dashboard classifies a token b
 deploying contract, so Agen is one row in that registry, not a list that grows with every
 launch. That is why the ask in `outreach.md` is small enough to be granted.
 
+That was confirmed rather than assumed on 2026-08-18, by reading the dashboard's own
+queries. `launchpad_logic -- robinhood` (query `7979183`) is a hand-maintained list of
+CTEs, one per launchpad, each of the form `select distinct address from
+robinhood.creation_traces where "from" = <deployer>`, unioned and labelled; there is no
+spellbook model and no `dex.trades` project label behind it. Roughly ninety launchpads are
+named and everything else falls into `other`, which is where we are now. Adding us is one
+CTE.
+
+It also surfaced the one trap in the ask. `InstantDeployer` creates **three** contracts per
+launch — token, fee vault, position locker — so the bare `creation_traces` pattern above
+would count us at 96 launches rather than 32. `outreach.md` leads with that caveat and
+supplies both a corrected `creation_traces` CTE and the event-based one, because a
+launchpad that shows up over-counted gets removed rather than corrected.
+
 Two contracts per market are *not* verified on Blockscout — the fee vaults and the
 position lockers — because verification is backfilled per launch. `scripts/verify-instant.sh`
-in `packages/contracts` submits them. Worth running before the Dune submission, since Dune
-auto-fetches an ABI when the explorer has one and otherwise needs it pasted.
+submits them. Worth running before the Dune submission, since Dune auto-fetches an ABI when
+the explorer has one and otherwise needs it pasted.
 
 ## 1. Submit the contracts for decoding
 

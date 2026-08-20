@@ -1,9 +1,11 @@
 import Link from "next/link";
 
+import { instantTape } from "./lib/activity";
 import { ethUsd } from "./lib/eth-price";
 import { marketSource, noveltyOf, type MarketSummary } from "./lib/markets";
 import { TokenCard } from "./markets/card";
 import { Spotlight, spotlightOf } from "./markets/spotlight";
+import { Tape } from "./markets/tape";
 import { Search } from "./search";
 import { SiteFooter } from "./footer";
 import { TopBar } from "./topbar";
@@ -60,9 +62,13 @@ export default async function Home({
   const sort = SORTS.find((entry) => entry.key === first("sort")) ?? SORTS[0]!;
   const next = SORTS[(SORTS.indexOf(sort) + 1) % SORTS.length]!;
 
-  // Both at once: the rate is a cached module read most of the time, and on the two
-  // minutes an hour it is not, there is no reason for the catalogue to wait behind it.
-  const [all, usdPerEth] = await Promise.all([marketSource().list(), ethUsd()]);
+  // Together: the rate is a cached module read most of the time, and the tape is the
+  // same indexer the shelf already asked. Neither should stall the catalogue.
+  const [all, usdPerEth, tape] = await Promise.all([
+    marketSource().list(),
+    ethUsd(),
+    instantTape(),
+  ]);
 
   // Read once for the whole shelf, so every card measures its age against the same second.
   const now = Math.floor(Date.now() / 1000);
@@ -161,6 +167,8 @@ export default async function Home({
             </div>
           </div>
         </div>
+
+        <Tape initial={tape} />
 
         <Spotlight markets={spotlight} usdPerEth={usdPerEth} />
 

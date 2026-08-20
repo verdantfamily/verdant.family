@@ -84,6 +84,34 @@ describe("the Responses provider", () => {
     expect(body["input"]).toBe(REQUEST.input);
   });
 
+  it("keeps input a bare string when there are no images, as every build stage sends it", async () => {
+    const fetch = respond({ output_text: JSON.stringify({ summary: "ok" }) });
+    await openAiProvider({ apiKey: "sk-test", model: "gpt-5", fetch }).generate(REQUEST);
+
+    const body = JSON.parse((fetch.mock.calls[0]![1] as RequestInit).body as string) as Record<string, any>;
+    expect(typeof body["input"]).toBe("string");
+  });
+
+  it("moves the text into a content part when images come with it", async () => {
+    const fetch = respond({ output_text: JSON.stringify({ summary: "a chart" }) });
+
+    await openAiProvider({ apiKey: "sk-test", model: "gpt-5", fetch }).generate({
+      ...REQUEST,
+      images: [{ url: "https://pbs.twimg.com/media/one.jpg" }, { url: "https://pbs.twimg.com/media/two.jpg" }],
+    });
+
+    const body = JSON.parse((fetch.mock.calls[0]![1] as RequestInit).body as string) as Record<string, any>;
+    // The text must survive the change of shape. Losing it would leave the model with pictures
+    // and no question, which reads as a plausible answer to something nobody asked.
+    expect(body["input"][0].content[0]).toEqual({ type: "input_text", text: REQUEST.input });
+    expect(body["input"][0].content.slice(1).map((part: any) => part.image_url)).toEqual([
+      "https://pbs.twimg.com/media/one.jpg",
+      "https://pbs.twimg.com/media/two.jpg",
+    ]);
+    // Instructions stay in their own channel either way.
+    expect(body["instructions"]).toBe(REQUEST.instructions);
+  });
+
   it("reads content from the output array when there is no aggregate field", async () => {
     // What a reasoning model returns: a reasoning item first, then the message.
     const fetch = respond({
@@ -97,6 +125,88 @@ describe("the Responses provider", () => {
     const result = await provider.generate<{ summary: string }>(REQUEST);
 
     expect(result.value.summary).toBe("from output");
+  });
+
+  /**
+   * The failure this group exists for.
+   *
+   * A reasoning model may write more than one message in one response. Joining them produced
+   * `{…}{…}`, which is not JSON, so a response containing a complete answer was reported as
+   * malformed. It killed about one in five agent turns that did real research, because
+   * planning-then-answering is exactly when a model writes twice.
+   */
+  it("takes the last complete message when the model wrote more than one", async () => {
+    const fetch = respond({
+      output: [
+        { type: "reasoning" },
+        { type: "message", content: [{ text: JSON.stringify({ summary: "an abandoned draft" }) }] },
+        { type: "reasoning" },
+        { type: "message", content: [{ text: JSON.stringify({ summary: "the real answer" }) }] },
+      ],
+      // The vendor's aggregate carries the identical corruption, since it is built by joining the
+      // same messages. Present here on purpose: it must not be preferred.
+      output_text:
+        JSON.stringify({ summary: "an abandoned draft" }) + JSON.stringify({ summary: "the real answer" }),
+    });
+
+    const result = await openAiProvider({ apiKey: "sk-test", model: "gpt-5", fetch }).generate<{
+      summary: string;
+    }>(REQUEST);
+
+    expect(result.value.summary).toBe("the real answer");
+    // `raw` is the document that was used, not everything that arrived, or a reader cannot tell
+    // which of two answers produced the value.
+    expect(result.raw).toBe(JSON.stringify({ summary: "the real answer" }));
+  });
+
+  it("falls back to an earlier message when the last one is not valid JSON", async () => {
+    // A truncated or prose-wrapped final message is worse than a complete earlier one.
+    const fetch = respond({
+      output: [
+        { type: "message", content: [{ text: JSON.stringify({ summary: "complete" }) }] },
+        { type: "message", content: [{ text: '{"summary":"cut off' }] },
+      ],
+    });
+
+    const result = await openAiProvider({ apiKey: "sk-test", model: "gpt-5", fetch }).generate<{
+      summary: string;
+    }>(REQUEST);
+
+    expect(result.value.summary).toBe("complete");
+  });
+
+  it("joins the parts within one message, which are a single document", async () => {
+    // Parts of one message are fragments of one JSON document and must still be concatenated. The
+    // bug was joining across messages, not within one.
+    const fetch = respond({
+      output: [{ type: "message", content: [{ text: '{"summary":"split ' }, { text: 'across parts"}' }] }],
+    });
+
+    const result = await openAiProvider({ apiKey: "sk-test", model: "gpt-5", fetch }).generate<{
+      summary: string;
+    }>(REQUEST);
+
+    expect(result.value.summary).toBe("split across parts");
+  });
+
+  it("still reports genuinely malformed content as malformed", async () => {
+    const fetch = respond({ output: [{ type: "message", content: [{ text: "I cannot do that." }] }] });
+
+    const error = await openAiProvider({ apiKey: "sk-test", model: "gpt-5", fetch })
+      .generate(REQUEST)
+      .catch((thrown: unknown) => thrown);
+
+    expect((error as ModelError).message).toContain("not JSON despite a strict schema");
+  });
+
+  it("uses the aggregate when a gateway returns no output array at all", async () => {
+    const fetch = respond({ output_text: JSON.stringify({ summary: "from the aggregate" }) });
+
+    const result = await openAiProvider({ apiKey: "sk-test", model: "gpt-5", fetch }).generate<{
+      summary: string;
+    }>(REQUEST);
+
+    expect(result.value.summary).toBe("from the aggregate");
   });
 
   it("marks rate limits and gateway failures retryable, and rejections not", async () => {
@@ -246,6 +356,54 @@ describe("the Anthropic provider", () => {
    * account that needs topping up looks like a defect in Agen: a benchmark run reported "the
    * model provider answered 400 Bad Request" for five markets while the answer was "add credits".
    */
+  it("sends images as content blocks beside the text", async () => {
+    const fetch = respond({
+      content: [{ type: "tool_use", name: "market_specification", input: { summary: "a chart" } }],
+    });
+
+    await anthropicProvider({ apiKey: "sk-ant-test", model: "claude-sonnet-4", fetch }).generate({
+      ...REQUEST,
+      images: [{ url: "https://pbs.twimg.com/media/one.jpg" }],
+    });
+
+    const body = JSON.parse((fetch.mock.calls[0]![1] as RequestInit).body as string) as Record<string, any>;
+    expect(body["messages"][0].content[0]).toEqual({ type: "text", text: REQUEST.input });
+    expect(body["messages"][0].content[1]).toEqual({
+      type: "image",
+      source: { type: "url", url: "https://pbs.twimg.com/media/one.jpg" },
+    });
+    // The system channel is untouched: an image never becomes an instruction.
+    expect(body["system"]).toBe(REQUEST.instructions);
+  });
+
+  it("takes the last tool block when the model called the tool twice", async () => {
+    const fetch = respond({
+      content: [
+        { type: "tool_use", name: "market_specification", input: { summary: "draft" } },
+        { type: "tool_use", name: "market_specification", input: { summary: "revised" } },
+      ],
+    });
+
+    const result = await anthropicProvider({
+      apiKey: "sk-ant-test",
+      model: "claude-sonnet-4",
+      fetch,
+    }).generate<{ summary: string }>(REQUEST);
+
+    expect(result.value.summary).toBe("revised");
+  });
+
+  it("keeps content a bare string when no images are attached", async () => {
+    const fetch = respond({
+      content: [{ type: "tool_use", name: "market_specification", input: { summary: "ok" } }],
+    });
+
+    await anthropicProvider({ apiKey: "sk-ant-test", model: "claude-sonnet-4", fetch }).generate(REQUEST);
+
+    const body = JSON.parse((fetch.mock.calls[0]![1] as RequestInit).body as string) as Record<string, any>;
+    expect(body["messages"][0].content).toBe(REQUEST.input);
+  });
+
   it("reads an empty balance out of a 400 that calls itself a bad request", async () => {
     const provider = anthropicProvider({
       apiKey: "sk-ant-test",

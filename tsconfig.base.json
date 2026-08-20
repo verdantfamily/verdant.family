@@ -21,6 +21,22 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+
+    /*
+     * A failed build emits nothing.
+     *
+     * By default `tsc` reports its errors and writes the output anyway, which in a workspace where
+     * packages consume each other's `dist` is the most expensive default it has. A build that fails
+     * leaves behind a directory that imports cleanly, resolves, runs, and is missing whichever
+     * exports the broken file was going to provide — so the failure surfaces later, somewhere else,
+     * as a feature that quietly does nothing.
+     *
+     * That is not hypothetical. `market-compiler` stopped compiling and kept emitting for long
+     * enough that its `dist` lost an export the app imported and never gained the image support the
+     * runtime had been written against. Both were fully implemented and fully tested in `src`, and
+     * @useagen told real people it could not see their pictures.
+     */
+    "noEmitOnError": true
   }
 }

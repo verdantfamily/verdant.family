@@ -75,7 +75,8 @@ import {
 } from "./gates.js";
 import { coreTests, CORE_TEST_PATH } from "./core-tests.js";
 import { recogniseAll, remedyBrief } from "./playbook.js";
-import { lockedRates, unmetRates } from "./requirements.js";
+import { lockedRates, unmetRates, unmetThresholds } from "./requirements.js";
+import { thresholdEnglish } from "./threshold.js";
 import { classify, FailureCategory, tacticFor, Tactic } from "./recovery.js";
 import { Blame } from "./playbook.js";
 import { explainRevert, selectorsOf } from "./revert.js";
@@ -759,6 +760,49 @@ export async function runBuild(
             .map((rate) => `${rate.phrase} (${(rate.ppm / 10_000).toFixed(3)}%)`)
             .join(" and ")}. Rather than launch a market that charges something else, ` +
           "this build has stopped. Say the rate once more, in one place, and try again.",
+      });
+    }
+
+    /*
+     * And a threshold the creator wrote down is not a suggestion either.
+     *
+     * The same argument as above, applied to the number the check above deliberately ignores. A
+     * percentage of the supply or of the liquidity is not a rate — `requirements.ts` goes to
+     * some trouble to keep the two apart, because reading a threshold as a fee refuses markets
+     * for charging something nobody asked for — and the consequence went unexamined for a long
+     * time: the threshold was excluded here and covered nowhere else, so it was the one figure
+     * in a prompt that nothing compared against what was built.
+     *
+     * PUSH asked for 5% on every sell over 2% of its immutable total supply and got a market
+     * whose surcharge began at one percent. Every artefact agreed with every other one — the
+     * hook, its tests, the decision note, the card on the token page — because they are all
+     * derived from the specification, and the specification was where the number had already
+     * gone wrong. Agreement between things that share a source is not corroboration.
+     */
+    const unmetThreshold = unmetThresholds(request.prompt, specification);
+
+    if (unmetThreshold.length > 0) {
+      const said = unmetThreshold
+        .map(({ stated, locked, fault }) => {
+          const asked = thresholdEnglish(stated);
+          if (fault === "missing") return `"${stated.phrase}" (${asked}), which this market does not measure at all`;
+          if (fault === "moved") {
+            return `"${stated.phrase}" (${asked}), where the market Agen read uses ${
+              locked === null ? "a different figure" : thresholdEnglish(locked)
+            }`;
+          }
+          return `"${stated.phrase}" (${asked}), where the market Agen read includes the boundary instead of excluding it`;
+        })
+        .join("; and ");
+
+      return await fail({
+        code: FailureCode.Unsupported,
+        stage: Stage.Interpreting,
+        detail:
+          `The description sets a size threshold Agen did not carry through: ${said}. A ` +
+          "threshold decides which trades pay the higher fee, so building this would mean " +
+          "launching a market that treats a different set of trades as large. Say the " +
+          "threshold once more, in one place, and try again.",
       });
     }
 

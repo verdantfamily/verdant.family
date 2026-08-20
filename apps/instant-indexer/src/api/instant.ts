@@ -47,6 +47,27 @@ const QUOTE_DECIMALS = 18;
 
 type MarketRow = typeof instantMarket.$inferSelect;
 
+type Order = ReturnType<typeof desc>;
+
+/**
+ * The orderings `/markets` will accept, each one a stored column.
+ *
+ * `newest` contributes nothing because every ordering falls back to it — see the route.
+ * There is deliberately no `trending`: see the note there.
+ */
+const ORDERS: Record<string, () => readonly Order[]> = {
+  newest: () => [],
+  volume: () => [desc(instantMarket.volumeQuote)],
+  organicVolume: () => [
+    desc(sql`${instantMarket.volumeQuote} - ${instantMarket.boostVolumeQuote}`),
+  ],
+  trades: () => [desc(instantMarket.swapCount)],
+  liquidity: () => [desc(instantMarket.liquidity)],
+  fees: () => [
+    desc(sql`${instantMarket.feesCreatorQuote} + ${instantMarket.feesPlatformQuote}`),
+  ],
+};
+
 /**
  * One market by pool id or by token address.
  *
@@ -198,24 +219,62 @@ export function instantRoutes({
 }): Hono {
   const instant = new Hono();
 
+  /**
+   * Instant markets, newest first unless asked otherwise.
+   *
+   * ## `sort` names a column, not a ranking
+   *
+   * Every option below is a stored total ordered downwards. None of them is "trending":
+   * ranking by recent interest needs a decay and a weighting, which is a product decision
+   * this feed does not get to make on a caller's behalf — and inventing one here would
+   * give two consumers two different ideas of what the word means. `organicVolume` is the
+   * closest honest answer, and it is honest because the subtraction it sorts by is the
+   * one `present` already publishes: a market's Boost buybacks are its own fees being
+   * spent in its own pool, so a total that includes them ranks spending above interest.
+   *
+   * ## `creator` is exact
+   *
+   * Lower-cased to match how addresses are stored, and compared whole. A prefix search
+   * would let one caller's typo return another creator's markets.
+   */
   instant.get("/markets", async (c) => {
     const limit = bounded(c.req.query("limit"), defaultLimit, maxLimit);
     const offset = offsetOf(c.req.query("offset"));
 
+    const sort = c.req.query("sort") ?? "newest";
+    const order = ORDERS[sort];
+    if (order === undefined) {
+      return c.json({ error: `unknown sort "${sort}"`, sorts: Object.keys(ORDERS) }, 400);
+    }
+
+    const creator = c.req.query("creator");
+    if (creator !== undefined && !/^0x[0-9a-fA-F]{40}$/.test(creator)) {
+      return c.json({ error: `"${creator}" is not an address` }, 400);
+    }
+    const where =
+      creator === undefined
+        ? undefined
+        : eq(instantMarket.creator, creator.toLowerCase() as `0x${string}`);
+
     const rows = await db
       .select()
       .from(instantMarket)
-      .orderBy(desc(instantMarket.createdAt))
+      .where(where)
+      // Newest as the tie-break for every ranking, so a page is stable when many markets
+      // share a total — which, at zero volume, is most of them.
+      .orderBy(...order(), desc(instantMarket.createdAt))
       .limit(limit)
       .offset(offset);
 
-    const total = await db.select({ rows: count() }).from(instantMarket);
+    const total = await db.select({ rows: count() }).from(instantMarket).where(where);
 
     return c.json({
       markets: rows.map(present),
       total: Number(total[0]?.rows ?? 0),
       limit,
       offset,
+      sort,
+      ...(creator === undefined ? {} : { creator: creator.toLowerCase() }),
     });
   });
 

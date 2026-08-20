@@ -28,12 +28,45 @@ describe("units, as a person would say them", () => {
 });
 
 describe("a rule as a sentence", () => {
+  /**
+   * "Of the pool's liquidity" rather than "of liquidity", because the basis is now read out
+   * of the condition instead of assumed. This sentence used to say liquidity for every
+   * size-gated sell rule there was, including the ones measured against a fixed total supply
+   * — two materially different mechanics described identically.
+   */
   it("reads a size-triggered surcharge the way a trader would say it", () => {
     const rule = SURCHARGE.specification.rules.find((entry) => entry.id === "large-sell-surcharge")!;
 
     expect(describeRule(rule)).toBe(
-      "When someone sells more than 1% of liquidity, an extra 2% applies and it goes to buyback reserve",
+      "When someone sells more than 1% of the pool's liquidity, an extra 2% applies and it " +
+        "goes to buyback reserve",
     );
+  });
+
+  /**
+   * A share of the token's fixed supply is a different mechanic from a share of the
+   * pool, and used to be described as the same sentence. The basis is read, not assumed.
+   */
+  it("names a share of the total supply when that is what the rule measures", () => {
+    const rule = {
+      id: "large-sell",
+      title: "LARGE SELL",
+      when: { kind: "sell", description: "Somebody sells" },
+      conditions: [
+        {
+          kind: "tradeSizeVsSupply",
+          description: "The sell is more than 2% of the token's total supply",
+          parameters: { operator: ">", percent: 2, basis: "totalSupply" },
+        },
+      ],
+      then: [{ kind: "setFee", description: "Charge 5%", parameters: { feePpm: 50_000 } }],
+    };
+
+    expect(describeRule(rule)).toBe(
+      "When someone sells more than 2% of the total supply, the fee becomes 5%",
+    );
+    expect(describeRule(rule)).not.toContain("1%");
+    expect(describeRule(rule)).not.toContain("liquidity");
   });
 
   it("reads a streak rule", () => {
@@ -116,6 +149,34 @@ describe("how this market works", () => {
 
     expect(sections[0]?.heading).toBe("FEES");
     expect(sections[0]?.lines[0]).toBe("The base fee is 0.5% on every trade.");
+  });
+
+  it("describes a supply-gated sell as a share of the total supply, not of liquidity", () => {
+    const sections = howThisMarketWorks({
+      ...SURCHARGE.specification,
+      baseFeePpm: 20_000,
+      maxFeePpm: 50_000,
+      rules: [
+        {
+          id: "large-sell",
+          title: "LARGE SELL",
+          when: { kind: "sell", description: "Somebody sells" },
+          conditions: [
+            {
+              kind: "tradeSizeVsSupply",
+              description: "more than 2% of the total supply",
+              parameters: { operator: ">", percent: 2, basis: "totalSupply" },
+            },
+          ],
+          then: [{ kind: "setFee", description: "Charge 5%", parameters: { feePpm: 50_000 } }],
+        },
+      ],
+    });
+
+    const selling = sections.find((section) => section.heading === "SELLING");
+    expect(selling?.lines[0]).toContain("more than 2% of the total supply");
+    expect(selling?.lines.join(" ")).not.toContain("1%");
+    expect(selling?.lines.join(" ")).not.toContain("liquidity");
   });
 
   it("groups rules by what they react to rather than by order", () => {

@@ -34,6 +34,7 @@ export * from "./foundry.js";
 export * from "./gates.js";
 export * from "./semantics.js";
 export * from "./requirements.js";
+export * from "./threshold.js";
 export * from "./deployment.js";
 export * from "./deployment-spec.js";
 export * from "./deployment-validation.js";

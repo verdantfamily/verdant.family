@@ -25,6 +25,15 @@ export * from "./spec.js";
 /** The same market, in English. Shared so the page and the pipeline cannot disagree. */
 export * from "./describe.js";
 
+/**
+ * What a size threshold means, which a card has to say as exactly as a hook computes it.
+ *
+ * Pure arithmetic and two renderers. Here because the alternative is the token page
+ * re-deriving "more than 2% of the total supply" from a percentage and a guess, which is
+ * the drift this entry point exists to prevent.
+ */
+export * from "./threshold.js";
+
 /** What will be built: the component graph and its ordering. */
 export * from "./plan.js";
 

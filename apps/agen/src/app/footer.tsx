@@ -42,6 +42,13 @@ export function SiteFooter({ reveal = true }: { readonly reveal?: boolean }) {
       </div>
 
       <div className="ax-footlinks">
+        {/*
+          The only way in to `/useagen`, and the reason it is here rather than in the navigation:
+          somebody who launched a token by replying to a post has been told the market's URL and
+          nothing else, so the path to claiming their fees has to exist on every page they might
+          land on. A footer is the one place that is true of.
+        */}
+        <a href="/useagen">Launch from X</a>
         <a href="https://x.com/agendotspace" target="_blank" rel="noreferrer">
           Twitter / X
         </a>

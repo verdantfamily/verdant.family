@@ -3,7 +3,21 @@ import Link from "next/link";
 import type { MarketSummary } from "../lib/markets";
 import { eth, marketCapUsd, sinceLaunch } from "../lib/format";
 import { TokenArt } from "./art";
+import { QuickBuy, type QuickBuyMarket } from "./quick-buy";
 import { Spark } from "./spark";
+
+function instantBuy(market: MarketSummary): QuickBuyMarket | null {
+  if (market.kind !== "instant") return null;
+  if (market.tokenAddress === null || market.hookAddress === null) return null;
+  if (market.poolId === undefined || market.lpFee === undefined) return null;
+  return {
+    symbol: market.symbol,
+    token: market.tokenAddress,
+    hook: market.hookAddress,
+    poolId: market.poolId,
+    lpFee: market.lpFee,
+  };
+}
 
 /**
  * A market capitalisation, in dollars where a rate was obtained and in ether where it
@@ -34,32 +48,43 @@ export function TokenCard({
   /** Chain-independent wall clock, passed in so server and client agree on the second. */
   readonly now: number;
 }) {
-  return (
-    <Link className="ax-tcard" href={`/markets/${market.id}`}>
-      <span className="ax-art">
-        <TokenArt market={market} size={132} />
-      </span>
+  const buy = instantBuy(market);
 
-      <span className="ax-tcard-line">
-        <span className="ax-tcard-tic">${market.symbol}</span>
-        <span className="ax-tcard-val ax-num">{cap(market.trading?.marketCap, usdPerEth)}</span>
-      </span>
+  return (
+    <article className="ax-tcard">
+      <Link className="ax-tcard-go" href={`/markets/${market.id}`}>
+        <span className="ax-art">
+          <TokenArt market={market} size={132} />
+        </span>
+
+        <span className="ax-tcard-line">
+          <span className="ax-tcard-tic">${market.symbol}</span>
+          <span className="ax-tcard-val ax-num">{cap(market.trading?.marketCap, usdPerEth)}</span>
+        </span>
+
+        {/*
+          The name and how new this is, on one line.
+
+          A shelf sorted by newest is answering "what just launched", and until now the answer
+          was only legible by position — the first card was newest because it was first, which
+          stops being true the moment somebody sorts by market cap instead. The age is the fact
+          that survives the ordering.
+        */}
+        <span className="ax-tcard-line ax-tcard-sub">
+          <span className="ax-tcard-name">{market.name}</span>
+          <span className="ax-tcard-age">{sinceLaunch(market.createdAt, now)}</span>
+        </span>
+
+        <Spark points={market.spark} />
+      </Link>
 
       {/*
-        The name and how new this is, on one line.
-
-        A shelf sorted by newest is answering "what just launched", and until now the answer
-        was only legible by position — the first card was newest because it was first, which
-        stops being true the moment somebody sorts by market cap instead. The age is the fact
-        that survives the ordering.
+        Buy from the card. Nested inside a link a button is invalid HTML and steals the
+        navigation; beside it, the tap is a trade and the rest of the card is still the
+        token page.
       */}
-      <span className="ax-tcard-line ax-tcard-sub">
-        <span className="ax-tcard-name">{market.name}</span>
-        <span className="ax-tcard-age">{sinceLaunch(market.createdAt, now)}</span>
-      </span>
-
-      <Spark points={market.spark} />
-    </Link>
+      {buy === null ? null : <QuickBuy market={buy} />}
+    </article>
   );
 }
 

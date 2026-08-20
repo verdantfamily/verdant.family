@@ -21,6 +21,7 @@ import { instantLaunchBlocker } from "./permissions";
 import { answerAgentBuild, startAgentBuild } from "./programmable";
 import { agentInstantLaunch, claimAgentRevenue } from "./service";
 import type { AgentStore } from "./store";
+import { executeAgentBuy, executeAgentSell, type AgentTradeOutcome } from "./trade";
 import type { AgentRecord } from "./types";
 
 export interface ExecutionResult {
@@ -88,7 +89,45 @@ export async function executeDecision(
       const result = await claimAgentRevenue(store, { agent, asOwner: false }, decision.token);
       return { summary: "Claimed creator fees.", detail: result };
     }
+
+    case "buy_token": {
+      const result = await executeAgentBuy(store, agent, {
+        token: decision.token,
+        amountWei: decision.amountWei,
+      });
+
+      return {
+        summary: `Bought ${result.symbol} for ${formatEth(result.quoteWei)} ETH.`,
+        detail: tradeDetail(result),
+      };
+    }
+
+    case "sell_token": {
+      const result = await executeAgentSell(store, agent, {
+        token: decision.token,
+        fraction: decision.fraction,
+      });
+
+      return {
+        summary: `Sold ${result.symbol} for ${formatEth(result.quoteWei)} ETH.`,
+        detail: tradeDetail(result),
+      };
+    }
   }
+}
+
+/** Wei as strings, as every other stored decision result does it. */
+function tradeDetail(result: AgentTradeOutcome): Record<string, unknown> {
+  return {
+    side: result.side,
+    token: result.token,
+    symbol: result.symbol,
+    quoteWei: result.quoteWei.toString(),
+    tokenAmount: result.tokenAmount.toString(),
+    priceImpactBps: result.priceImpactBps,
+    txHash: result.txHash,
+    ...(result.approvalTxHash === null ? {} : { approvalTxHash: result.approvalTxHash }),
+  };
 }
 
 function formatEth(wei: bigint): string {

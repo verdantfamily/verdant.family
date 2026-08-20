@@ -28,9 +28,30 @@
  * taken when the words around it say it is a fee on a trade, and the shapes that look like rates
  * without being one — a share of a fee already taken, a supply percentage, a slippage bound — are
  * left alone. Anything unrecognised is silence, and silence here means "no requirement to check".
+ *
+ * ## The other half: a threshold is also a number the creator wrote down
+ *
+ * For a long time this file checked rates and nothing checked thresholds, and the asymmetry was
+ * not an oversight so much as an unexamined consequence: `PERCENTAGE_OF` exists to stop "2% of
+ * the total supply" being mistaken for a fee, it did that correctly, and then the number fell out
+ * of the pipeline entirely. Excluded from the rate guard and covered by no guard of its own, it
+ * was the one figure in a prompt that nothing compared against what got built.
+ *
+ * PUSH is what that cost. Its prompt says 5% on "every sell over 2% of the token's immutable total
+ * supply"; interpretation came back with one percent; the contracts, the tests, the decision note
+ * and the token page all agreed with each other about one percent, and the build reached the launch
+ * button with its central number halved and nothing in a position to notice. The rate guard passed,
+ * correctly and irrelevantly — the 2% was never a rate.
+ *
+ * So `statedThresholds` reads the same sentences from the other side, and the same rule applies:
+ * presence is checked, the reading is narrow, and a threshold this cannot see is a threshold it
+ * never approved. The comparison travels with it, because "over 2%" and "at least 2%" differ by
+ * exactly the trade a creator will check by hand.
  */
 
 import type { MarketSpecification, Rule } from "./spec.js";
+import { basisIn, inclusivityIn, sameThreshold, thresholdIn } from "./threshold.js";
+import type { SizeThreshold } from "./threshold.js";
 
 /** A rate the creator wrote down, in parts per million, with the words it was written in. */
 export interface StatedRate {
@@ -249,4 +270,196 @@ export function unmetRates(
   const locked = lockedRates(specification);
 
   return statedRates(prompt).filter((rate) => !locked.has(rate.ppm));
+}
+
+// --- thresholds ------------------------------------------------------------
+
+/**
+ * The percentage patterns a threshold is written in.
+ *
+ * The same shapes `statedRates` reads, for the same reason: a creator who writes "half a percent
+ * of the supply" has stated a threshold as plainly as one who writes "0.5%", and a pattern that
+ * needs a digit would let the first through unchecked.
+ */
+const PERCENT_PATTERNS: readonly {
+  readonly re: RegExp;
+  readonly read?: (raw: string) => number | null;
+}[] = [
+  { re: /(\d+(?:\.\d+)?)\s*%/g },
+  { re: /(\d+(?:\.\d+)?)\s*percent\b/gi },
+  { re: WORDED_PERCENT, read: wordedValue },
+];
+
+/**
+ * What a percentage is of, when that makes it something other than a trade-size threshold.
+ *
+ * The mirror of `PERCENTAGE_OF` and needed for a reason that only shows up from this side: the
+ * window after a number is wide enough to hold a whole clause, and a clause holds nouns that
+ * belong to other things. "The top 5% of holders share the fee pool" is a share of the holders
+ * and the word "pool" four words later is part of what they share — read as a threshold, it
+ * becomes a trade measured against the pool, which is a mechanic nobody mentioned.
+ *
+ * So the head of the noun phrase decides, and anything on this list ends the reading before the
+ * rest of the sentence can be mined for a basis.
+ */
+const NOT_A_BASIS = new RegExp(
+  String.raw`^\s*of\s+(?:the\s+|that\s+|all\s+|those\s+|top\s+|collected\s+|its\s+)*` +
+    String.raw`(?:(?:trading|swap|hook)\s+)?` +
+    String.raw`(?:fees?|revenue|proceeds|takings|rewards?|holders?|traders?|wallets?|treasury|pot|jackpot)\b`,
+  "i",
+);
+
+/**
+ * The thresholds a prompt states, as percentages of something.
+ *
+ * Read from what follows the number, never from the sentence around it — the distinction
+ * `PERCENTAGE_OF` was written for, and the reason CNPY's "sells more than 1% of current
+ * liquidity, charge an additional 2%" yields one threshold and one rate rather than two of
+ * either. A percentage of a fee, of a treasury or of the holders is not a trade-size threshold
+ * and is not returned.
+ *
+ * The comparison is read from the words in front of the number, which is where creators put it.
+ */
+export function statedThresholds(prompt: string): readonly SizeThreshold[] {
+  const found: SizeThreshold[] = [];
+
+  for (const { re, read } of PERCENT_PATTERNS) {
+    for (const match of prompt.matchAll(re)) {
+      const at = match.index ?? 0;
+      const after = prompt.slice(at + match[0].length, at + match[0].length + 60);
+
+      // What the number is a percentage *of*. Anything that is not a quantity a trade can be
+      // measured against is silence here, including every shape `PERCENTAGE_OF` exists to
+      // exclude from the rate guard.
+      if (!/^\s*of\b/i.test(after)) continue;
+      if (NOT_A_BASIS.test(after)) continue;
+      const basis = basisIn(after);
+      if (basis === null) continue;
+
+      const value = read === undefined ? Number(match[1]!) : read(match[1]!);
+      if (value === null || !Number.isFinite(value) || value <= 0 || value > 100) continue;
+
+      // The comparison sits in front of the number: "sells over 2%", "more than 2%", "2% or
+      // more". A window rather than the sentence, so a comparison belonging to a different
+      // clause is not borrowed.
+      const before = prompt.slice(Math.max(0, at - 40), at);
+      const inclusive = inclusivityIn(before) ?? inclusivityIn(after);
+
+      const phrase = `${match[0].trim()}${after.match(/^\s*of\s[\w'’\s]{0,40}/i)?.[0] ?? ""}`
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (found.some((entry) => entry.basis === basis && entry.percent === value)) continue;
+      found.push({ basis, percent: value, inclusive, phrase });
+    }
+  }
+
+  return found;
+}
+
+/**
+ * Every trade-size threshold the locked specification states.
+ *
+ * Wide, and the opposite bias to `statedThresholds`: this side is looking for a reason to say the
+ * requirement survived, so it reads every rule's conditions and its trigger alike. The trigger is
+ * included because interpretation frequently puts the size test there — `engineer.ts` says as much
+ * to the model and then repairs it — and a threshold in the wrong field is still a threshold the
+ * market has.
+ */
+export function lockedThresholds(specification: MarketSpecification): readonly SizeThreshold[] {
+  const found: SizeThreshold[] = [];
+
+  const take = (threshold: SizeThreshold | null): void => {
+    if (threshold === null) return;
+    if (found.some((entry) => sameThreshold(entry, threshold))) return;
+    found.push(threshold);
+  };
+
+  for (const rule of specification.rules) {
+    for (const condition of rule.conditions) take(thresholdIn(condition));
+
+    // The trigger, read as though it were a condition. Its shape differs by one optional
+    // field and what it means here is identical.
+    take(
+      thresholdIn({
+        kind: rule.when.kind,
+        description: rule.when.description,
+        ...(rule.when.parameters === undefined ? {} : { parameters: rule.when.parameters }),
+      }),
+    );
+  }
+
+  return found;
+}
+
+/** Why a threshold the creator stated is not the threshold the market locked. */
+export type ThresholdFault =
+  /** Nothing in the market measures a trade against this basis at all. */
+  | "missing"
+  /** The market measures against this basis, at a different percentage. */
+  | "moved"
+  /** The right percentage, under the comparison the creator did not write. */
+  | "boundary";
+
+export interface UnmetThreshold {
+  readonly stated: SizeThreshold;
+  /** The nearest thing the market did lock, where there is one, for a message worth reading. */
+  readonly locked: SizeThreshold | null;
+  readonly fault: ThresholdFault;
+}
+
+/**
+ * Thresholds the creator stated that the locked market does not implement.
+ *
+ * Empty for almost every prompt, including every prompt that states no threshold. A non-empty
+ * answer is a build that must stop, for exactly the reason `unmetRates` stops one: the market
+ * about to be written is not the market that was asked for, and it will be immutable.
+ *
+ * `moved` is the fault that matters most and the one that had no detector. A model that reads
+ * "over 2% of supply" and locks one percent has not made a judgement call about an ambiguous
+ * request — the request named the number — so no default, no fallback and no convention may
+ * replace it.
+ */
+export function unmetThresholds(
+  prompt: string,
+  specification: MarketSpecification,
+): readonly UnmetThreshold[] {
+  const locked = lockedThresholds(specification);
+
+  // The return type is annotated because `flatMap` infers the callback from its branches, and three
+  // branches returning arrays of three different literal `fault` types widen to a union of array
+  // types rather than to an array of the union. Stating what every branch is a kind of gives the
+  // inference the target it could not work out, and changes nothing about what runs.
+  return statedThresholds(prompt).flatMap((stated): readonly UnmetThreshold[] => {
+    const onBasis = locked.filter((entry) => entry.basis === stated.basis);
+    const exact = onBasis.find((entry) => entry.percent === stated.percent);
+
+    if (exact === undefined) {
+      return [
+        {
+          stated,
+          locked: onBasis[0] ?? null,
+          fault: onBasis.length === 0 ? ("missing" as const) : ("moved" as const),
+        },
+      ];
+    }
+
+    /*
+     * The number survived; the boundary may not have.
+     *
+     * Only reported where the creator actually stated a comparison and the market states the
+     * opposite one. Silence on either side is not a disagreement — a specification that records
+     * no comparison is answered by `thresholdSolidity`, which writes the exclusive form the
+     * creator's words overwhelmingly mean.
+     */
+    if (
+      stated.inclusive !== null &&
+      exact.inclusive !== null &&
+      stated.inclusive !== exact.inclusive
+    ) {
+      return [{ stated, locked: exact, fault: "boundary" as const }];
+    }
+
+    return [];
+  });
 }

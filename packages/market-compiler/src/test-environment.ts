@@ -645,6 +645,12 @@ ${wiring.join("\n")}
         return IERC20(launchedMarket.token).balanceOf(account);
     }
 
+    /// The token's immutable total supply, which a size threshold measured against
+    /// supply has to be compared with.
+    function tokenSupply() internal view returns (uint256) {
+        return IERC20(launchedMarket.token).totalSupply();
+    }
+
     /**
      * Every account a fee may legitimately end up in.
      *
@@ -739,6 +745,7 @@ Behavior helpers:
   sellAs(address trader, uint128 amountIn) -> uint256 amountOut
   sellAsWith(address trader, uint128 amountIn, uint128 minAmountOut, bytes hookData) -> uint256 amountOut
   tokenBalance(address account) -> uint256
+  tokenSupply() -> uint256
 
 The helpers own trader funding, router identity, approvals, settlement and trade size.
 Generated tests own only the sequence and the assertions that prove this market's rules.

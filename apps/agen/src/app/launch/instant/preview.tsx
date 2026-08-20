@@ -29,6 +29,7 @@ import { abi, instant as instantSdk, launch as launchSdk } from "@verdant/sdk";
 
 import { BOOST_ADDRESSES, CHAIN_ID, EXPLORER_URL, INSTANT_ADDRESSES, chain, shortAddress } from "../../lib/chain";
 import { INSTANT_FEE_PERCENTS, absoluteUrl, instantParams, type Derived } from "../../lib/instant";
+import { shareDescription, shareTitle } from "../../lib/og-card";
 
 interface Prepared {
   readonly salt: Hex;
@@ -442,6 +443,13 @@ export function Preview({
               Trade ${derived.symbol}
             </a>
 
+            <ShareLaunch
+              token={created.token}
+              name={derived.name}
+              symbol={derived.symbol}
+              description={description}
+            />
+
             {EXPLORER_URL === undefined ? null : (
               <p className="ax-preview-away">
                 <a href={`${EXPLORER_URL}/tx/${created.hash}`} target="_blank" rel="noreferrer">
@@ -506,4 +514,55 @@ export function Preview({
 /** A declined request is not an error worth reporting: they did it a second ago. */
 function isRejection(error: Error): boolean {
   return /user rejected|user denied|rejected the request/i.test(error.message);
+}
+
+/**
+ * The two things a creator does in the minute after launch: tell people, and keep the
+ * link. Without them they close the tab and paste a CA into a chat — and the first
+ * buyers land on a screener instead of here.
+ */
+function ShareLaunch({
+  token,
+  name,
+  symbol,
+  description,
+}: {
+  readonly token: string;
+  readonly name: string;
+  readonly symbol: string;
+  readonly description: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const path = `/markets/${token}`;
+  const url = absoluteUrl(path) ?? `https://agen.space${path}`;
+  const title = shareTitle(symbol, name);
+  const blurb = shareDescription({
+    headline: description,
+    name,
+    symbol,
+    marketCap: null,
+  });
+  const tweet = `https://x.com/intent/tweet?text=${encodeURIComponent(`${title}\n${blurb}`)}&url=${encodeURIComponent(url)}`;
+
+  return (
+    <div className="ax-share">
+      <a className="ax-share-x" href={tweet} target="_blank" rel="noreferrer">
+        Post on X
+      </a>
+      <button
+        type="button"
+        className="ax-share-copy"
+        onClick={() => {
+          void navigator.clipboard.writeText(url).then(() => {
+            setCopied(true);
+            window.setTimeout(() => {
+              setCopied(false);
+            }, 2_000);
+          });
+        }}
+      >
+        {copied ? "Copied" : "Copy link"}
+      </button>
+    </div>
+  );
 }

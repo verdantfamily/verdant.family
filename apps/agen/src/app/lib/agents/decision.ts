@@ -39,6 +39,8 @@ export const EXECUTABLE_KINDS = [
   "programmable_build",
   "answer_clarification",
   "claim_revenue",
+  "buy_token",
+  "sell_token",
 ] as const satisfies readonly DecisionKind[];
 
 export type ExecutableKind = (typeof EXECUTABLE_KINDS)[number];
@@ -82,12 +84,48 @@ export interface ClaimRevenueDecision extends DecisionBase {
   readonly token: Address;
 }
 
+/**
+ * Buy a token on an existing market.
+ *
+ * The one decision that carries an address the agent did not create, and worth saying
+ * exactly why that is acceptable. It is checked for shape here and proven at execution:
+ * `trade.ts` reads the Instant registry and refuses anything that is not one of its
+ * markets, so the model is choosing among Instant markets rather than naming a contract.
+ * What it cannot do with the address is the point — the router only swaps, and pays the
+ * proceeds to `msg.sender` — so the worst a bad choice costs is the capped ether spent on
+ * a token nobody wants. That is a trading loss, which is a risk the owner took by funding
+ * a trading agent, and not a way to move funds out.
+ */
+export interface BuyTokenDecision extends DecisionBase {
+  readonly kind: "buy_token";
+  readonly token: Address;
+  /** Already clamped to the per-trade cap, the reserve and the remaining daily budget. */
+  readonly amountWei: bigint;
+}
+
+/**
+ * Sell part or all of a holding.
+ *
+ * The token is matched against what this agent has traded or launched, so selling is
+ * chosen from a list in the way `claim_revenue` is. A fraction rather than an amount
+ * because the model does not know the wallet's balance in base units and should not be
+ * guessing at eighteen decimal places to get out of a position.
+ */
+export interface SellTokenDecision extends DecisionBase {
+  readonly kind: "sell_token";
+  readonly token: Address;
+  /** Share of the holding to sell, between 0 and 1. */
+  readonly fraction: number;
+}
+
 export type ValidatedDecision =
   | NoActionDecision
   | InstantLaunchDecision
   | ProgrammableBuildDecision
   | AnswerClarificationDecision
-  | ClaimRevenueDecision;
+  | ClaimRevenueDecision
+  | BuyTokenDecision
+  | SellTokenDecision;
 
 export interface DecisionContext {
   readonly store: AgentStore;
@@ -136,7 +174,62 @@ export function validateDecision(raw: unknown, context: DecisionContext): Valida
       return answerClarification(object, context, rationale, confidence);
     case "claim_revenue":
       return claimRevenue(object, context, rationale, confidence);
+    case "buy_token":
+      return buyToken(object, context, rationale, confidence);
+    case "sell_token":
+      return sellToken(object, context, rationale, confidence);
   }
+}
+
+function buyToken(
+  object: Record<string, unknown>,
+  context: DecisionContext,
+  rationale: string,
+  confidence: number,
+): BuyTokenDecision {
+  const token = asAddressLike(object.token);
+
+  // Clamped rather than refused, exactly as a launch's opening buy is: an inflated request
+  // becomes a smaller trade, so a model with a poor sense of scale costs the agent a worse
+  // entry and never an overspend.
+  const requestedWei = asEthWei(object.amountEth);
+  const ceiling = min(context.permissions.maxEthPerTradeWei, context.spendableWei);
+  const amountWei = min(requestedWei, ceiling < 0n ? 0n : ceiling);
+
+  if (amountWei <= 0n) {
+    throw new AgentError(
+      "MODEL_REFUSED",
+      "There is nothing spendable for a buy, so this agent cannot trade this cycle.",
+      { details: { spendableWei: context.spendableWei.toString() } },
+    );
+  }
+
+  return { kind: "buy_token", token, amountWei, rationale, confidence };
+}
+
+function sellToken(
+  object: Record<string, unknown>,
+  context: DecisionContext,
+  rationale: string,
+  confidence: number,
+): SellTokenDecision {
+  const requested = asAddressLike(object.token).toLowerCase();
+
+  // Identity rather than format, like `claim_revenue`: a token this agent has never bought
+  // or launched is not a position, and selling one is not a thing to attempt on chain to
+  // find out.
+  const held = context.store
+    .heldTokenCandidates(context.agent.id)
+    .find((token) => token.toLowerCase() === requested);
+
+  if (held === undefined) {
+    throw new AgentError("MODEL_REFUSED", "This agent has no position in that token.", {
+      details: { token: requested },
+    });
+  }
+
+  const fraction = asFraction(object.fraction);
+  return { kind: "sell_token", token: held, fraction, rationale, confidence };
 }
 
 function instantLaunch(
@@ -271,6 +364,10 @@ export function decisionPayload(decision: ValidatedDecision): Record<string, unk
       return { jobId: decision.jobId, answers: decision.answers };
     case "claim_revenue":
       return { token: decision.token };
+    case "buy_token":
+      return { token: decision.token, amountWei: decision.amountWei.toString() };
+    case "sell_token":
+      return { token: decision.token, fraction: decision.fraction };
   }
 }
 
@@ -291,6 +388,12 @@ export function decisionFromPayload(
   const raw: Record<string, unknown> = { ...payload, kind, rationale, confidence };
   if (kind === "instant_launch") {
     raw.initialBuyEth = weiToEthString(BigInt(String(payload.initialBuyWei ?? "0")));
+  }
+  if (kind === "buy_token") {
+    // Back through the same clamp the model's request went through, so an approval that
+    // arrives after the budget has moved buys what is affordable now rather than what was
+    // affordable when it was proposed.
+    raw.amountEth = weiToEthString(BigInt(String(payload.amountWei ?? "0")));
   }
   return validateDecision(raw, context);
 }
@@ -328,6 +431,30 @@ function asEthWei(value: unknown): bigint {
 
   const [whole = "0", fraction = ""] = text.split(".");
   return BigInt(whole) * 10n ** 18n + BigInt(fraction.padEnd(18, "0").slice(0, 18));
+}
+
+/** An address, checksummed. Refused rather than coerced: half an address is not one. */
+function asAddressLike(value: unknown): Address {
+  const text = asString(value, "token").trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(text)) {
+    throw new AgentError("MODEL_REFUSED", "That is not a token address.", {
+      details: { token: text.slice(0, 64) },
+    });
+  }
+  return getAddress(text);
+}
+
+/**
+ * A share of a holding.
+ *
+ * Junk means all of it rather than none: a sell is the agent getting out, and a model that
+ * fumbles the field should not end up holding a position it decided to leave. The clamp is
+ * to (0, 1] because zero is not a sell.
+ */
+function asFraction(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 1;
+  return Math.min(1, parsed);
 }
 
 function clamp(text: string, max: number): string {

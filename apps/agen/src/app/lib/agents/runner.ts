@@ -23,12 +23,18 @@
  * cannot afford to act does not pay a vendor to find that out.
  */
 
+import { getAddress } from "viem";
+
+import { agen } from "@verdant/sdk";
+
+import { fetchInstantMarketList } from "../instant-feed";
 import { AgentError } from "./errors";
 import { decisionPayload, validateDecision, type DecisionContext, type ValidatedDecision } from "./decision";
 import { executeDecision, type ExecutionResult } from "./executor";
+import { readAgentHoldings, type AgentPosition } from "./holdings";
 import { readOutcomes as readOutcomesFromFeed, recordOutcomeMemories, type LaunchOutcome } from "./outcomes";
 import { assertAgentOperable } from "./permissions";
-import { defaultPlanner, type Planner } from "./planner";
+import { defaultPlanner, type Planner, type TradableMarket } from "./planner";
 import type { AgentStore } from "./store";
 import { readTreasury } from "./treasury";
 import type {
@@ -43,6 +49,9 @@ import type {
 } from "./types";
 import { PLATFORM_AUTONOMY_PAUSED } from "./types";
 
+/** How many markets a cycle is shown to choose a buy from. */
+const MARKET_SHORTLIST = 12;
+
 export interface CycleOptions {
   readonly trigger: RunTrigger;
   readonly planner?: Planner;
@@ -50,6 +59,13 @@ export interface CycleOptions {
   readonly readBalanceWei?: (agent: AgentRecord) => Promise<bigint>;
   /** Injected in tests so a cycle can be exercised without a market feed. */
   readonly readOutcomes?: (store: AgentStore, agent: AgentRecord) => Promise<readonly LaunchOutcome[]>;
+  /** Injected in tests so a cycle can be exercised without reading balances from a chain. */
+  readonly readPositions?: (
+    store: AgentStore,
+    agent: AgentRecord,
+  ) => Promise<readonly AgentPosition[]>;
+  /** Injected in tests so a cycle can be exercised without the Instant feed. */
+  readonly readMarkets?: () => Promise<readonly TradableMarket[] | undefined>;
   readonly execute?: typeof executeDecision;
   readonly holder?: string;
   /**
@@ -217,13 +233,22 @@ export async function runAgentCycle(
   try {
     // ---- What the agent can afford, before anyone is asked to think.
 
-    // Both reads reach the network and neither depends on the other, so a slow feed costs
-    // the cycle nothing beyond the slower of the two.
+    // Four reads that reach the network and none of which depends on another, so a slow
+    // feed costs the cycle nothing beyond the slowest of them.
+    //
+    // Positions and markets are the two halves of trading: what the agent could sell and
+    // what it could buy. Both fall back to undefined rather than to empty, because "we
+    // could not look" and "there is nothing there" lead to opposite decisions and the
+    // planner is told which one it is looking at.
     const readBalance = options.readBalanceWei ?? defaultBalance;
     const readResults = options.readOutcomes ?? readOutcomesFromFeed;
-    const [balanceWei, outcomes] = await Promise.all([
+    const readHeld = options.readPositions ?? defaultPositions;
+    const readTradable = options.readMarkets ?? defaultMarkets;
+    const [balanceWei, outcomes, positions, markets] = await Promise.all([
       readBalance(agent),
       readResults(store, agent).catch(() => [] as readonly LaunchOutcome[]),
+      readHeld(store, agent).catch(() => undefined),
+      readTradable().catch(() => undefined),
     ]);
     const permissions = store.getPermissions(agent.id);
     const allowance = store.allowance(agent.id, permissions);
@@ -251,6 +276,8 @@ export async function runAgentCycle(
       spendableWei,
       launchesRemaining: allowance.launchesRemaining,
       outcomes,
+      ...(positions === undefined ? {} : { positions }),
+      ...(markets === undefined ? {} : { markets }),
       directive: options.directive ?? null,
     });
     modelCalls = planned.modelCalls;
@@ -466,6 +493,48 @@ function normalise(text: string): string {
 async function defaultBalance(agent: AgentRecord): Promise<bigint> {
   const treasury = await readTreasury(agent);
   return BigInt(treasury.ethWei);
+}
+
+/**
+ * What the agent holds, and nothing asked of the chain when it holds nothing.
+ *
+ * The early return is not a micro-optimisation. An agent that has never traded or launched
+ * has no tokens to ask about, and reaching for an RPC to establish that would put a network
+ * call on the critical path of every cycle of every agent that has yet to do anything.
+ */
+async function defaultPositions(
+  store: AgentStore,
+  agent: AgentRecord,
+): Promise<readonly AgentPosition[]> {
+  if (store.heldTokenCandidates(agent.id).length === 0) return [];
+  const holdings = await readAgentHoldings(store, agent);
+  return holdings.positions;
+}
+
+/**
+ * What is on the shelf, newest first and briefly.
+ *
+ * A small number on purpose. This is a shortlist to choose from inside one cycle, not a
+ * catalogue: a hundred markets in the prompt would cost more tokens than the decision is
+ * worth and would not make the choice better.
+ *
+ * The feed, and only the feed. `readInstantMarkets` would fall back to the chain, which is
+ * two multicalls per market — the shelf's whole reason for having an indexer — and a cycle
+ * is the wrong place to spend that. No feed means the agent is told markets could not be
+ * read, which is true and leaves it able to do everything except buy.
+ */
+async function defaultMarkets(): Promise<readonly TradableMarket[] | undefined> {
+  const rows = await fetchInstantMarketList(MARKET_SHORTLIST);
+  if (rows === null) return undefined;
+
+  return rows.slice(0, MARKET_SHORTLIST).map((row) => ({
+    token: getAddress(row.token),
+    symbol: row.symbol,
+    name: row.name,
+    price: agen.priceFromSqrt(row.sqrtPriceX96),
+    liquidityWei: row.liquidity,
+    createdAt: row.createdAt,
+  }));
 }
 
 function min(a: bigint, b: bigint): bigint {

@@ -42,6 +42,7 @@ export {
   agenFor,
   agentsFor,
   boostFor,
+  creatorSeatFactoryFor,
   deploymentFor,
   instantFor,
   isDeployed,

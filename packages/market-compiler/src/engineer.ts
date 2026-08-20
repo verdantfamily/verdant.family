@@ -68,6 +68,7 @@ import { validatePlan } from "./plan.js";
 import type { MarketSpecification } from "./spec.js";
 import type { CatalogueEntry } from "./catalogue.js";
 import { camel, clamp, kebab, uniqueNames } from "./normalise.js";
+import { thresholdIn, thresholdSolidity } from "./threshold.js";
 import { CATALOGUE, catalogueEntry, catalogueForModel } from "./catalogue.js";
 import type { OutstandingDecisions, Suggestion } from "./spec.js";
 import {
@@ -367,6 +368,15 @@ side that can, and use the guarded setter on the other.
 Prefer being explicit about what you could not determine over inventing a plausible
 answer. An unresolved assumption that a creator can correct is worth more than a
 confident guess they cannot see.
+
+A number the creator stated is not yours to adjust. A fee, a threshold, a share, a window
+or a count they wrote down is carried through exactly, in their unit and under their
+comparison, including into every sentence you write about it — and a threshold is stated
+by naming three things, so "over 2% of the total supply" is a different requirement from
+"at least 2%" and from "2% of the liquidity". Where they left one open, choose and record
+the choice; where they named it, no default, convention or rounder figure may take its
+place. This is checked against the request before anything is built, and a market whose
+numbers are not theirs is refused rather than launched.
 `.trim();
 
 /**
@@ -594,10 +604,40 @@ const parameters: JsonSchema = optional(
   ),
 );
 
+/**
+ * The same bag, asked for more precisely, because a size test has three parts.
+ *
+ * A threshold is a percentage, a thing it is a percentage of, and a comparison, and
+ * dropping any one of them changes which trades are caught. PUSH asked for a surcharge on
+ * every sell "over 2% of the token's immutable total supply" and came back gated at one
+ * percent; nothing downstream disagreed, because everything downstream reads the
+ * specification and the specification was where the number had already gone. The figure is
+ * now compared against the request before any Solidity is written — see `requirements.ts` —
+ * so a substituted threshold fails the build instead of launching, and this is the wording
+ * that keeps it from being substituted in the first place.
+ */
+const conditionParameters: JsonSchema = optional(
+  array(
+    object({
+      key: text("the parameter's name, e.g. percent, thresholdPpm, operator"),
+      value: scalar,
+    }),
+    "machine-readable values. Every number the condition depends on belongs here, not only " +
+      "in prose. A test on the size of a trade needs all three of: the percentage, named for " +
+      "its unit (`percent`, `thresholdPpm`, `thresholdBps`); what it is a percentage OF, so " +
+      "that `totalSupply` and `poolLiquidity` cannot be confused — a share of a fixed supply " +
+      "and a share of a moving pool are different mechanics; and the comparison, as " +
+      '`operator` of ">" or ">=". Use the creator\'s own figure and the creator\'s own ' +
+      'comparison. "Over 2%" and "at least 2%" differ by exactly the trade somebody will ' +
+      "check by hand, and a threshold they named is never replaced by a rounder or more " +
+      "familiar one.",
+  ),
+);
+
 const conditionSchema: JsonSchema = object({
   kind: text("a short camelCase name for the test, e.g. tradeSizeVsLiquidity"),
   description: text("what this checks, in one sentence a creator would understand"),
-  parameters,
+  parameters: conditionParameters,
   combinator: optional(text("and, or, or not, when this groups other conditions")),
 });
 
@@ -1639,7 +1679,12 @@ async function askForRules(
       "something different.\n\n" +
       "Split when the creator would call it a separate thing. Merge when they would not. " +
       "A market described in four sentences that arrives as nine rules has been " +
-      "transcribed rather than understood, and every later stage pays for it.",
+      "transcribed rather than understood, and every later stage pays for it.\n\n" +
+      "A number the creator wrote is that number. A size threshold they named — " +
+      "'over 2% of the total supply', 'more than 1% of liquidity' — is recorded as they " +
+      "wrote it: the figure, what it is a figure of, and whether the boundary is included. " +
+      "It is never replaced by a rounder or more familiar default. 'Over' and 'more than' " +
+      "exclude the boundary; 'at least' includes it.",
     input: [
       creator,
       "",
@@ -3183,6 +3228,51 @@ function deploymentBrief(deployed: DeployedComponent, spec: DeploymentSpecificat
 }
 
 /**
+ * Every size threshold in the market, as the comparison a hook has to make.
+ *
+ * A threshold survives interpretation as a percentage, a basis and an operator, and then a
+ * generator writes the arithmetic — which is one more place the number can move. The three
+ * ways it moves are all quiet: `>=` for a threshold the creator wrote as "over", the pool's
+ * liquidity for one measured against the supply, and `amount > basis * percent / 100`
+ * truncating so that a trade a hair over the boundary reads as under it.
+ *
+ * So the comparison is handed over rather than described. `thresholdSolidity` renders it from
+ * the same value `requirements.ts` checked against the creator's own words and `describe.ts`
+ * puts on the token page, which is what makes the card, the contract and the guard three
+ * views of one number instead of three chances to disagree.
+ */
+function thresholdBrief(specification: MarketSpecification): string {
+  const gates = specification.rules.flatMap((rule) =>
+    rule.conditions.flatMap((condition) => {
+      const threshold = thresholdIn(condition);
+      return threshold === null ? [] : [{ rule, threshold }];
+    }),
+  );
+
+  if (gates.length === 0) return "";
+
+  return [
+    "",
+    "Size thresholds in this market, as the comparison to write. The boundary is part of the " +
+      "requirement: a trade landing exactly on it is on the side this says it is, and getting " +
+      "that wrong is a different market rather than an off-by-one.",
+    "",
+    ...gates.map(
+      ({ rule, threshold }) =>
+        `  ${rule.id}: a trade is over the threshold when \`${thresholdSolidity(threshold)}\`, ` +
+        `where the basis is ${
+          threshold.basis === "supply"
+            ? "the token's total supply, which never changes"
+            : threshold.basis === "liquidity"
+              ? "the pool's liquidity at the time of the trade"
+              : "the quantity named in the condition"
+        }. Hold the percentage as a constant in the contract.`,
+    ),
+    "",
+  ].join("\n");
+}
+
+/**
  * What the component already has, so the generator adds to it rather than restating it.
  *
  * Without this the plan's `reuses` is a note nobody reads: the generator writes its own
@@ -3281,7 +3371,8 @@ export async function generateComponent(
       // is not open here. A generator left to invent its own constructor produces a
       // contract the launcher then has to reverse-engineer, and the two only agree by
       // luck — which is the failure this whole document exists to remove.
-      `${deploymentBrief(deployed, deployment)}\n\n` +
+      `${deploymentBrief(deployed, deployment)}\n` +
+      thresholdBrief(specification) +
       context.generation,
     input: [
       `The component to write:`,
@@ -3595,6 +3686,7 @@ export async function generateTests(
       "asserting it gains nothing the single action would not have. Constructors and " +
       "installer-only wiring setters are deployment infrastructure; do not redeploy a " +
       "component to test them and do not call them from a generated behavior suite.\n\n" +
+      thresholdBrief(specification) +
       context.testing +
       (testEnvironment === undefined ? "" : `\n\n${testEnvironment.guidance}`),
     input: [

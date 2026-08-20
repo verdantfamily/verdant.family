@@ -45,6 +45,7 @@ export function parsePermissions(input: unknown): AgentPermissions {
     maxEthPerLaunchWei: wei(raw.maxEthPerLaunchWei, DEFAULT_PERMISSIONS.maxEthPerLaunchWei, "maxEthPerLaunchWei"),
     maxLaunchesPerDay: count(raw.maxLaunchesPerDay, DEFAULT_PERMISSIONS.maxLaunchesPerDay, "maxLaunchesPerDay"),
     maxEthPerDayWei: wei(raw.maxEthPerDayWei, DEFAULT_PERMISSIONS.maxEthPerDayWei, "maxEthPerDayWei"),
+    maxEthPerTradeWei: wei(raw.maxEthPerTradeWei, DEFAULT_PERMISSIONS.maxEthPerTradeWei, "maxEthPerTradeWei"),
     maxCreatorBuyWei: wei(raw.maxCreatorBuyWei, DEFAULT_PERMISSIONS.maxCreatorBuyWei, "maxCreatorBuyWei"),
     canClaimCreatorFees: flag(raw.canClaimCreatorFees, DEFAULT_PERMISSIONS.canClaimCreatorFees),
     // Phase 1 hard rules. An owner cannot loosen these from the API.
@@ -56,6 +57,13 @@ export function parsePermissions(input: unknown): AgentPermissions {
     throw new AgentError(
       "VALIDATION_FAILED",
       "The per-launch ETH limit cannot exceed the daily ETH budget.",
+    );
+  }
+
+  if (parsed.maxEthPerTradeWei > parsed.maxEthPerDayWei) {
+    throw new AgentError(
+      "VALIDATION_FAILED",
+      "The per-trade ETH limit cannot exceed the daily ETH budget.",
     );
   }
 

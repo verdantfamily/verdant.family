@@ -15,6 +15,11 @@ out/
 # deployment is recorded by its manifest and its verified source, not by this scratch.
 generated/
 
+# The end-to-end proof's agent database. Holds an encrypted agent key that controls real
+# funds on chain 4663, so it is kept across runs — a wallet that was funded late must
+# still be reachable — and never committed.
+.agen-e2e/
+
 # Foundry
 packages/contracts/out/
 packages/contracts/cache/

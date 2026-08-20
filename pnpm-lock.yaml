@@ -20,6 +20,9 @@ importers:
       '@tanstack/react-query':
         specifier: ^5.101.4
         version: 5.101.4(react@19.2.8)
+      '@verdant/agen-runtime':
+        specifier: workspace:*
+        version: link:../../packages/agen-runtime
       '@verdant/config':
         specifier: workspace:*
         version: link:../../packages/config
@@ -271,6 +274,22 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)
+
+  packages/agen-runtime:
+    dependencies:
+      '@verdant/market-compiler':
+        specifier: workspace:*
+        version: link:../market-compiler
+      viem:
+        specifier: ^2.55.10
+        version: 2.55.10(typescript@5.9.3)(zod@4.4.3)
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
         version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)
 
   packages/config:

@@ -25,6 +25,7 @@
  */
 
 import type { Effect, MarketSpecification, Rule, Scalar, StateVariable } from "./spec.js";
+import { feeSchedule, thresholdEnglish, thresholdIn } from "./threshold.js";
 
 /** Hundredths of a basis point, as a percentage a person would say. */
 export function asPercent(ppm: number): string {
@@ -165,10 +166,22 @@ function describeTrigger(rule: Rule): string {
 
   switch (kind) {
     case "sell": {
-      const percent = numberFrom(condition?.parameters, "percent");
-      return percent === null
+      /*
+       * The basis is read rather than assumed, and it used to be assumed.
+       *
+       * This said "of liquidity" for every size-gated sell rule there was, because the only
+       * threshold anyone had written a fixture for was a liquidity one. A market whose
+       * surcharge begins at a share of the token's fixed supply is a materially different
+       * market — the boundary does not move as the pool does — and describing it as a share of
+       * liquidity is not a rounder way of saying the same thing.
+       *
+       * Found rather than taken from the front of the list, because a rule commonly restates
+       * its own sidedness as a first condition and the size test is the one after it.
+       */
+      const threshold = rule.conditions.map((clause) => thresholdIn(clause)).find((found) => found !== null) ?? null;
+      return threshold === null
         ? "On every sell"
-        : `When someone sells more than ${String(percent)}% of liquidity`;
+        : `When someone sells ${thresholdEnglish(threshold)}`;
     }
     case "buy": {
       const streak = numberFrom(condition?.parameters, "value");
@@ -384,11 +397,55 @@ function feeFor(specification: MarketSpecification, side: "buy" | "sell"): SideF
   return { ppm, routed };
 }
 
-/** Where a fee ends up, said the way somebody launching a token would say it. */
-function routeNote(routed: string | null, side: "buy" | "sell"): string {
-  if (routed === null) return `Charged on every ${side} and kept by the pool's liquidity.`;
-  if (/fee|treasury|receiver|creator|owner/i.test(routed)) return "Sent to your fee receiver.";
-  return `Collected into the ${humanise(routed)}.`;
+/**
+ * How a market takes its fee, which the specification does not record and a card must not
+ * invent.
+ *
+ * A v4 hook can charge two ways and the difference is who ends up with the money. It can
+ * override the pool's own LP fee, and then Uniswap collects it on behalf of the liquidity —
+ * the market never touches it. Or it can take the value itself as a swap delta, through
+ * custom accounting, and then it lands in an account the market controls. Which one a
+ * generated market uses is a fact about its deployment (`FeeMode`, and the
+ * `collectsItsOwnFee` distinction `core-tests.ts` draws from it), not a fact about its rules,
+ * so it has to be passed in.
+ */
+export type FeeCollection =
+  /** The hook takes the value itself. It lands somewhere the market controls. */
+  | "market"
+  /** The hook sets the pool's fee. Uniswap collects it for the liquidity. */
+  | "liquidity"
+  /** Not established. Nothing may be claimed about where the fee ends up. */
+  | "unknown";
+
+/**
+ * Where a fee ends up, said the way somebody launching a token would say it.
+ *
+ * The unrouted case used to read "kept by the pool's liquidity", which was not a cautious
+ * default but a claim — and for most programmable markets a false one. A specification that
+ * records no `routeFee` has said nothing about where the fee goes; it has certainly not said
+ * the liquidity providers keep it. PUSH's cards said the 2% was kept by the pool while its own
+ * decision note said the same 2% was taken through custom accounting and sent to the launcher
+ * vault, and both were generated from the same specification, which is how a template ends up
+ * contradicting itself.
+ *
+ * So the sentence now says only what is known. A destination in the specification is the best
+ * evidence there is; failing that, how the fee is collected settles it; failing that, the note
+ * describes what a trader pays and stops there.
+ */
+function routeNote(routed: string | null, side: "buy" | "sell", collection: FeeCollection): string {
+  if (routed !== null) {
+    if (/fee|treasury|receiver|creator|owner/i.test(routed)) return "Sent to your fee receiver.";
+    return `Collected into the ${humanise(routed)}.`;
+  }
+
+  switch (collection) {
+    case "liquidity":
+      return `Charged on every ${side} by the pool itself and kept by its liquidity.`;
+    case "market":
+      return `Charged on every ${side} and collected by this market's own contracts.`;
+    case "unknown":
+      return `Charged on every ${side} by this market's hook.`;
+  }
 }
 
 /** The headline number for a rule that is not about fees. */
@@ -454,23 +511,53 @@ const FEE_EFFECTS = new Set(["setFee", "extraFee", "routeFee"]);
  * report, which is the thing this is meant to replace, and the full set of rules is a
  * click away in the technical specification.
  */
-export function behaviourCards(specification: MarketSpecification): readonly BehaviourCard[] {
+export function behaviourCards(
+  specification: MarketSpecification,
+  { collection = "unknown" }: { readonly collection?: FeeCollection } = {},
+): readonly BehaviourCard[] {
   const cards: BehaviourCard[] = [];
 
   const buy = feeFor(specification, "buy");
   const sell = feeFor(specification, "sell");
 
-  const asFee = (fee: SideFee, side: "buy" | "sell"): BehaviourCard => ({
-    label: side === "buy" ? "BUY FEE" : "SELL FEE",
-    value: fee.ppm === null ? "varies" : asPercent(fee.ppm),
-    note:
-      fee.ppm === 0
-        ? `${capitalise(side)}s pay no hook fee.`
-        : fee.ppm === null
-          ? `This market changes the ${side} fee as it runs. The most any trade can pay is ` +
-            `${asPercent(specification.maxFeePpm)}.`
-          : routeNote(fee.routed, side),
-  });
+  const asFee = (fee: SideFee, side: "buy" | "sell"): BehaviourCard => {
+    /*
+     * A fee that only applies above a size is shown as the two rates it is, not as one.
+     *
+     * `feeFor` adds a surcharge onto the base and reports the total, which is right for a
+     * market that always charges it and wrong for a market with a threshold. Both readings
+     * are misleading on their own: PUSH charges 2% on almost every sell and 5% on a sale
+     * above 2% of its supply, so a card saying "5%" is a number no ordinary seller pays and
+     * a card saying "2%" hides the one that stings. The threshold is the whole mechanic, and
+     * a card that omits it is not shorter, it is about a different market.
+     */
+    const schedule = feeSchedule(specification, side);
+    const tier = schedule?.tier ?? null;
+
+    if (tier !== null && schedule !== null && schedule.basePpm !== tier.ppm) {
+      return {
+        label: side === "buy" ? "BUY FEE" : "SELL FEE",
+        value: `${asPercent(schedule.basePpm)} → ${asPercent(tier.ppm)}`,
+        note:
+          `${asPercent(tier.ppm)} on a ${side} of ${thresholdEnglish(tier.threshold)}, ` +
+          `${asPercent(schedule.basePpm)} on everything ` +
+          `${tier.threshold.inclusive === true ? "below it" : "at or below it"}. ` +
+          routeNote(fee.routed, side, collection),
+      };
+    }
+
+    return {
+      label: side === "buy" ? "BUY FEE" : "SELL FEE",
+      value: fee.ppm === null ? "varies" : asPercent(fee.ppm),
+      note:
+        fee.ppm === 0
+          ? `${capitalise(side)}s pay no hook fee.`
+          : fee.ppm === null
+            ? `This market changes the ${side} fee as it runs. The most any trade can pay is ` +
+              `${asPercent(specification.maxFeePpm)}.`
+            : routeNote(fee.routed, side, collection),
+    };
+  };
 
   cards.push(asFee(buy, "buy"), asFee(sell, "sell"));
 

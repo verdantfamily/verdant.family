@@ -135,6 +135,134 @@ describe("the fee cards", () => {
   });
 });
 
+/**
+ * Where the fee goes, which the specification often does not say and a card must not invent.
+ *
+ * This note used to read "kept by the pool's liquidity" whenever no destination was recorded.
+ * That is not a cautious default, it is a claim, and for a hook taking its fee through custom
+ * accounting it is false — PUSH's cards said the liquidity kept its 2% while the decision note
+ * directly underneath said the same 2% went to the launcher vault.
+ */
+describe("what a card says about where a fee ends up", () => {
+  const UNROUTED = specification({
+    baseFeePpm: 20_000,
+    rules: [
+      {
+        id: "fee",
+        title: "Fee",
+        when: { kind: "swap", description: "on any trade" },
+        conditions: [],
+        then: [{ kind: "setFee", description: "charge 2%", parameters: { feePpm: 20_000 } }],
+      },
+    ],
+  } as Partial<MarketSpecification>);
+
+  const noteFor = (collection: "market" | "liquidity" | "unknown"): string =>
+    behaviourCards(UNROUTED, { collection }).find((card) => card.label === "SELL FEE")!.note;
+
+  it("claims nothing about a destination nobody established", () => {
+    expect(noteFor("unknown")).toBe("Charged on every sell by this market's hook.");
+    expect(noteFor("unknown")).not.toContain("liquidity");
+  });
+
+  it("says the market keeps it when the hook is the thing collecting it", () => {
+    expect(noteFor("market")).toBe(
+      "Charged on every sell and collected by this market's own contracts.",
+    );
+  });
+
+  it("says the liquidity keeps it only where the pool is what charges it", () => {
+    expect(noteFor("liquidity")).toBe(
+      "Charged on every sell by the pool itself and kept by its liquidity.",
+    );
+  });
+
+  /** A destination the specification does record still outranks all of this. */
+  it("prefers the specification's own destination to the collection mode", () => {
+    const routed = specification({
+      rules: [
+        {
+          id: "fee",
+          title: "Fee",
+          when: { kind: "sell", description: "on a sell" },
+          conditions: [],
+          then: [
+            { kind: "setFee", description: "charge 2%", parameters: { feePpm: 20_000 } },
+            { kind: "routeFee", description: "route it", parameters: { destination: "feeVault" } },
+          ],
+        },
+      ],
+    } as Partial<MarketSpecification>);
+
+    expect(
+      behaviourCards(routed, { collection: "liquidity" }).find((card) => card.label === "SELL FEE")!
+        .note,
+    ).toBe("Sent to your fee receiver.");
+  });
+});
+
+/**
+ * A fee that only applies above a size, shown as the two rates it is.
+ *
+ * Both single figures mislead. PUSH charges 2% on almost every sell and 5% above 2% of its
+ * supply: a card reading "5%" names a rate no ordinary seller pays, and one reading "2%" hides
+ * the rate that stings. The threshold is the mechanic, so the card has to carry it.
+ */
+describe("the card for a fee with a size threshold", () => {
+  const PUSH = specification({
+    baseFeePpm: 20_000,
+    maxFeePpm: 50_000,
+    rules: [
+      {
+        id: "base-fee",
+        title: "Base fee",
+        when: { kind: "swap", description: "on any trade" },
+        conditions: [],
+        then: [{ kind: "setFee", description: "charge 2%", parameters: { feePpm: 20_000 } }],
+      },
+      {
+        id: "large-sell",
+        title: "Large sell",
+        when: { kind: "sell", description: "on a sell" },
+        conditions: [
+          {
+            kind: "tradeSizeVsSupply",
+            description: "more than 2% of the total supply",
+            parameters: { operator: ">", percent: 2 },
+          },
+        ],
+        then: [{ kind: "setFee", description: "charge 5%", parameters: { feePpm: 50_000 } }],
+      },
+    ],
+  } as Partial<MarketSpecification>);
+
+  const sell = behaviourCards(PUSH, { collection: "market" }).find(
+    (card) => card.label === "SELL FEE",
+  )!;
+
+  it("shows both rates rather than either one alone", () => {
+    expect(sell.value).toBe("2% → 5%");
+  });
+
+  it("names the threshold, the basis and which side of it the boundary falls on", () => {
+    expect(sell.note).toContain("5% on a sell of more than 2% of the total supply");
+    expect(sell.note).toContain("2% on everything at or below it");
+    expect(sell.note).not.toContain("1%");
+  });
+
+  it("does not claim the pool's liquidity keeps a fee this market collects itself", () => {
+    expect(sell.note).toContain("collected by this market's own contracts");
+    expect(sell.note).not.toContain("kept by the pool");
+    expect(sell.note).not.toContain("kept by its liquidity");
+  });
+
+  it("leaves the untiered side as one figure", () => {
+    const buy = behaviourCards(PUSH).find((card) => card.label === "BUY FEE")!;
+
+    expect(buy.value).toBe("2%");
+  });
+});
+
 describe("the cards for everything that is not a fee", () => {
   it("leads a streak with the count, which is the number the mechanic is about", () => {
     const cards = behaviourCards(

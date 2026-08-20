@@ -23,9 +23,10 @@ import { fileURLToPath } from "node:url";
 import { buildContext } from "./context.js";
 import { EPOCH, FIXTURES, SURCHARGE } from "./fixtures.js";
 import { FailureCode, Stage } from "./job.js";
+import type { GenerationJob } from "./job.js";
 import { ModelError, openAiProvider, scriptedProvider } from "./model.js";
-import { runBuild } from "./pipeline.js";
-import { validateSpecification } from "./spec.js";
+import { answerBuild, runBuild } from "./pipeline.js";
+import { assess, validateSpecification } from "./spec.js";
 import { memoryJobStore } from "./store.js";
 import { createJobWorkspace, LAYOUT } from "./workspace.js";
 
@@ -306,42 +307,86 @@ describe("the pipeline treats both markets the same way", () => {
  */
 const LIVE = process.env["OPENAI_API_KEY"];
 
+/** Reported in full on failure: which stage, why, and what the compiler said. */
+function rethrowFailure(key: string, phase: string, job: GenerationJob): void {
+  if (job.failure === null) return;
+
+  throw new Error(
+    `${key} failed at ${job.failure.stage} (${job.failure.code}) while ${phase}: ` +
+      `${job.failure.detail}\n` +
+      (job.failure.diagnostics ?? []).map((d) => `  ${d.message}`).join("\n"),
+  );
+}
+
 describe.skipIf(LIVE === undefined || LIVE === "")("end to end against a live model", () => {
   for (const fixture of FIXTURES) {
     it(
-      `generates, compiles and tests the ${fixture.key} market`,
+      `asks about the readings that carry the market, then builds the ${fixture.key} market`,
       async () => {
         const root = await scratch();
+        const store = memoryJobStore();
+        const options = {
+          provider: openAiProvider({
+            apiKey: LIVE!,
+            model: process.env["AGEN_MODEL"] ?? "gpt-5",
+          }),
+          store,
+          vendorRoot: VENDOR,
+          generatedRoot: root,
+          newId: () => `live-${fixture.key}`,
+        };
 
-        const job = await runBuild(
+        // Phase one. Both prompts turn on a reading the creator did not supply — what
+        // "large" is measured against, which wallet "buys the most" crowns — and
+        // `promoteForConfirmation` makes asking about those mandatory rather than a
+        // matter of the interpreter's mood. So a live build of either prompt pauses,
+        // and asserting it reaches deployment in one pass would be asserting that the
+        // clarification rule does not work. The fixtures record which readings these
+        // are, as the high-importance assumptions they arrive at the spec with already
+        // confirmed.
+        const asked = await runBuild(
           { prompt: fixture.prompt, name: fixture.name, symbol: fixture.symbol },
-          {
-            provider: openAiProvider({
-              apiKey: LIVE!,
-              model: process.env["AGEN_MODEL"] ?? "gpt-5",
-            }),
-            store: memoryJobStore(),
-            vendorRoot: VENDOR,
-            generatedRoot: root,
-            newId: () => `live-${fixture.key}`,
-          },
+          options,
         );
 
-        // Reported in full on failure: which stage, why, and what the compiler said.
-        if (job.failure !== null) {
-          throw new Error(
-            `${fixture.key} failed at ${job.failure.stage} (${job.failure.code}): ` +
-              `${job.failure.detail}\n` +
-              (job.failure.diagnostics ?? []).map((d) => `  ${d.message}`).join("\n"),
-          );
+        rethrowFailure(fixture.key, "interpreting", asked);
+        expect(asked.stage).toBe(Stage.AwaitingClarification);
+        expect(asked.specification).not.toBeNull();
+
+        const blocking = assess(asked.specification!).blocking;
+
+        // One is enough to prove the pause is real. Not the count of high-importance
+        // readings the fixture records: those are one competent interpretation of the
+        // prompt, and a live interpreter that rates one of them medium and resolves it
+        // has not done anything wrong. The ceiling is the claim worth making — more than
+        // a handful is the "eight blocking questions" failure the interpreter prompt was
+        // written against, and it is a bad build whether or not it eventually completes.
+        expect(blocking.length).toBeGreaterThanOrEqual(1);
+        expect(blocking.length).toBeLessThanOrEqual(4);
+
+        // Every question carries what Agen would do unasked, which is what makes phase
+        // two possible and is a guarantee of the schema rather than a hope about output.
+        for (const question of blocking) {
+          expect(question.otherwise, question.question).not.toBe("");
         }
 
-        expect(job.stage).toBe(Stage.DeploymentReady);
-        expect(job.sources.length).toBeGreaterThan(0);
-        expect(job.testOutcomes.every((outcome) => outcome.passed)).toBe(true);
+        // Phase two. Answered by taking each default, because the question this test
+        // exists to answer is whether the current prompts produce Solidity that
+        // compiles, and a creator agreeing with Agen's reading is the ordinary path to
+        // finding out.
+        const built = await answerBuild(
+          asked.id,
+          blocking.map((question) => ({ id: question.id })),
+          options,
+        );
+
+        rethrowFailure(fixture.key, "building", built);
+        expect(built.stage).toBe(Stage.DeploymentReady);
+        expect(built.sources.length).toBeGreaterThan(0);
+        expect(built.testOutcomes.every((outcome) => outcome.passed)).toBe(true);
       },
-      // Generation, compilation, tests and up to six repair rounds.
-      900_000,
+      // Interpretation, then generation, compilation, tests and up to six repair rounds.
+      1_500_000,
     );
   }
 });

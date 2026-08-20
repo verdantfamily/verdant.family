@@ -15,7 +15,14 @@
 
 import { describe, expect, it } from "vitest";
 
-import { lockedRates, statedRates, unmetRates } from "./requirements.js";
+import {
+  lockedRates,
+  lockedThresholds,
+  statedRates,
+  statedThresholds,
+  unmetRates,
+  unmetThresholds,
+} from "./requirements.js";
 import type { MarketSpecification } from "./spec.js";
 
 function specification(
@@ -217,5 +224,197 @@ describe("whether the locked market still contains what was asked", () => {
 
   it("has nothing to say about a prompt that states no rate", () => {
     expect(unmetRates("make trading feel like a slot machine", specification([]))).toEqual([]);
+  });
+});
+
+/**
+ * The other half, and the half that had no guard at all.
+ *
+ * `statedRates` is careful to leave "2% of the total supply" alone, because reading a threshold
+ * as a fee refuses markets for charging something nobody asked for. What went unexamined for a
+ * long time is what happened to the number afterwards: nothing. Excluded here and covered
+ * nowhere else, a threshold was the one figure in a prompt that nothing compared against the
+ * market that got built.
+ */
+const PUSH_PROMPT =
+  "Charge 2% on every buy and every sell. On any sell larger than 2% of the token's " +
+  "immutable total supply, charge 5% instead.";
+
+/** A sell rule gated on a share of something, as interpretation records one. */
+const gatedSell = (parameters: Record<string, unknown>): MarketSpecification["rules"] =>
+  [
+    {
+      id: "large-sell",
+      title: "LARGE SELL",
+      when: { kind: "sell", description: "a sell" },
+      conditions: [{ kind: "tradeSizeVsSupply", description: "a large sell", parameters }],
+      then: [{ kind: "setFee", description: "charge 5%", parameters: { feePpm: 50_000 }, writes: [] }],
+    },
+  ] as unknown as MarketSpecification["rules"];
+
+describe("a threshold the creator wrote down", () => {
+  it("is read as a percentage of something, with the comparison they used", () => {
+    const [threshold, ...rest] = statedThresholds(PUSH_PROMPT);
+
+    expect(rest).toEqual([]);
+    expect(threshold!.percent).toBe(2);
+    expect(threshold!.basis).toBe("supply");
+    expect(threshold!.inclusive).toBe(false);
+  });
+
+  /**
+   * CNPY, from the rate suite's own comment, read from the other side: its 1% is the threshold
+   * and its 2% is the fee, and neither may be mistaken for the other.
+   */
+  it("takes the threshold and leaves the fee beside it", () => {
+    const prompt = "If somebody sells more than 1% of current liquidity, charge an additional 2%";
+    const [threshold, ...rest] = statedThresholds(prompt);
+
+    expect(rest).toEqual([]);
+    expect(threshold!.percent).toBe(1);
+    expect(threshold!.basis).toBe("liquidity");
+  });
+
+  it("says nothing about a percentage of something no trade is measured against", () => {
+    expect(statedThresholds("80% of the fee goes to the creator")).toEqual([]);
+    expect(statedThresholds("unlock 10% of the treasury each month")).toEqual([]);
+    expect(statedThresholds("the top 5% of holders share the fee pool")).toEqual([]);
+    expect(statedThresholds("sells pay a 0.5% fee")).toEqual([]);
+  });
+
+  it("is read when it is spelled out, for the same reason a rate is", () => {
+    const [threshold] = statedThresholds("a sell over half a percent of the total supply pays 5%");
+
+    expect(threshold!.percent).toBe(0.5);
+    expect(threshold!.basis).toBe("supply");
+  });
+});
+
+describe("whether the locked market still measures what was asked", () => {
+  it("is satisfied by the threshold the creator stated, in any unit", () => {
+    for (const parameters of [
+      { operator: ">", percent: 2 },
+      { operator: ">", thresholdPpm: 20_000 },
+      { operator: ">", thresholdBps: 200 },
+    ]) {
+      expect(
+        unmetThresholds(PUSH_PROMPT, specification(gatedSell({ ...parameters, basis: "totalSupply" }))),
+      ).toEqual([]);
+    }
+  });
+
+  /**
+   * PUSH, and the whole reason this exists.
+   *
+   * The prompt names two percent. The interpretation came back with one, which is not a
+   * judgement call about an ambiguous request — the request named the number — and every
+   * artefact downstream then agreed with each other about a market nobody asked for. No
+   * default, convention or rounder figure may take a stated threshold's place, so this is a
+   * build that stops rather than one that launches.
+   */
+  it("refuses a stated threshold that came back as a smaller default", () => {
+    const locked = specification(
+      gatedSell({ operator: ">", percent: 1, basis: "totalSupply" }),
+    );
+
+    const [unmet, ...rest] = unmetThresholds(PUSH_PROMPT, locked);
+
+    expect(rest).toEqual([]);
+    expect(unmet!.fault).toBe("moved");
+    expect(unmet!.stated.percent).toBe(2);
+    expect(unmet!.locked?.percent).toBe(1);
+  });
+
+  /** The same substitution is caught whichever unit it is dressed in. */
+  it("catches a default that arrived in ppm rather than percent", () => {
+    const locked = specification(gatedSell({ operator: ">", thresholdPpm: 10_000, basis: "totalSupply" }));
+
+    expect(unmetThresholds(PUSH_PROMPT, locked).map((entry) => entry.fault)).toEqual(["moved"]);
+  });
+
+  /** 2% of the pool is not 2% of the supply: the figure survived and the mechanic did not. */
+  it("catches a threshold measured against the wrong thing", () => {
+    const rules = [
+      {
+        id: "large-sell",
+        title: "LARGE SELL",
+        when: { kind: "sell", description: "a sell" },
+        conditions: [
+          {
+            kind: "tradeSizeVsLiquidity",
+            description: "a large sell",
+            parameters: { operator: ">", percent: 2 },
+          },
+        ],
+        then: [{ kind: "setFee", description: "5%", parameters: { feePpm: 50_000 }, writes: [] }],
+      },
+    ] as unknown as MarketSpecification["rules"];
+
+    expect(unmetThresholds(PUSH_PROMPT, specification(rules)).map((entry) => entry.fault)).toEqual([
+      "missing",
+    ]);
+  });
+
+  /**
+   * A basis recorded as a parameter is the basis, whatever the rule is called. Reading the
+   * identifier instead would call this a supply threshold on the strength of its name.
+   */
+  it("believes a recorded basis over the name of the condition", () => {
+    const locked = specification(
+      gatedSell({ operator: ">", percent: 2, basis: "poolLiquidity" }),
+    );
+
+    expect(unmetThresholds(PUSH_PROMPT, locked).map((entry) => entry.fault)).toEqual(["missing"]);
+  });
+
+  it("catches a threshold that disappeared entirely", () => {
+    expect(unmetThresholds(PUSH_PROMPT, specification(sellFee({ feePpm: 50_000 }))).map((e) => e.fault))
+      .toEqual(["missing"]);
+  });
+
+  /**
+   * "Over 2%" and "at least 2%" differ by exactly one trade, and it is the trade a creator
+   * checks by hand. A market that includes a boundary the creator excluded charges the higher
+   * fee on a sale that was meant to be ordinary.
+   */
+  it("refuses a boundary the creator did not ask to be included", () => {
+    const locked = specification(gatedSell({ operator: ">=", percent: 2, basis: "totalSupply" }));
+
+    const [unmet] = unmetThresholds(PUSH_PROMPT, locked);
+
+    expect(unmet!.fault).toBe("boundary");
+  });
+
+  /** Silence is not disagreement: a specification that records no operator has not contradicted one. */
+  it("says nothing when the market records no comparison at all", () => {
+    const locked = specification(gatedSell({ percent: 2, basis: "totalSupply" }));
+
+    expect(unmetThresholds(PUSH_PROMPT, locked)).toEqual([]);
+  });
+
+  /** A threshold in the trigger is still a threshold the market has. */
+  it("finds a threshold interpretation filed under the trigger", () => {
+    const rules = [
+      {
+        id: "large-sell",
+        title: "LARGE SELL",
+        when: {
+          kind: "sell",
+          description: "a sell over 2% of total supply",
+          parameters: { operator: ">", percent: 2 },
+        },
+        conditions: [],
+        then: [{ kind: "setFee", description: "5%", parameters: { feePpm: 50_000 }, writes: [] }],
+      },
+    ] as unknown as MarketSpecification["rules"];
+
+    expect(unmetThresholds(PUSH_PROMPT, specification(rules))).toEqual([]);
+    expect(lockedThresholds(specification(rules)).map((entry) => entry.percent)).toEqual([2]);
+  });
+
+  it("has nothing to say about a prompt that states no threshold", () => {
+    expect(unmetThresholds("sells pay a 0.5% fee", specification(sellFee({ feePpm: 5_000 })))).toEqual(
+      [],
+    );
   });
 });

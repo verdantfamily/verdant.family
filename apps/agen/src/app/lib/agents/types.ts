@@ -20,6 +20,15 @@ export interface AgentPermissions {
   readonly maxEthPerLaunchWei: bigint;
   readonly maxLaunchesPerDay: number;
   readonly maxEthPerDayWei: bigint;
+  /**
+   * Inclusive ceiling on the ether one buy may spend.
+   *
+   * The per-action cap for trading, and separate from `maxEthPerLaunchWei` because the
+   * two are different risks at different frequencies: a launch happens a few times a day
+   * behind a cooldown, a buy can be proposed on every cycle. Sells are not capped by it —
+   * a cap on selling would be a cap on getting out.
+   */
+  readonly maxEthPerTradeWei: bigint;
   readonly maxCreatorBuyWei: bigint;
   readonly canClaimCreatorFees: boolean;
   /** Phase 1: always false. Stored so the rule is explicit rather than implied. */
@@ -34,6 +43,7 @@ export const DEFAULT_PERMISSIONS: AgentPermissions = {
   maxEthPerLaunchWei: 50_000_000_000_000_000n, // 0.05 ETH
   maxLaunchesPerDay: 3,
   maxEthPerDayWei: 150_000_000_000_000_000n, // 0.15 ETH
+  maxEthPerTradeWei: 20_000_000_000_000_000n, // 0.02 ETH
   maxCreatorBuyWei: 50_000_000_000_000_000n,
   canClaimCreatorFees: false,
   externalTransfers: false,
@@ -88,11 +98,20 @@ export interface SpendDay {
   readonly reservedWei: bigint;
 }
 
+/**
+ * What a reservation is holding budget for.
+ *
+ * A trade is not a launch kind — it consumes ether from the daily budget without
+ * consuming a launch slot — so the two are one type here and stay separate everywhere
+ * a launch is counted.
+ */
+export type ReservationKind = LaunchKind | "trade";
+
 export interface Reservation {
   readonly id: string;
   readonly agentId: string;
   readonly day: string;
-  readonly kind: LaunchKind;
+  readonly kind: ReservationKind;
   readonly launches: number;
   readonly wei: bigint;
   readonly status: "reserved" | "committed" | "released";
@@ -169,7 +188,10 @@ export type AgentActivityType =
   | "owner_feedback"
   | "treasury_recovered"
   // Phase 3: the agent reading its own results back.
-  | "market_noticed";
+  | "market_noticed"
+  // Trading. One row per executed swap, on top of the `agent_trades` record: this is the
+  // audit trail, that is the position and history.
+  | "trade_executed";
 
 export interface DailyAllowance {
   readonly day: string;
@@ -326,8 +348,35 @@ export const DECISION_KINDS = [
   "answer_clarification",
   "claim_revenue",
   "reinvest",
+  "buy_token",
+  "sell_token",
 ] as const;
 export type DecisionKind = (typeof DECISION_KINDS)[number];
+
+export const TRADE_SIDES = ["buy", "sell"] as const;
+export type TradeSide = (typeof TRADE_SIDES)[number];
+
+/**
+ * One executed swap, recorded because the chain will not answer for it.
+ *
+ * There is no transaction history to read back on this chain — no explorer API, and an
+ * archive scan for a wallet's transfers is not something a cycle can afford — so the
+ * agent's own record is the history. It is written after the receipt confirms, so a row
+ * here means the swap happened, and the tokens a wallet has ever traded are what make a
+ * position list possible: `balanceOf` needs to be told which tokens to ask about.
+ */
+export interface AgentTrade {
+  readonly id: string;
+  readonly agentId: string;
+  readonly side: TradeSide;
+  readonly token: `0x${string}`;
+  /** Ether spent on a buy, ether received on a sell. */
+  readonly quoteWei: bigint;
+  /** Token base units received on a buy, sold on a sell. */
+  readonly tokenAmount: bigint;
+  readonly txHash: `0x${string}`;
+  readonly createdAt: number;
+}
 
 export const DECISION_STATUSES = [
   "observed",

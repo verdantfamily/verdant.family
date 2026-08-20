@@ -39,6 +39,7 @@
 
 import type { GeneratedSource } from "./workspace.js";
 import type { MarketSpecification, Rule } from "./spec.js";
+import { feeAt, feeSchedule, type FeeSchedule } from "./threshold.js";
 
 export const CORE_TEST_PATH = "test/MarketCore.t.sol";
 
@@ -311,6 +312,7 @@ export function coreTests(
 ): CoreTestSuite {
   const sell = statedFee(specification, "sell");
   const buy = statedFee(specification, "buy");
+  const sellSchedule = feeSchedule(specification, "sell");
   const proves = ["the market launches and both sides of it trade", "the hook keeps no balances"];
 
   const tests: string[] = [TRADES];
@@ -359,6 +361,32 @@ export function coreTests(
     function test_core_fees_are_what_the_specification_says() public {
 ${claims.join("\n\n")}
     }`);
+  }
+
+  /*
+   * A size-gated sell fee is the one conditional shape this file can read completely:
+   * a base rate, a higher rate, a percentage of a fixed supply, and a comparison.
+   * That is not a judgement about a streak or a phase — it is the same arithmetic
+   * `threshold.ts` already holds the contract to — so a wrong boundary here is a
+   * wrong market, and it is allowed to fail the build.
+   *
+   * Only a share of the token's own supply is claimed. A share of the pool moves
+   * as the test itself trades, and asserting a fee against a basis the test is
+   * changing would fail a market that is right.
+   */
+  if (
+    collectsItsOwnFee &&
+    sell === null &&
+    sellSchedule !== null &&
+    sellSchedule.tier !== null &&
+    sellSchedule.tier.threshold.basis === "supply"
+  ) {
+    tests.push(sizeGatedSellFees({ ...sellSchedule, tier: sellSchedule.tier }));
+    proves.push(
+      `a sell of ${thresholdShare(sellSchedule.tier.threshold.percent)} of supply ` +
+        `pays ${asPercent(sellSchedule.tier.ppm)}, and everything at or below it pays ` +
+        `${asPercent(sellSchedule.basePpm)}`,
+    );
   }
 
   tests.push(ceiling(specification.maxFeePpm));
@@ -509,4 +537,66 @@ function ceiling(maxFeePpm: number): string {
 function asPercent(ppm: number): string {
   const percent = ppm / 10_000;
   return `${percent % 1 === 0 ? percent.toFixed(0) : String(percent)}%`;
+}
+
+/** `2` reads as `2%`, `1.99` as `1.99%`. */
+function thresholdShare(percent: number): string {
+  return `${percent % 1 === 0 ? percent.toFixed(0) : String(percent)}%`;
+}
+
+/**
+ * Points around a size threshold, as millionths of the basis.
+ *
+ * Derived from the threshold rather than written for one market: a quarter of it, half
+ * of it, a hair under it, exactly it, a hair over it, and well above it. For a 2%
+ * supply gate that is 0.5%, 1%, 1.99%, 2%, 2.01% and 5% — the ladder a creator checks
+ * by hand, and the one that tells a substituted 1% default from the figure they named.
+ */
+function ladderAround(percent: number): readonly number[] {
+  return [0.25, 0.5, 0.995, 1, 1.005, 2.5].map((factor) => Math.round(percent * factor * 10_000));
+}
+
+/**
+ * A sell fee that only applies above a share of the token's supply.
+ *
+ * Authoritative for the same reason a flat rate is: the comparison is already a value
+ * this package can compute, and a hook that flips at a different size is a different
+ * market from the one that was asked for.
+ */
+function sizeGatedSellFees(schedule: FeeSchedule & { readonly tier: NonNullable<FeeSchedule["tier"]> }): string {
+  const supply = 1_000_000_000n * 10n ** 18n;
+  const cases = ladderAround(schedule.tier.threshold.percent).map((sharePpm) => {
+    const amount = (supply * BigInt(sharePpm)) / 1_000_000n;
+    const ppm = feeAt(schedule, { amount, basisAmount: supply });
+    return { sharePpm, ppm };
+  });
+
+  const rows = cases
+    .map(
+      ({ sharePpm, ppm }) =>
+        `            (${String(sharePpm)}, ${String(ppm)})`,
+    )
+    .join(",\n");
+
+  return `    /// A sell of this size pays this rate, including exactly on the named boundary.
+    function test_core_size_gated_fees_match_the_specified_threshold() public {
+        uint256 supply = tokenSupply();
+        (uint256 sharePpm, uint256 feePpm)[${String(cases.length)}] memory ladder = [
+${rows}
+        ];
+
+        for (uint256 at = 0; at < ladder.length; at++) {
+            uint256 amount = supply * ladder[at].sharePpm / 1_000_000;
+            require(amount > 0 && amount <= type(uint128).max, "share is not a sellable amount");
+
+            uint256 tokensBefore = _collectedTokens();
+            sell(uint128(amount));
+            uint256 taken = _collectedTokens() - tokensBefore;
+            uint256 expected = uint256(lastSellTokens) * ladder[at].feePpm / 1_000_000;
+
+            assertGt(taken, 0, "the sell fee reached none of this market's accounts");
+            assertGe(taken + 1, expected, "the sell fee was smaller than specified at this size");
+            assertLe(taken, expected + 1, "the sell fee was larger than specified at this size");
+        }
+    }`;
 }

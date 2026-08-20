@@ -38,6 +38,7 @@ import { resolve } from "node:path";
 
 import type {
   ClarificationAnswer,
+  FeeCollection,
   GenerationJob,
   JobStore,
   ModelProvider,
@@ -292,6 +293,16 @@ export interface PublicJob {
     readonly supplyTokens: string;
     readonly supportsAtomicDevBuy: boolean;
     readonly devBuyUnavailableReason: string | null;
+    /**
+     * How this market takes its fee, which the review cards cannot work out for themselves.
+     *
+     * A specification says what a trade pays; only the deployment says who ends up with it.
+     * A hook on a dynamic-fee pool sets the pool's own fee and Uniswap collects it for the
+     * liquidity; every other mode means the hook takes the value itself and it lands in an
+     * account the market controls. Without this the cards had to guess, and they guessed
+     * "kept by the pool's liquidity" for markets that were sending the fee to a vault.
+     */
+    readonly feeCollection: FeeCollection;
   } | null;
   /**
    * Set only while this build is waiting for a slot.
@@ -332,6 +343,19 @@ export function publicView(job: GenerationJob): PublicJob {
             supplyTokens: job.manifest.supplyTokens.toString(),
             supportsAtomicDevBuy: job.manifest.supportsAtomicDevBuy,
             devBuyUnavailableReason: job.manifest.devBuyUnavailableReason,
+            /*
+             * A pool that charges nothing, or a fixed fee of its own, settles this: whatever
+             * the market takes, the hook takes, and it lands in an account the market controls.
+             *
+             * A dynamic pool does not settle it, and this is where it would be tempting to say
+             * it does. The sentinel means the hook *may* set the pool's fee per swap — or it
+             * means the hook takes its fee as a swap delta, expressed no opinion about
+             * `PoolKey.fee`, and was handed the default. `feemode.ts` keeps those apart with its
+             * `stated` flag precisely because conflating them has cost a live launch, and the
+             * manifest does not carry the flag. So the card says what a trade costs and stops
+             * short of naming a destination, which is the honest answer rather than a tidy one.
+             */
+            feeCollection: job.manifest.feeMode === "dynamic" ? "unknown" : "market",
           },
     queue: positionOf(job.id),
   };

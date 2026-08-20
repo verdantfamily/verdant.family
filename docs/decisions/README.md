@@ -26,6 +26,8 @@ original design intent, and these files are the diff.
 | [013](013-the-repository-is-mit.md) | The repository is MIT; two SPDX headers are frozen by a deployment | resolves the `LICENSE` conflict |
 | [014](014-instant-is-a-preset-not-a-model.md) | Instant is a preset over Classic on v4, not a launch model; v3 cannot carry the fee | extends 008, 009 |
 | [015](015-boost-is-a-fee-recipient-not-a-fee-change.md) | Agen Boost captures both fee streams by being the fee recipient and the treasury; the platform half needs one Instant redeployment of unchanged bytecode | extends 014 |
+| [016](016-a-fee-seat-can-change-hands.md) | A market names a `CreatorSeat` as its fee recipient so the 1% can change hands; Agen may propose a successor after a 14-day veto window, and a founder may turn that path off forever | extends 015 |
+| [017](017-a-tweet-is-a-launch.md) | A reply on X launches a real Instant market; the creator is an immutable X user id and its fee accrues to one `CreatorSeat` per account, claimed later | extends 016 |
 
 ## Format
 

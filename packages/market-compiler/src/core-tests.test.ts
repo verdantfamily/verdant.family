@@ -499,6 +499,83 @@ describe("the suite Agen writes for itself", () => {
     expect(suite.source.content).toContain("function testFuzz_core_fee_never_exceeds_the_ceiling(");
   });
 
+  /**
+   * A size-gated sell fee is the one conditional shape this file can now read completely.
+   *
+   * The points are derived from the threshold, not written for one token: a quarter of
+   * it, half of it, a hair under it, exactly it, a hair over it, and well above it. For
+   * a 2% supply gate that is the ladder a creator checks by hand, and the one that tells
+   * a substituted 1% default from the figure they named.
+   */
+  it("asserts the sell fee at the named supply threshold, not at a fallback size", () => {
+    const gated = market(
+      [
+        {
+          id: "base-fee",
+          title: "BASE FEE",
+          when: { kind: "swap", description: "Any trade" },
+          conditions: [],
+          then: [{ kind: "setFee", description: "Charge 2%", parameters: { feePpm: 20_000 } }],
+        },
+        {
+          id: "large-sell",
+          title: "LARGE SELL",
+          when: { kind: "sell", description: "Somebody sells" },
+          conditions: [
+            {
+              kind: "tradeSizeVsSupply",
+              description: "The sell is more than 2% of the token's total supply",
+              parameters: { operator: ">", percent: 2, basis: "totalSupply" },
+            },
+          ],
+          then: [{ kind: "setFee", description: "Charge 5%", parameters: { feePpm: 50_000 } }],
+        },
+      ],
+      { baseFeePpm: 20_000, maxFeePpm: 50_000 },
+    );
+
+    const suite = coreTests(gated, { collectsItsOwnFee: true });
+
+    expect(suite.source.content).toContain(
+      "function test_core_size_gated_fees_match_the_specified_threshold()",
+    );
+    expect(suite.source.content).toContain("tokenSupply()");
+    // 0.5%, 1%, 1.99%, 2%, 2.01%, 5% of supply, as millionths.
+    expect(suite.source.content).toContain("(5000, 20000)");
+    expect(suite.source.content).toContain("(10000, 20000)");
+    expect(suite.source.content).toContain("(19900, 20000)");
+    expect(suite.source.content).toContain("(20000, 20000)");
+    expect(suite.source.content).toContain("(20100, 50000)");
+    expect(suite.source.content).toContain("(50000, 50000)");
+    // A 1% default would put the higher fee on the 1% row. It must not.
+    expect(suite.source.content).not.toContain("(10000, 50000)");
+    expect(suite.proves.some((claim) => claim.includes("2% of supply"))).toBe(true);
+  });
+
+  /** A share of the pool moves as the test trades, so this file will not claim one. */
+  it("still claims nothing about a fee gated on pool liquidity", () => {
+    const suite = coreTests(
+      market([
+        {
+          ...SELL_FEE,
+          conditions: [
+            {
+              kind: "tradeSizeVsLiquidity",
+              description: "Only large sells",
+              parameters: { percent: 2 },
+            },
+          ],
+        },
+      ]),
+      { collectsItsOwnFee: true },
+    );
+
+    expect(suite.source.content).not.toContain(
+      "function test_core_size_gated_fees_match_the_specified_threshold()",
+    );
+    expect(suite.source.content).not.toContain("sells pay");
+  });
+
   /** No fixture code, no cheatcodes: everything a test needs is already on the base. */
   it("contains no fixture work of its own", () => {
     const suite = coreTests(market([SELL_FEE]), { collectsItsOwnFee: true });

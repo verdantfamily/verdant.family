@@ -38,6 +38,7 @@ import type {
   AgentRevenueRow,
   AgentRun,
   AgentStatus,
+  AgentTrade,
   AgentWalletRecord,
   ChatRole,
   DailyAllowance,
@@ -343,6 +344,38 @@ const MIGRATIONS: readonly { readonly version: number; readonly sql: string }[] 
       CREATE INDEX IF NOT EXISTS idx_chat_agent ON agent_chat(agent_id, created_at);
     `,
   },
+  {
+    // Trading. Two additions, and nothing already here changes behaviour.
+    //
+    // `max_eth_per_trade_wei` is backfilled with a default rather than left nullable
+    // because a null per-action cap reads as "no ceiling" to arithmetic and as "not
+    // configured yet" to a person, and one of those is a wallet nobody has bounded.
+    // Agents that already exist get the same 0.02 ETH a new one gets.
+    //
+    // `agent_trades` is the transaction history and the position list at once. It is not
+    // the audit trail — `agent_activity` is that, and keeps its own row per trade. It is
+    // the only record of which tokens this wallet has ever held, and that is load-bearing:
+    // `balanceOf` has to be told which token to ask about, so without this list there is
+    // no question to put to the chain and no way to answer what the agent owns.
+    version: 4,
+    sql: `
+      ALTER TABLE agent_permissions
+        ADD COLUMN max_eth_per_trade_wei TEXT NOT NULL DEFAULT '20000000000000000';
+
+      CREATE TABLE IF NOT EXISTS agent_trades (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        side TEXT NOT NULL,
+        token TEXT NOT NULL,
+        quote_wei TEXT NOT NULL,
+        token_amount TEXT NOT NULL,
+        tx_hash TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_trades_agent ON agent_trades(agent_id, created_at);
+    `,
+  },
 ];
 
 const STALE_RESERVATION_SECONDS = 10 * 60;
@@ -370,6 +403,7 @@ function permissionsFromRow(row: Record<string, unknown>): AgentPermissions {
     maxEthPerLaunchWei: BigInt(String(row.max_eth_per_launch_wei)),
     maxLaunchesPerDay: Number(row.max_launches_per_day),
     maxEthPerDayWei: BigInt(String(row.max_eth_per_day_wei)),
+    maxEthPerTradeWei: BigInt(String(row.max_eth_per_trade_wei)),
     maxCreatorBuyWei: BigInt(String(row.max_creator_buy_wei)),
     canClaimCreatorFees: Number(row.can_claim_creator_fees) === 1,
     externalTransfers: Number(row.external_transfers) === 1,
@@ -613,15 +647,17 @@ export class AgentStore {
       .prepare(
         `INSERT INTO agent_permissions (
            agent_id, instant_allowed, programmable_allowed, max_eth_per_launch_wei,
-           max_launches_per_day, max_eth_per_day_wei, max_creator_buy_wei,
+           max_launches_per_day, max_eth_per_day_wei, max_eth_per_trade_wei,
+           max_creator_buy_wei,
            can_claim_creator_fees, external_transfers, approved_contracts_only
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(agent_id) DO UPDATE SET
            instant_allowed = excluded.instant_allowed,
            programmable_allowed = excluded.programmable_allowed,
            max_eth_per_launch_wei = excluded.max_eth_per_launch_wei,
            max_launches_per_day = excluded.max_launches_per_day,
            max_eth_per_day_wei = excluded.max_eth_per_day_wei,
+           max_eth_per_trade_wei = excluded.max_eth_per_trade_wei,
            max_creator_buy_wei = excluded.max_creator_buy_wei,
            can_claim_creator_fees = excluded.can_claim_creator_fees,
            external_transfers = excluded.external_transfers,
@@ -634,6 +670,7 @@ export class AgentStore {
         permissions.maxEthPerLaunchWei.toString(),
         permissions.maxLaunchesPerDay,
         permissions.maxEthPerDayWei.toString(),
+        permissions.maxEthPerTradeWei.toString(),
         permissions.maxCreatorBuyWei.toString(),
         permissions.canClaimCreatorFees ? 1 : 0,
         permissions.externalTransfers ? 1 : 0,
@@ -972,6 +1009,166 @@ export class AgentStore {
     };
   }
 
+  /**
+   * Atomically reserve the ether a buy will spend.
+   *
+   * The same daily budget a launch draws on, deliberately: an agent given 0.15 ETH a day
+   * has 0.15 ETH a day, and a second independent allowance for trading would be a way to
+   * spend twice what the owner agreed to. What it does not touch is the launch counter —
+   * see `finalizeReservation`.
+   *
+   * Selling has no reservation because selling spends no ether. A cap on it would be a
+   * cap on the agent's ability to get back to cash, which is the opposite of a control.
+   */
+  reserveTrade(input: {
+    readonly agentId: string;
+    readonly wei: bigint;
+    readonly permissions: AgentPermissions;
+  }): Reservation {
+    const now = Math.floor(Date.now() / 1000);
+    const day = utcDay(now);
+    const id = crypto.randomUUID();
+
+    this.db.exec("BEGIN IMMEDIATE;");
+    try {
+      this.releaseStaleReservations(input.agentId, day, now);
+
+      const spend = this.getSpendDay(input.agentId, day);
+      const usedWei = spend.spentWei + spend.reservedWei;
+
+      if (input.wei > input.permissions.maxEthPerTradeWei) {
+        throw new AgentError(
+          "PERMISSION_MAX_ETH_PER_TRADE",
+          `This buy would spend ${input.wei.toString()} wei, which exceeds the per-trade limit.`,
+          {
+            permission: "maxEthPerTrade",
+            limit: input.permissions.maxEthPerTradeWei.toString(),
+            requested: input.wei.toString(),
+          },
+        );
+      }
+
+      if (usedWei + input.wei > input.permissions.maxEthPerDayWei) {
+        throw new AgentError(
+          "PERMISSION_MAX_ETH_PER_DAY",
+          "This buy would push today's spend past the daily ETH budget.",
+          {
+            permission: "maxEthPerDay",
+            limit: input.permissions.maxEthPerDayWei.toString(),
+            requested: (usedWei + input.wei).toString(),
+          },
+        );
+      }
+
+      const nextReservedWei = spend.reservedWei + input.wei;
+      this.db
+        .prepare(
+          `INSERT INTO agent_spend_days (agent_id, day, launches, spent_wei, reserved_launches, reserved_wei)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(agent_id, day) DO UPDATE SET
+             reserved_wei = excluded.reserved_wei`,
+        )
+        .run(
+          input.agentId,
+          day,
+          spend.launches,
+          spend.spentWei.toString(),
+          spend.reservedLaunches,
+          nextReservedWei.toString(),
+        );
+
+      this.db
+        .prepare(
+          `INSERT INTO agent_reservations (id, agent_id, day, kind, launches, wei, status, created_at)
+           VALUES (?, ?, ?, 'trade', 0, ?, 'reserved', ?)`,
+        )
+        .run(id, input.agentId, day, input.wei.toString(), now);
+
+      this.db.exec("COMMIT;");
+    } catch (error) {
+      this.db.exec("ROLLBACK;");
+      throw error;
+    }
+
+    return {
+      id,
+      agentId: input.agentId,
+      day,
+      kind: "trade",
+      launches: 0,
+      wei: input.wei,
+      status: "reserved",
+      createdAt: now,
+    };
+  }
+
+  recordTrade(trade: AgentTrade): AgentTrade {
+    this.db
+      .prepare(
+        `INSERT INTO agent_trades (
+           id, agent_id, side, token, quote_wei, token_amount, tx_hash, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        trade.id,
+        trade.agentId,
+        trade.side,
+        trade.token,
+        trade.quoteWei.toString(),
+        trade.tokenAmount.toString(),
+        trade.txHash,
+        trade.createdAt,
+      );
+    return trade;
+  }
+
+  listTrades(agentId: string, limit = 50): readonly AgentTrade[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT * FROM agent_trades WHERE agent_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+        )
+        .all(agentId, limit) as Record<string, unknown>[]
+    ).map((row) => ({
+      id: String(row.id),
+      agentId: String(row.agent_id),
+      side: String(row.side) === "sell" ? "sell" : "buy",
+      token: asAddress(String(row.token)),
+      quoteWei: BigInt(String(row.quote_wei)),
+      tokenAmount: BigInt(String(row.token_amount)),
+      txHash: String(row.tx_hash) as `0x${string}`,
+      createdAt: Number(row.created_at),
+    }));
+  }
+
+  /**
+   * Every token this wallet could hold: traded, or launched by it.
+   *
+   * The launches matter as much as the trades. An agent's first position is usually the
+   * opening buy on its own market, which is part of the launch transaction and never
+   * passes through `agent_trades` — so a position list built from trades alone would omit
+   * the one holding every launching agent has.
+   */
+  heldTokenCandidates(agentId: string): readonly Address[] {
+    const rows = this.db
+      .prepare(
+        `SELECT token FROM agent_trades WHERE agent_id = ?
+         UNION
+         SELECT token FROM agent_launches WHERE agent_id = ? AND token IS NOT NULL`,
+      )
+      .all(agentId, agentId) as { token: string }[];
+
+    const seen = new Set<string>();
+    const tokens: Address[] = [];
+    for (const row of rows) {
+      const key = row.token.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      tokens.push(asAddress(row.token));
+    }
+    return tokens;
+  }
+
   finalizeReservation(id: string, outcome: "committed" | "released"): void {
     this.db.exec("BEGIN IMMEDIATE;");
     try {
@@ -986,6 +1183,10 @@ export class AgentStore {
       const wei = BigInt(String(row.wei));
       const agentId = String(row.agent_id);
       const day = String(row.day);
+      // The reservation's own count rather than a literal 1: a trade reserves ether
+      // without consuming a launch slot, and settling it as a launch would spend a
+      // launch the agent never made.
+      const launches = Number(row.launches);
 
       const spend = this.getSpendDay(agentId, day);
       if (outcome === "committed") {
@@ -999,9 +1200,9 @@ export class AgentStore {
              WHERE agent_id = ? AND day = ?`,
           )
           .run(
-            spend.launches + 1,
+            spend.launches + launches,
             (spend.spentWei + wei).toString(),
-            Math.max(0, spend.reservedLaunches - 1),
+            Math.max(0, spend.reservedLaunches - launches),
             (spend.reservedWei > wei ? spend.reservedWei - wei : 0n).toString(),
             agentId,
             day,
@@ -1015,7 +1216,7 @@ export class AgentStore {
              WHERE agent_id = ? AND day = ?`,
           )
           .run(
-            Math.max(0, spend.reservedLaunches - 1),
+            Math.max(0, spend.reservedLaunches - launches),
             (spend.reservedWei > wei ? spend.reservedWei - wei : 0n).toString(),
             agentId,
             day,
@@ -1040,13 +1241,14 @@ export class AgentStore {
 
     for (const row of stale) {
       const wei = BigInt(String(row.wei));
+      const launches = Number(row.launches);
       const spend = this.getSpendDay(agentId, day);
       this.db
         .prepare(
           `UPDATE agent_spend_days SET reserved_launches = ?, reserved_wei = ? WHERE agent_id = ? AND day = ?`,
         )
         .run(
-          Math.max(0, spend.reservedLaunches - 1),
+          Math.max(0, spend.reservedLaunches - launches),
           (spend.reservedWei > wei ? spend.reservedWei - wei : 0n).toString(),
           agentId,
           day,

@@ -20,6 +20,22 @@ export {
 } from "./sweep.js";
 
 export {
+  buildDeploySeat,
+  buildSeatCollect,
+  buildSeatOffer,
+  buildSeatSweep,
+  buildSeatTake,
+  buildSeatWithdrawOffer,
+  readSeatAddress,
+  readSeatClaimable,
+  readSeatIsGenuine,
+  readSeatState,
+  readSeatedAt,
+  type SeatAddress,
+  type SeatState,
+} from "./seat.js";
+
+export {
   BOOST_DEAD_ADDRESS,
   boostContributions,
   buildBoostContribute,

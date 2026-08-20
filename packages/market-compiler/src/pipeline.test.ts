@@ -1173,6 +1173,89 @@ describe("failing closed", () => {
     expect(job.failure?.detail).toContain("declared maximum fee");
   });
 
+  /**
+   * A size threshold the creator named is not a suggestion, and a default must not
+   * take its place.
+   *
+   * The prompt says "over 2% of the token's immutable total supply". Interpretation
+   * coming back with one percent is the failure that launched a market nobody asked
+   * for: every artefact downstream then agreed with each other about the wrong
+   * number. The build stops here, before any Solidity is written.
+   */
+  it("refuses a stated supply threshold that interpretation replaced with a smaller default", async () => {
+    const prompt =
+      "Charge 2% on every buy and every sell. On any sell larger than 2% of the token's " +
+      "immutable total supply, charge 5% instead.";
+
+    const { options } = pipeline([
+      ...interpretationAnswers({
+        summary: "Two percent on every trade, five on a large sell",
+        baseFeePpm: 20_000,
+        maxFeePpm: 50_000,
+        phases: [],
+        state: [],
+        rules: [
+          {
+            id: "base-fee",
+            title: "BASE FEE",
+            when: { kind: "swap", description: "Any trade", parameters: null },
+            conditions: [],
+            then: [
+              {
+                kind: "setFee",
+                description: "Charge 2%",
+                parameters: [{ key: "feePpm", value: 20_000 }],
+                writes: [],
+              },
+            ],
+            activeInPhases: [],
+            onceOnly: false,
+          },
+          {
+            id: "large-sell",
+            title: "LARGE SELL",
+            when: { kind: "sell", description: "Somebody sells", parameters: null },
+            conditions: [
+              {
+                kind: "tradeSizeVsSupply",
+                description: "The sell is large",
+                parameters: [
+                  { key: "operator", value: ">" },
+                  { key: "percent", value: 1 },
+                  { key: "basis", value: "totalSupply" },
+                ],
+                combinator: null,
+              },
+            ],
+            then: [
+              {
+                kind: "setFee",
+                description: "Charge 5%",
+                parameters: [{ key: "feePpm", value: 50_000 }],
+                writes: [],
+              },
+            ],
+            activeInPhases: [],
+            onceOnly: false,
+          },
+        ],
+        invariants: [{ id: "fee-ceiling", statement: "The hook fee never exceeds 5%", expression: null }],
+        externalDependencies: [],
+        assumptions: [],
+        ambiguities: [],
+        unsupported: [],
+      }),
+    ]);
+
+    const job = await runBuild({ prompt, name: "Push", symbol: "PUSH" }, options);
+
+    expect(job.failure?.code).toBe(FailureCode.Unsupported);
+    expect(job.failure?.stage).toBe(Stage.Interpreting);
+    expect(job.failure?.detail).toContain("2%");
+    expect(job.failure?.detail).toMatch(/1%|one percent|different figure|more than 1%/i);
+    expect(job.stage).toBe(Stage.Failed);
+  });
+
   it("asks the model to correct an artefact before giving up on it", async () => {
     // The first live run died on a formatting habit — `writes: ["none"]` — that one
     // pointed complaint fixes. Giving up on the first rejection wasted the build.

@@ -35,6 +35,7 @@
 
 import {
   agenFor,
+  creatorSeatFactoryFor,
   deploymentFor,
   instantFor,
   EXTERNAL_ADDRESSES,
@@ -410,6 +411,32 @@ export const BOOST_ADDRESSES: BoostAddresses | null = (() => {
     // from producing a build with no destination to name.
     deadAddress: getAddress(record?.deadAddress ?? "0x000000000000000000000000000000000000dEaD"),
   };
+})();
+
+/**
+ * The seat factory, or null where it is not deployed.
+ *
+ * Null means no market on this build may name a seat, which is what the X bot checks before
+ * it launches anything. It refuses rather than falling back to a wallet, and the reason is
+ * the one `InstantFeeVault` makes unavoidable: a sponsored launch that named Agen's own
+ * address would pay Agen forever, and there would be no later transaction that could
+ * correct it. See ADR-016.
+ *
+ * From the record with an environment override, the same precedence and the same reasoning
+ * as the addresses above. A seat's address is a CREATE2 derivation over the factory's own
+ * address, so pointing this at a different factory renames every seat — which is why it is
+ * read in one place and why the derivation is proved rather than remembered wherever a seat
+ * address arrives from outside.
+ */
+export const CREATOR_SEAT_FACTORY: Address | null = (() => {
+  const override = process.env.NEXT_PUBLIC_CREATOR_SEAT_FACTORY?.trim();
+  const record = isVerdantChainId(CHAIN_ID) ? creatorSeatFactoryFor(CHAIN_ID) : null;
+
+  const factory = override !== undefined && override !== "" ? override : record;
+  if (factory === null || factory === undefined) return null;
+  if (!isAddress(factory, { strict: false })) return null;
+
+  return getAddress(factory);
 })();
 
 // --- Uniswap's, which Agen does not deploy --------------------------------------

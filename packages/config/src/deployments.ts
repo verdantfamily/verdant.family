@@ -285,6 +285,21 @@ export interface VerdantAddons {
   readonly feeForwarderFactory: `0x${string}` | null;
 
   /**
+   * Deploys the per-holder contract a market can name instead of a wallet, so that its
+   * creator fee can change hands without the market changing.
+   *
+   * `null` reads as "this build cannot offer a seat", and every consumer treats it that
+   * way rather than falling back to a wallet: a launch that names a wallet where it meant
+   * a seat is unrecoverable, because `InstantFeeVault.creator` is immutable. The X bot
+   * refuses to launch at all while this is null, which is the correct behaviour — a
+   * sponsored launch whose fees are permanently addressed to Agen is worse than no launch.
+   *
+   * Its addresses are derived, so a seat's address is known before it is deployed and one
+   * `label` always resolves to the same seat for the same opener. See ADR-016.
+   */
+  readonly creatorSeatFactory: `0x${string}` | null;
+
+  /**
    * Agen's launch layer, or `null` where it has not been broadcast.
    *
    * `null` must read as "this build cannot launch or index generated markets". It is
@@ -351,9 +366,32 @@ export const ADDONS = {
   //   AgenMarketRegistry 0xfd7a6dd5c9357c441f5de028f76838b90ec6594f34751f98fa950b337dc21de2
   //   AgenFactory        0x11e5efacec5cbea938dc5de0ee1d922b33cc326fd9e42a65bd6207876f9edaea
   //     (through the anchor, which is why the transaction is a call to FactoryOrigin)
+  //
+  // `creatorSeatFactory` is the switch that turns the seat surface on, and with it the X
+  // bot at `apps/agen/src/app/lib/x` — which declines to launch while this is null rather
+  // than naming a wallet it would never be able to move away from. It is null on testnet,
+  // where it has not been broadcast.
+  //
+  // Broadcast to 4663 on 2026-08-20, in block 41,583,498, by transaction
+  // 0x9c8394e610865d2412e9c376686112e9be96572e7a7b982863912a0ee4967181, from
+  // 0xE2e288beA3F084Df52851c3750fDb301133Fd737. 1,972,347 gas.
+  //
+  // This address is load-bearing permanently, which is worth stating where it is recorded
+  // rather than only in the script that sent it. A seat's address derives from this
+  // factory's address and from `CreatorSeat`'s compiled bytecode, and a market names its
+  // seat as an immutable `feeRecipient` — so replacing this factory would leave every
+  // market launched against the old one paying seats the new one cannot produce. It may be
+  // redeployed only while nothing has launched against it.
+  //
+  // Its steward — the key that may propose an occupant for a seated market whose creator
+  // has walked away — is the X seat opener, `X_CREATOR_SEAT_OPENER_ADDRESS`. That is one
+  // key holding two roles, and the intent is to move it to a Safe through `offerSteward`
+  // and `acceptSteward`, which is a two-step handover this factory supports and which is
+  // the reason it was not deployed with a zero steward. A zero steward cannot be added to.
   [ROBINHOOD_MAINNET_ID]: {
     agents: null,
     feeForwarderFactory: null,
+    creatorSeatFactory: "0x1068e2Ccdba99bb9594Cd730728b0B79E5b36B3f",
     agen: {
       factoryOrigin: "0xC0297B2d987793dE96f568C169b1ff90C226BE27",
       deployer: "0x4C812526bF606927a887111299f94e35AE5bd77E",
@@ -411,6 +449,7 @@ export const ADDONS = {
   [ROBINHOOD_TESTNET_ID]: {
     agents: null,
     feeForwarderFactory: null,
+    creatorSeatFactory: null,
     agen: null,
     instant: null,
   },
@@ -463,6 +502,17 @@ export function instantFor(chainId: VerdantChainId): InstantDeployment | null {
  */
 export function boostFor(chainId: VerdantChainId): InstantBoostDeployment | null {
   return ADDONS[chainId].instant?.boost ?? null;
+}
+
+/**
+ * The seat factory for a chain, or `null` where it is not deployed.
+ *
+ * The same shape of accessor as `boostFor`, and the same reason: one call site per
+ * consumer decides what to do about a chain where a fee cannot be seated, rather than a
+ * null flowing onward into the one launch argument that can never be corrected.
+ */
+export function creatorSeatFactoryFor(chainId: VerdantChainId): `0x${string}` | null {
+  return ADDONS[chainId].creatorSeatFactory;
 }
 
 /**

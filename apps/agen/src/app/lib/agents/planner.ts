@@ -30,6 +30,7 @@ import { providerOrNull } from "../builds";
 import { AGENT_PROGRAMMABLE_LAUNCHABLE } from "../programmable";
 import { EXECUTABLE_KINDS } from "./decision";
 import { AgentError } from "./errors";
+import type { AgentPosition } from "./holdings";
 import { describeOutcome, type LaunchOutcome } from "./outcomes";
 import { instantLaunchBlocker } from "./permissions";
 import type { AgentStore } from "./store";
@@ -50,6 +51,24 @@ const PLANNER_TIMEOUT_MS = 120_000;
  */
 const PLANNER_MAX_OUTPUT_TOKENS = 16_000;
 
+/**
+ * One market the agent could trade, reduced to what a decision turns on.
+ *
+ * Deliberately small. The feed knows a great deal more about a market than this, and
+ * putting all of it in front of the model would spend the cycle's tokens on fields no
+ * choice depends on — and would make the list short enough to omit markets, which is the
+ * more expensive loss.
+ */
+export interface TradableMarket {
+  readonly token: `0x${string}`;
+  readonly symbol: string;
+  readonly name: string;
+  /** Ether per whole token, as the pool priced it when the feed answered. */
+  readonly price: number;
+  readonly liquidityWei: bigint;
+  readonly createdAt: number;
+}
+
 export interface PlannerContext {
   readonly store: AgentStore;
   readonly agent: AgentRecord;
@@ -68,6 +87,23 @@ export interface PlannerContext {
    * network reads is the property that makes it swappable for `nullPlanner`.
    */
   readonly outcomes?: readonly LaunchOutcome[];
+  /**
+   * What the agent is holding, read by the runner.
+   *
+   * Absent means nobody could read them, which is not the same as holding nothing — so a
+   * cycle with no positions data is told that rather than being told the wallet is empty.
+   * Arrives from the caller for the same reason `outcomes` does: reading a balance is a
+   * network call, and this file makes none.
+   */
+  readonly positions?: readonly AgentPosition[];
+  /**
+   * Markets the agent could buy into, as the feed lists them.
+   *
+   * The discovery half of trading. Without it a model can only sell, because a buy needs a
+   * token address and there is nowhere else in this prompt one could come from — which is
+   * deliberate: the addresses it may choose between are the ones this list contains.
+   */
+  readonly markets?: readonly TradableMarket[];
   /**
    * Something the owner has just asked for, in their own words.
    *
@@ -286,6 +322,26 @@ function instructionsFor(context: PlannerContext): string {
     lines.push("- claim_revenue: collect creator fees from one of your own markets.");
   }
 
+  if (context.spendableWei > 0n) {
+    lines.push(
+      "- buy_token: spend ether on one of the markets listed below, naming its token address.",
+      "",
+      "  Only a token from that list. It is the set of markets that exist to buy, so an",
+      "  address from anywhere else is either not a market or not one you were shown, and",
+      "  both are refused.",
+    );
+  }
+
+  if ((context.positions ?? []).length > 0) {
+    lines.push(
+      "- sell_token: sell a share of something you hold, as a fraction. 1 sells all of it.",
+      "",
+      "  Selling is how a position ends, and it is worth being deliberate rather than",
+      "  reflexive about it: a price that has fallen since you bought is not by itself a",
+      "  reason, and neither is one that has risen. Say in your rationale what changed.",
+    );
+  }
+
   lines.push(
     "",
     "Your own markets are listed below with how they are actually trading. Use them. A",
@@ -312,6 +368,23 @@ function instructionsFor(context: PlannerContext): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * One market on one line.
+ *
+ * The age is there because it is the field a model is least able to infer and most needs:
+ * an Instant market minutes old and one a week old at the same price are not the same
+ * trade, and a list of prices alone hides which is which.
+ */
+function describeMarket(market: TradableMarket, now = Math.floor(Date.now() / 1000)): string {
+  const hours = Math.max(0, Math.floor((now - market.createdAt) / 3_600));
+  const age = hours < 1 ? "under an hour old" : hours < 48 ? `${String(hours)}h old` : `${String(Math.floor(hours / 24))}d old`;
+
+  return (
+    `${market.symbol} "${market.name}", ${market.price.toPrecision(3)} ETH per token, ` +
+    `${formatEth(market.liquidityWei)} ETH liquidity, ${age} token=${market.token}`
+  );
 }
 
 function stateFor(context: PlannerContext): string {
@@ -348,6 +421,21 @@ function stateFor(context: PlannerContext): string {
     `- instant launches allowed: ${String(context.permissions.instantAllowed)}`,
     `- programmable builds allowed: ${String(context.permissions.programmableAllowed)}`,
     `- may claim creator fees: ${String(context.permissions.canClaimCreatorFees)}`,
+    `- most one buy may spend: ${formatEth(context.permissions.maxEthPerTradeWei)} ETH`,
+    "",
+    "what you are holding:",
+    context.positions === undefined
+      ? "- could not be read this cycle"
+      : context.positions.length === 0
+        ? "- nothing but ether"
+        : context.positions
+            .map((position) => `- ${position.amount} ${position.symbol} token=${position.token}`)
+            .join("\n"),
+    "",
+    "markets you could buy into:",
+    context.markets === undefined || context.markets.length === 0
+      ? "- none available this cycle"
+      : context.markets.map((market) => `- ${describeMarket(market)}`).join("\n"),
     "",
     `markets already created (${String(succeeded.length)}), and how they are doing:`,
     succeeded.length === 0
@@ -399,6 +487,14 @@ function decisionSchema(context: PlannerContext): JsonSchema {
       return context.permissions.programmableAllowed;
     }
     if (kind === "claim_revenue") return context.permissions.canClaimCreatorFees;
+    // Buying needs ether it is allowed to spend; offering the action with nothing
+    // spendable invites a proposal that validation will only refuse.
+    if (kind === "buy_token") return context.spendableWei > 0n;
+    // Selling needs something to sell, and the list of what that could be is the same
+    // list validation will check the answer against.
+    if (kind === "sell_token") {
+      return context.store.heldTokenCandidates(context.agent.id).length > 0;
+    }
     return true;
   });
 
@@ -438,7 +534,18 @@ function decisionSchema(context: PlannerContext): JsonSchema {
         "answer_clarification only.",
       ),
     ),
-    token: optional(text("claim_revenue only: one of your own market tokens.")),
+    token: optional(
+      text(
+        "A token address. claim_revenue: one of your own market tokens. buy_token: any Instant " +
+          "market you have inspected. sell_token: a token you already hold.",
+      ),
+    ),
+    amountEth: optional(
+      bounded("buy_token only: ETH to spend. Clamped to your per-trade cap and budget.", 0, 1),
+    ),
+    fraction: optional(
+      bounded("sell_token only: the share of the holding to sell. 1 sells all of it.", 0, 1),
+    ),
   });
 }
 

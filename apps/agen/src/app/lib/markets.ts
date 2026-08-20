@@ -179,6 +179,9 @@ export interface ProgrammableSummary extends MarketCommon {
 /** A market that took the standard shape: fixed supply, fixed opening, fixed fee. */
 export interface InstantSummary extends MarketCommon {
   readonly kind: "instant";
+  /** The pool a one-tap buy quotes against. Present on every Instant market that listed. */
+  readonly poolId?: string;
+  readonly lpFee?: number;
 }
 
 export type MarketSummary = ProgrammableSummary | InstantSummary;
@@ -557,6 +560,8 @@ function instantSummaryFrom(
     headline: market.metadata.description,
     image: market.metadata.image,
     supplyTokens: market.supplyTokens,
+    poolId: market.poolId,
+    lpFee: market.lpFee,
     trading: {
       price: market.price,
       marketCap: market.supplyTokens * market.price,

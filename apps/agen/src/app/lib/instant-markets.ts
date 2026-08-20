@@ -376,6 +376,32 @@ export async function readInstantMarkets(limit = 200): Promise<readonly InstantM
 }
 
 /**
+ * A join, and one more attempt if the first was refused.
+ *
+ * Degrading per market is only per-market when the failures are independent, and a rate limit
+ * is the opposite: the refusal arrives for the whole burst, every join fails, and the shelf
+ * reports an empty chain. Measured against the public RPC, twenty-four concurrent reads are
+ * answered without complaint and the refusals come in occasional bursts, so what this needs is
+ * not a narrower pipe but a second ask once the burst has passed.
+ *
+ * One retry, not a loop: if the second attempt is refused too, the caller's own fallback to the
+ * last shelf it saw is the better answer than a page that hangs on retries.
+ *
+ * Only a thrown read is retried. `join` also returns null for a record whose derived pool id is
+ * not the one the registry holds, which is a market that does not belong to this deployment —
+ * settled, not refused, and asking again would spend two reads and 400ms per foreign market to
+ * be told the same thing.
+ */
+async function joinOrRetry(record: marketReads.MarketRecord): Promise<InstantMarket | null> {
+  try {
+    return await join(record);
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return join(record).catch(() => null);
+  }
+}
+
+/**
  * The registry route, degraded per market rather than as a whole.
  *
  * `Promise.all` over the joins is what made this all-or-nothing: one market whose token read
@@ -399,9 +425,7 @@ async function marketsFromChain(
     return [];
   }
 
-  const joined = await Promise.all(
-    records.map(async (record) => join(record).catch(() => null)),
-  );
+  const joined = await Promise.all(records.map(async (record) => joinOrRetry(record)));
 
   const markets = joined.filter((market): market is InstantMarket => market !== null);
 

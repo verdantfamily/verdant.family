@@ -14,6 +14,13 @@
     },
     "lint": {},
     "dev": {
+      // Dependencies are built before a dev server starts, exactly as they are for `build` and
+      // `test`. Without this, `pnpm dev` was the one entry point that ran the app against
+      // whatever was last compiled into a dependency's `dist`, and the failure is silent: an
+      // added field on a request object is simply ignored by the older code, so a feature that
+      // is fully implemented and fully tested does nothing at runtime. That is how image support
+      // reached a live bot that answered "the image isn't rendering for me".
+      "dependsOn": ["^build"],
       "cache": false,
       "persistent": true
     }

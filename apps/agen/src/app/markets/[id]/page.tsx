@@ -14,6 +14,8 @@ import { ethUsd } from "../../lib/eth-price";
 import { eth, marketCapUsd } from "../../lib/format";
 import { INSTANT_FEE_PPM } from "../../lib/instant";
 import { attributionForToken } from "../../lib/agents/attribution";
+import { listComments } from "../../lib/comments";
+import { holdersOf } from "../../lib/holders";
 import { marketSource } from "../../lib/markets";
 import { shareDescription, shareTitle } from "../../lib/og-card";
 import { SiteFooter } from "../../footer";
@@ -21,7 +23,9 @@ import { TopBar } from "../../topbar";
 import { TokenArt } from "../art";
 import { BoostCard } from "./boost";
 import { Chart } from "./chart";
+import { Comments } from "./comments";
 import { CopyAddress } from "./copy";
+import { Holders } from "./holders";
 import { Mechanics } from "./mechanics";
 import { TradePanel } from "./trade";
 import { Trades } from "./trades";
@@ -102,7 +106,7 @@ export default async function Token({ params }: { params: Promise<{ id: string }
   const market = await source.read(id);
   if (market === null) notFound();
 
-  const [trades, state, history, usdPerEth] = await Promise.all([
+  const [trades, state, history, usdPerEth, holders, comments] = await Promise.all([
     source.trades(id),
     source.state(id),
     // Only for a market that has a pool, and never fatal. A chart is worth a request on
@@ -119,6 +123,10 @@ export default async function Token({ params }: { params: Promise<{ id: string }
     // What the capitalisation is written in. Null where no rate could be fetched, which
     // shows the figure in ether rather than in a stale dollar.
     ethUsd(),
+    market.kind === "instant" && market.tokenAddress !== null
+      ? holdersOf(market.tokenAddress, market.creator)
+      : Promise.resolve(null),
+    market.tokenAddress === null ? Promise.resolve([]) : listComments(market.tokenAddress),
   ]);
 
   const now = Math.floor(Date.now() / 1000);
@@ -245,6 +253,8 @@ export default async function Token({ params }: { params: Promise<{ id: string }
               <CopyAddress address={market.tokenAddress} />
             </section>
 
+            <Holders sheet={holders} />
+
             {/*
               Boost, for Instant markets that can have it.
 
@@ -309,6 +319,10 @@ export default async function Token({ params }: { params: Promise<{ id: string }
 
           <div className="ax-tk-rest">
             <Trades marketId={market.id} trades={trades} now={now} live={live} />
+
+            {market.tokenAddress === null ? null : (
+              <Comments token={market.tokenAddress} initial={comments} />
+            )}
 
             {/*
               Only a compiled market has mechanics to explain.

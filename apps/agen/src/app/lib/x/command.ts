@@ -407,6 +407,19 @@ export function parseCommand(text: string, handle: string, context = ""): Parsed
   };
 }
 
+/**
+ * Whether the post being replied to can change what this command means.
+ *
+ * A fully named trade and a wallet question are decided by the command alone, so fetching
+ * the parent is a wasted round trip on the path people are waiting on. A launch, a
+ * question, or "buy 0.005 ETH of it" still need that post.
+ */
+export function needsSource(parsed: ParsedCommand): boolean {
+  if (parsed.trade !== null) return false;
+  if (parsed.asksWallet) return false;
+  return true;
+}
+
 function escape(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

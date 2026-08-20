@@ -253,7 +253,13 @@ describe("buying from a post", () => {
 
     const wallet = store.walletFor("770077");
     // The reply the brief asks for, addressed to the wallet the person was just given.
-    expect(refusalReply(error)).toBe(`Please top up your wallet: ${String(wallet?.address)}`);
+    expect(refusalReply(error)).toBe(
+      [
+        "You don't have enough funds. Please deposit ETH (Robinhood Chain) to start trading.",
+        "",
+        String(wallet?.address),
+      ].join("\n"),
+    );
   });
 
   it("keeps back enough for gas, so a buy it promised can be mined", async () => {

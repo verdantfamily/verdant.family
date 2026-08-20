@@ -33,7 +33,7 @@ import { xClient, type XClient } from "./client";
 import { botUsername } from "./config";
 import { XError } from "./errors";
 import { handleMention, resolveIndeterminate, type MentionOutcome } from "./engine";
-import { parseCommand } from "./command";
+import { needsSource, parseCommand } from "./command";
 import { isSelf } from "./guards";
 import { xStore, type XStore } from "./store";
 import type { XMention, XPost } from "./types";
@@ -53,7 +53,12 @@ export async function mentionFromPost(
   command: XPost,
   client: XClient = xClient(),
 ): Promise<XMention> {
-  if (command.inReplyToPostId === null) {
+  // A buy that already names the token does not become a better buy by waiting on X to
+  // return the parent. Same for "wallet" — the address is this account's, not the thread's.
+  if (
+    command.inReplyToPostId === null ||
+    !needsSource(parseCommand(command.text, botUsername()))
+  ) {
     return { command, source: null, quoted: null, thread: [] };
   }
 

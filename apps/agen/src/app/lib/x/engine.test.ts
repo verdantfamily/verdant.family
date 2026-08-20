@@ -699,6 +699,56 @@ describe("handleMention, trading", () => {
     expect(recorder.asked).toHaveLength(0);
   });
 
+  it("sells 'it' the same way, without asking a model", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    const trade = vi.fn().mockResolvedValue({
+      outcome: {
+        side: "sell",
+        token: TOKEN,
+        symbol: "TEST",
+        quoteWei: 1_000_000_000_000_000n,
+        tokenAmount: 5_000_000n * 10n ** 18n,
+        minAmountOut: 0n,
+        priceImpactBps: 10,
+        txHash: TX,
+        approvalTxHash: null,
+      },
+      wallet: WALLET,
+      symbol: "TEST",
+      tokenAmount: "5000000",
+    });
+    withModel(LAUNCH_ANSWER);
+
+    const source = post({
+      id: "1900000000000000047",
+      text: `$TEST is live on Robinhood.\n\nhttps://agen.space/markets/${CONTRACT}`,
+      links: [`https://agen.space/markets/${CONTRACT}`],
+    });
+
+    const outcome = await handleMention(
+      {
+        command: post({
+          id: "1900000000000000048",
+          text: "@useagen sell it",
+          inReplyToPostId: source.id,
+        }),
+        source,
+      },
+      { store, client: client(recorder) as never, agents: freshAgents(), trade },
+    );
+
+    expect(outcome.outcome).toBe("traded");
+    expect(trade).toHaveBeenCalledTimes(1);
+    const [, intent] = trade.mock.calls[0]!;
+    expect(intent).toMatchObject({
+      side: "sell",
+      fraction: 1,
+      target: { kind: "address", token: CONTRACT },
+    });
+    expect(recorder.replies[0]?.text).toContain("Sold 5M $TEST");
+  });
+
   it("does not buy twice when the same post is delivered twice", async () => {
     const store = freshStore();
     const agents = freshAgents();
@@ -744,7 +794,13 @@ describe("handleMention, trading", () => {
 
     expect(outcome.outcome).toBe("refused");
     expect(outcome.code).toBe("WALLET_UNFUNDED");
-    expect(recorder.replies[0]?.text).toBe(`Please top up your wallet: ${wallet.row.address}`);
+    expect(recorder.replies[0]?.text).toBe(
+      [
+        "You don't have enough funds. Please deposit ETH (Robinhood Chain) to start trading.",
+        "",
+        wallet.row.address,
+      ].join("\n"),
+    );
   });
 
   it("settles a failed trade rather than letting it be tried again", async () => {

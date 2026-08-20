@@ -11,7 +11,7 @@
 import { describe, expect, it } from "vitest";
 import { getAddress, parseEther } from "viem";
 
-import { normaliseName, normaliseTicker, parseCommand } from "./command";
+import { needsSource, normaliseName, normaliseTicker, parseCommand } from "./command";
 import { seatLabel } from "./seat";
 import { launchReply, marketUrl } from "./reply";
 import { postIdsFrom } from "./ingest";
@@ -228,6 +228,24 @@ describe("parseTrade", () => {
     const parent =
       "0x1111111111111111111111111111111111111111 vs 0x2222222222222222222222222222222222222222";
     expect(parseCommand("@useagen buy 0.1 eth of it", BOT, parent).trade).toBe(null);
+  });
+
+  it("sells 'it' the same way, from the parent market", () => {
+    const parent = "https://agen.space/markets/0xa20931BcA92deDdf725d4108721e683B7c2BCdD3";
+    const parsed = parseCommand("@useagen sell it", BOT, parent);
+    expect(parsed.trade).toMatchObject({
+      side: "sell",
+      fraction: 1,
+      target: { kind: "address", token: getAddress("0xa20931BcA92deDdf725d4108721e683B7c2BCdD3") },
+    });
+  });
+
+  it("does not wait on a parent when the trade or the wallet is already named", () => {
+    expect(needsSource(parseCommand("@useagen buy 0.001 ETH of $DOG", BOT))).toBe(false);
+    expect(needsSource(parseCommand("@useagen sell $DOG", BOT))).toBe(false);
+    expect(needsSource(parseCommand("@useagen my wallet", BOT))).toBe(false);
+    expect(needsSource(parseCommand("@useagen now buy 0.005 ETH of it", BOT))).toBe(true);
+    expect(needsSource(parseCommand("@useagen launch this", BOT))).toBe(true);
   });
 
   it("still will not treat 'i bought the dip' as a buy just because it is a reply", () => {

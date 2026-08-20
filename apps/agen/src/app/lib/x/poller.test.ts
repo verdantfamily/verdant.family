@@ -220,7 +220,22 @@ describe("starting the loop", () => {
     process.env.X_POLL_SECONDS = "not-a-number";
 
     const poller = startMentionPoller({ poll: vi.fn().mockResolvedValue(quiet()) });
-    expect(poller?.health().pollSeconds).toBe(60);
+    expect(poller?.health().pollSeconds).toBe(10);
+    poller?.stop();
+  });
+
+  it("polls every ten seconds unless told otherwise", () => {
+    configured();
+    const poller = startMentionPoller({ poll: vi.fn().mockResolvedValue(quiet()) });
+    expect(poller?.health().pollSeconds).toBe(10);
+    poller?.stop();
+  });
+
+  it("will not poll faster than five seconds", () => {
+    configured();
+    process.env.X_POLL_SECONDS = "2";
+    const poller = startMentionPoller({ poll: vi.fn().mockResolvedValue(quiet()) });
+    expect(poller?.health().pollSeconds).toBe(5);
     poller?.stop();
   });
 });

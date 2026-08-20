@@ -41,10 +41,17 @@ import { ingressProblems } from "./config";
 import { XError } from "./errors";
 import { pollOnce, type PollResult } from "./ingest";
 
-/** How often a pass runs. A mention becoming a reply within a minute is prompt enough for a
- * bot people talk to, and slow enough to leave most of the rate-limit window for the reads a
- * launch itself needs. */
-const DEFAULT_POLL_SECONDS = 60;
+/**
+ * How often a pass runs.
+ *
+ * Ten seconds is the compromise: a mention becoming a reply inside that window is what
+ * people expect of a bot they just tagged, and it still leaves most of a 15-minute X
+ * window for the parent-post reads a launch needs. Faster than five seconds is refused
+ * because empty mention reads would spend the whole allowance and leave none for the
+ * post a trade is actually about.
+ */
+const DEFAULT_POLL_SECONDS = 10;
+const MIN_POLL_SECONDS = 5;
 
 /** How long to stand down after a 429 that arrived without a usable reset time. Longer than a
  * tick and shorter than X's fifteen-minute window, so a transient limit costs a few passes
@@ -150,7 +157,14 @@ export class MentionPoller {
   private schedule(delayMs: number): void {
     if (this.stopped) return;
     this.timer = setTimeout(() => {
-      void this.pass().finally(() => this.schedule(this.pollSeconds * 1000));
+      const started = Date.now();
+      void this.pass().finally(() => {
+        // The interval is wall-clock, not idle-time after a pass. A trade that spent four
+        // seconds confirming should not add another ten of silence on top — that is how a
+        // bot that "works" still feels a minute late.
+        const wait = Math.max(0, this.pollSeconds * 1000 - (Date.now() - started));
+        this.schedule(wait);
+      });
     }, delayMs);
     // Pending timers keep Node's event loop alive, which would hold a container open through a
     // shutdown for no reason.
@@ -249,7 +263,7 @@ export function pollerInstance(): MentionPoller | null {
  * Off unless `X_POLLER=1`. Off too when delivery is set to `webhook`, where X pushes mentions
  * and a poll would only spend the rate-limit window rediscovering what already arrived, and off
  * on a deployment that is missing what reading mentions takes — a loop that cannot succeed
- * should say so once at boot rather than once a minute forever.
+ * should say so once at boot rather than once a tick forever.
  */
 export function startMentionPoller(options: PollerOptions = {}): MentionPoller | null {
   if (process.env["X_POLLER"] !== "1") return null;
@@ -264,12 +278,17 @@ export function startMentionPoller(options: PollerOptions = {}): MentionPoller |
   const existing = pollerInstance();
   if (existing !== null) return existing;
 
-  const configured = Number(process.env["X_POLL_SECONDS"] ?? DEFAULT_POLL_SECONDS);
   const poller = new MentionPoller({
-    pollSeconds: Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_POLL_SECONDS,
+    pollSeconds: pollIntervalSeconds(),
     ...options,
   });
   slot()[POLLER_KEY] = poller;
   poller.start();
   return poller;
+}
+
+function pollIntervalSeconds(): number {
+  const raw = Number(process.env["X_POLL_SECONDS"] ?? DEFAULT_POLL_SECONDS);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_POLL_SECONDS;
+  return Math.max(MIN_POLL_SECONDS, Math.floor(raw));
 }

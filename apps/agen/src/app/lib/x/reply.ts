@@ -92,17 +92,16 @@ export function tradeReply(result: XTradeResult): string {
 /**
  * Where to send money, and nothing else.
  *
- * The wording the brief asked for, kept to the two things that matter — the sentence and the
- * address — because this reply is read in order to copy an address out of it. The balance is
- * included when there is one, since "top up" reads oddly to somebody who has funded the wallet
- * and is short by gas.
+ * The sentence first so the reason is obvious on a timeline, then the address on its own
+ * line so it can be copied without grabbing the rest. The chain is named because this
+ * ether is not mainnet ether, and a deposit sent to the wrong one is gone.
  */
-export function topUpReply(wallet: string, balanceWei = 0n): string {
-  const lines = [`Please top up your wallet: ${wallet}`];
-  if (balanceWei > 0n) {
-    lines.push("", `It holds ${ethText(balanceWei)} ETH, which won't cover that buy plus gas.`);
-  }
-  return lines.join("\n");
+export function topUpReply(wallet: string, _balanceWei = 0n): string {
+  return [
+    "You don't have enough funds. Please deposit ETH (Robinhood Chain) to start trading.",
+    "",
+    wallet,
+  ].join("\n");
 }
 
 /**

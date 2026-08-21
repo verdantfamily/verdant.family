@@ -71,10 +71,35 @@ ponder.on("InstantFactory:MarketCreated", async ({ event, context }) => {
       functionName: "decimals",
       cache: "immutable",
     }),
+    /*
+     * Immutable like the four around it, which is both true and load-bearing.
+     *
+     * True because an Instant token has no `burn` and no mint after the launch — the whole
+     * supply is minted into the locked position in the creating transaction, and Boost's sunk
+     * tokens go to the dead address rather than out of the total. `present` in `api/instant.ts`
+     * already depends on exactly that, deriving a circulating supply as the difference between
+     * this and `boostSunkToken`.
+     *
+     * Load-bearing because without the annotation Ponder makes the call at the event's own
+     * block, and this chain's public RPC keeps no state that old:
+     *
+     *   eth_call @ 41990872 -> {"code":-32000,"message":"metadata is not found, 42057563"}
+     *
+     * It is not an archive node, it retains a few hundred thousand blocks, and every market
+     * older than that window is therefore unreadable at its creation block. That surfaced as
+     * `IndexingFunctionError: Missing or invalid parameters` on `MarketCreated`, an
+     * unhandledRejection, and an indexer that could not get past block 41,990,872 no matter
+     * how many times it restarted — so the backfill never completed, `/ready` never went
+     * green, and the metrics page served whatever partial sums it had reached.
+     *
+     * Reading a value that cannot change at the latest block instead of an unavailable one is
+     * the same number from a block the node still has.
+     */
     context.client.readContract({
       abi: erc20Abi,
       address: token,
       functionName: "totalSupply",
+      cache: "immutable",
     }),
     context.client.readContract({
       abi: abi.verdantTokenAbi,

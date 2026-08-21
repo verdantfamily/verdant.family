@@ -87,6 +87,17 @@ export const START_BLOCK = Number(
 export const RPC_URL =
   process.env.PONDER_RPC_URL_4663 ?? robinhoodMainnet.rpcUrls.default.http[0];
 
+/**
+ * A WebSocket endpoint for realtime, when one is available.
+ *
+ * The Instant indexer's `WS_URL`, for the same reason and with the same shape. Undefined
+ * means "poll over HTTP", which is what this service has always done; the value exists
+ * because Robinhood Chain produces a block roughly every hundred milliseconds and polling
+ * that rate over a rate-limited endpoint loses ground steadily rather than keeping up. Only
+ * realtime uses it — the backfill is range queries over HTTP regardless.
+ */
+export const WS_URL = process.env.PONDER_WS_URL_4663;
+
 /** Lowercased once, because address comparisons happen per event. */
 export const HOOK_LOWER = HOOK.toLowerCase();
 

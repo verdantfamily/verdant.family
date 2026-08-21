@@ -104,16 +104,73 @@ async function findMarket(id: string): Promise<MarketRow | undefined> {
 
 type MarketRow = typeof market.$inferSelect;
 
+/** How long a request will wait for the chain's clock before answering without it. */
+const CLOCK_TIMEOUT_MS = 1_500;
+
+/** The last timestamp the chain gave us, and the wall-clock moment it arrived. */
+let lastClock: { readonly chainAt: number; readonly readAt: number } | null = null;
+
 /**
- * The chain's current timestamp.
+ * A promise, or a rejection once the deadline passes.
  *
- * Read per request rather than cached: the whole point of anchoring to chain time is
- * that it is the chain's, and a cached anchor is a wall clock with extra steps. It
- * is one RPC call against a client Ponder already holds open.
+ * The losing promise is not cancelled — nothing here can cancel an in-flight RPC call —
+ * so its eventual rejection is swallowed. Without that, a refused call becomes an
+ * unhandled rejection after the race has already been decided against it, which in Node
+ * is a process-level event and not a local one.
+ */
+async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  work.catch(() => undefined);
+
+  let cancel: (() => void) | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error("chain clock timed out"));
+    }, ms);
+    cancel = () => {
+      clearTimeout(timer);
+    };
+  });
+
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    cancel?.();
+  }
+}
+
+/**
+ * The chain's current timestamp, and never a hang.
+ *
+ * Still read per request when the chain will answer, because the point of anchoring to
+ * chain time is that it is the chain's. What changed is what happens when it will not.
+ *
+ * An exhausted RPC key does not refuse a request, it answers 429 — and a viem client
+ * treats 429 as backpressure and retries it with backoff. That is correct for indexing
+ * and ruinous here: every route that stamps a response with chain time awaited this
+ * call, so one dead key turned those routes into requests that never came back, while
+ * the routes needing no clock stayed instant. The reader was told the feed was not
+ * answering, which was true and named the wrong part of it.
+ *
+ * A clock is the one dependency here worth degrading rather than failing over: every
+ * figure served is a database aggregate that does not depend on it, and the timestamp
+ * only says when the answer was taken. So the last known chain time is carried forward by
+ * however long ago we learned it, and the wall clock is used only if this process has
+ * never once reached the chain.
  */
 async function chainNow(): Promise<number> {
-  const block = await publicClients["robinhood"].getBlock();
-  return Number(block.timestamp);
+  try {
+    const block = await withDeadline(publicClients["robinhood"].getBlock(), CLOCK_TIMEOUT_MS);
+    lastClock = { chainAt: Number(block.timestamp), readAt: Date.now() };
+    return lastClock.chainAt;
+  } catch {
+    // Every way this fails means the same thing: answer from what we last knew.
+  }
+
+  if (lastClock !== null) {
+    return lastClock.chainAt + Math.round((Date.now() - lastClock.readAt) / 1000);
+  }
+
+  return Math.floor(Date.now() / 1000);
 }
 
 /**

@@ -43,6 +43,23 @@ export const RPC_URL =
   process.env.PONDER_RPC_URL_4663 ?? robinhoodMainnet.rpcUrls.default.http[0];
 
 /**
+ * A WebSocket endpoint for realtime, when one is available.
+ *
+ * Undefined is the ordinary case and means "poll over HTTP", which is what this service did
+ * for its whole life. It is worth having because polling is what fails here: Robinhood Chain
+ * produces a block roughly every hundred milliseconds, so keeping up over HTTP means a
+ * steady stream of `eth_getBlockByNumber` and `eth_getLogs` per block, and the public
+ * endpoint rate-limits well below that rate. Ponder then backs off, falls behind, and the
+ * gap grows without bound — a market launched a minute ago is simply absent from the feed.
+ * A subscription is one connection that is told about each block instead, so realtime stops
+ * competing with the rate limit at all.
+ *
+ * Only realtime uses it. The historical backfill is range queries over HTTP either way, so
+ * this does not remove the need for an endpoint whose limits suit indexing.
+ */
+export const WS_URL = process.env.PONDER_WS_URL_4663;
+
+/**
  * Uniswap's PoolManager, which is where price and volume come from.
  *
  * Overridable, and the override is not hypothetical: `scripts/instant-proof.sh` deploys a

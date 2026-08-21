@@ -61,15 +61,83 @@ function offsetOf(raw: string | undefined): number {
 }
 
 /**
- * The chain's current timestamp.
+ * How long a request will wait for the chain's clock before answering without it.
  *
- * Read per request rather than cached: the whole point of anchoring to chain time is that
- * it is the chain's, and a cached anchor is a wall clock with extra steps. It is one RPC
- * call against a client Ponder already holds open.
+ * Under the four seconds the site allows a whole request, because this is one of six
+ * things `/metrics` does and the other five are database queries that also have to fit.
+ */
+const CLOCK_TIMEOUT_MS = 1_500;
+
+/** The last timestamp the chain gave us, and the wall-clock moment it arrived. */
+let lastClock: { readonly chainAt: number; readonly readAt: number } | null = null;
+
+/**
+ * A promise, or a rejection once the deadline passes.
+ *
+ * The losing promise is not cancelled — nothing here can cancel an in-flight RPC call —
+ * so its eventual rejection is swallowed. Without that, a refused call becomes an
+ * unhandled rejection after the race has already been decided against it, which in Node
+ * is a process-level event and not a local one.
+ */
+async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  work.catch(() => undefined);
+
+  let cancel: (() => void) | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error("chain clock timed out"));
+    }, ms);
+    cancel = () => {
+      clearTimeout(timer);
+    };
+  });
+
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    cancel?.();
+  }
+}
+
+/**
+ * The chain's current timestamp, and never a hang.
+ *
+ * Still read per request when the chain will answer, because the point of anchoring to
+ * chain time is that it is the chain's. What changed is what happens when it will not.
+ *
+ * ## Why this needs a deadline at all
+ *
+ * An exhausted RPC key does not refuse a request, it answers 429 — and a viem client
+ * treats 429 as backpressure and retries it with backoff. That is correct for indexing
+ * and ruinous here: every route that stamps a response with chain time awaited this
+ * call, so one dead key turned `/metrics` and `/stats` into requests that never came
+ * back, while `/markets` — the one route that needs no clock — stayed instant. The site
+ * gave up after four seconds and reported that the feed was not answering, which was
+ * true and told nobody which part of it.
+ *
+ * A clock is the one dependency here worth degrading rather than failing over. Every
+ * figure served is a database aggregate that does not depend on it; the timestamp only
+ * says when the answer was taken, and a second of drift in that is not a wrong number,
+ * whereas serving nothing is a page with no numbers on it.
+ *
+ * So: the last known chain time carried forward by however long ago we learned it, and
+ * the wall clock only if this process has never once reached the chain. On a chain with
+ * sub-second blocks both are within a block or two of the truth.
  */
 async function chainNow(): Promise<number> {
-  const block = await publicClients["robinhood"].getBlock();
-  return Number(block.timestamp);
+  try {
+    const block = await withDeadline(publicClients["robinhood"].getBlock(), CLOCK_TIMEOUT_MS);
+    lastClock = { chainAt: Number(block.timestamp), readAt: Date.now() };
+    return lastClock.chainAt;
+  } catch {
+    // Every way this fails means the same thing: answer from what we last knew.
+  }
+
+  if (lastClock !== null) {
+    return lastClock.chainAt + Math.round((Date.now() - lastClock.readAt) / 1000);
+  }
+
+  return Math.floor(Date.now() / 1000);
 }
 
 app.route(

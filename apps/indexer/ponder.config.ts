@@ -32,6 +32,7 @@ import {
   POOL_MANAGER,
   RPC_URL,
   START_BLOCK,
+  WS_URL,
 } from "./src/addresses";
 
 /**
@@ -140,7 +141,13 @@ const agentContracts = {
 
 export default createConfig({
   chains: {
-    robinhood: { id: CHAIN_ID, rpc: RPC_URL },
+    /*
+     * HTTP for the backfill, and a subscription for realtime when the endpoint offers one.
+     *
+     * `ws` is spread rather than set, because Ponder reads the key's presence and not its
+     * value: an explicit `ws: undefined` is a websocket configured to nothing.
+     */
+    robinhood: { id: CHAIN_ID, rpc: RPC_URL, ...(WS_URL === undefined ? {} : { ws: WS_URL }) },
   },
   contracts: {
     ...agentContracts,

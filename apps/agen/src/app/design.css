@@ -4327,6 +4327,22 @@ span.ax-pager-arrow {
   color: var(--ax-down);
 }
 
+/*
+ * The sponsored-launch reminder: same facts as a warning, but not an error. Red here
+ * made a confirmation look like a failure and sat too close to the button that
+ * commits it.
+ */
+.ax-preview-check {
+  margin: 2px 0 22px;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--ax-muted);
+}
+
+.ax-preview-check .mono {
+  word-break: break-all;
+}
+
 .ax-preview-live {
   margin: 0 0 14px;
   font-size: 0.92rem;

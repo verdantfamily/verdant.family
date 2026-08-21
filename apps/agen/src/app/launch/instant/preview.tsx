@@ -545,7 +545,7 @@ export function Preview({
           a wallet. A creator who mistyped it has no other chance to notice.
         */}
         {sponsored && !settled && derived.feeRecipient !== null ? (
-          <p className="ax-preview-note">
+          <p className="ax-preview-check">
             Agen pays for this launch. Your fees go to{" "}
             <span className="mono">{derived.feeRecipient}</span> and that cannot be changed once
             the market exists — check it now.

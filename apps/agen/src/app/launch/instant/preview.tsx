@@ -22,13 +22,20 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { erc20Abi, formatEther, parseEventLogs, type Address, type Hex } from "viem";
 import { useAccount, usePublicClient, useSendTransaction, useSwitchChain, useWaitForTransactionReceipt } from "wagmi";
 
 import { abi, instant as instantSdk, launch as launchSdk } from "@verdant/sdk";
 
 import { BOOST_ADDRESSES, CHAIN_ID, EXPLORER_URL, INSTANT_ADDRESSES, chain, shortAddress } from "../../lib/chain";
-import { INSTANT_FEE_PERCENTS, absoluteUrl, instantParams, type Derived } from "../../lib/instant";
+import {
+  INSTANT_FEE_PERCENTS,
+  absoluteUrl,
+  instantParams,
+  type Derived,
+  type InstantDraft,
+} from "../../lib/instant";
 import { shareDescription, shareTitle } from "../../lib/og-card";
 
 interface Prepared {
@@ -57,10 +64,19 @@ interface Created {
 
 export function Preview({
   derived,
+  draft,
   description,
   onClose,
 }: {
   readonly derived: Derived;
+  /**
+   * The form as it was typed, needed only for a sponsored launch.
+   *
+   * `derived` is deliberately the resolved, chain-shaped version of the draft, and a sponsored
+   * launch needs the unresolved one: the server rebuilds the draft itself and will only accept a
+   * logo as the stored path this origin serves, not as the absolute address `derive` turns it into.
+   */
+  readonly draft: InstantDraft;
   readonly description: string;
   readonly onClose: () => void;
 }) {
@@ -81,8 +97,32 @@ export function Preview({
    */
   const [step, setStep] = useState<"idle" | "escrow" | "launching">("idle");
 
+  const sponsored = draft.sponsored;
+  /** In flight on the server, which has no wallet state to read it from. */
+  const [sending, setSending] = useState(false);
+  /**
+   * A sponsored launch that was sent and whose outcome nobody knows.
+   *
+   * The one failure that must not offer the button again. The transaction may have created the
+   * market, so pressing launch a second time is how a creator ends up with two tokens and one
+   * of them unmentioned — and the server has already recorded the attempt against this card's
+   * name, so it would refuse anyway. Held separately from `error` because it changes what the
+   * screen offers rather than only what it says.
+   */
+  const [stuck, setStuck] = useState(false);
+
+  /**
+   * This attempt's name, fixed for as long as the card is open.
+   *
+   * The server refuses a second launch under the same name, so a creator who presses the button
+   * twice, or whose connection drops after the transaction was accepted, gets one market rather
+   * than two. Regenerating it per press would defeat exactly the case it exists for; it is
+   * per-card because closing and reopening the card is a new launch by intent.
+   */
+  const [attempt] = useState(() => crypto.randomUUID());
+
   const connected = status === "connected" && address !== undefined;
-  const wrongNetwork = connected && chainId !== CHAIN_ID;
+  const wrongNetwork = !sponsored && connected && chainId !== CHAIN_ID;
   const settled = created !== null;
 
   // Escape closes it, and the page behind must not scroll under it. The scrollbar's
@@ -107,8 +147,16 @@ export function Preview({
     };
   }, []);
 
-  /** Store the document, then mine the address it is part of. */
+  /**
+   * Store the document, then mine the address it is part of.
+   *
+   * Skipped entirely for a sponsored launch. Both halves of this depend on who signs — the salt
+   * is mined against `msg.sender` and the document is stored so that address can be written into
+   * the token — and for a sponsored launch that is the sponsor wallet, which this side neither
+   * knows nor should. The server does the same three steps with the same functions.
+   */
   useEffect(() => {
+    if (sponsored) return;
     if (client === undefined || INSTANT_ADDRESSES === null || address === undefined) return;
     if (derived.image === null) return;
 
@@ -198,7 +246,72 @@ export function Preview({
     return () => {
       live = false;
     };
-  }, [client, address, derived, description]);
+  }, [client, address, derived, description, sponsored]);
+
+  /**
+   * Ask the platform to launch it, and take the answer as the outcome.
+   *
+   * One request, and it returns when the market exists — there is no hash to watch for, because
+   * the server waits for the receipt before answering. That makes the failure cases simple except
+   * for one: a launch whose transaction was sent and whose fate is unknown comes back as
+   * `LAUNCH_INDETERMINATE`, and the only correct response is to stop rather than retry, since
+   * retrying is how one form submission becomes two markets. The button is not offered again.
+   */
+  const launchSponsored = useCallback(async (): Promise<void> => {
+    setError(null);
+    setSending(true);
+
+    try {
+      const response = await fetch("/api/instant/launch", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: derived.name,
+          symbol: derived.symbol,
+          description,
+          imageUrl: draft.imageUrl,
+          feeReceiver: draft.feeReceiver,
+          linkX: draft.linkX,
+          website: draft.website,
+          telegram: draft.telegram,
+          idempotencyKey: attempt,
+        }),
+      });
+
+      const body = (await response.json()) as {
+        token?: Address;
+        poolId?: Hex;
+        txHash?: Hex;
+        error?: string;
+        code?: string;
+      };
+
+      if (
+        !response.ok ||
+        body.token === undefined ||
+        body.poolId === undefined ||
+        body.txHash === undefined
+      ) {
+        setError(body.error ?? "The launch could not be completed.");
+        setStuck(body.code === "LAUNCH_INDETERMINATE");
+        return;
+      }
+
+      // Nothing bought, because a sponsored launch cannot include a first buy: the amount would
+      // be the transaction's value and the platform is what sends it.
+      setCreated({ poolId: body.poolId, token: body.token, bought: 0n, hash: body.txHash });
+
+      void fetch("/api/instant/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: body.token }),
+      }).catch(() => undefined);
+    } catch {
+      setError("The launch could not be reached. Nothing was created.");
+    } finally {
+      setSending(false);
+    }
+  }, [attempt, derived, description, draft]);
 
   /** Read the receipt rather than trusting the request that produced it. */
   useEffect(() => {
@@ -284,6 +397,11 @@ export function Preview({
    * whose fees are permanently unreachable.
    */
   const go = useCallback(() => {
+    if (sponsored) {
+      void launchSponsored();
+      return;
+    }
+
     if (prepared === null) return;
 
     if (!prepared.escrowNeeded || BOOST_ADDRESSES === null) {
@@ -300,7 +418,7 @@ export function Preview({
     });
 
     send.sendTransaction({ to: call.to, data: call.data, value: call.value, chainId: CHAIN_ID });
-  }, [derived, launch, prepared, send]);
+  }, [derived, launch, launchSponsored, prepared, send, sponsored]);
 
   /**
    * The escrow landed, so the launch that names it can follow.
@@ -314,7 +432,7 @@ export function Preview({
     launch();
   }, [receipt.isSuccess, step, launch]);
 
-  const waiting = send.isPending || receipt.isLoading;
+  const waiting = send.isPending || receipt.isLoading || sending;
 
   /**
    * A wallet that cannot reach this chain at all, told apart from one that merely has not
@@ -331,23 +449,27 @@ export function Preview({
    */
   const cannotReachChain = switchChain.error !== null;
 
-  const label = wrongNetwork
-    ? switchChain.isPending
-      ? "waiting for your wallet…"
-      : `Switch to ${chain.name}`
-    : !connected
-      ? "Connect a wallet"
-      : send.isPending
-        ? "confirm in your wallet…"
-        : receipt.isLoading
-          ? step === "escrow"
-            ? "setting up Boost…"
-            : "creating the market…"
-          : prepared === null
-            ? "preparing…"
-            : prepared.escrowNeeded
-              ? "Set up Boost & Launch"
-              : "Launch";
+  const label = sponsored
+    ? sending
+      ? "creating the market…"
+      : "Launch NOW"
+    : wrongNetwork
+      ? switchChain.isPending
+        ? "waiting for your wallet…"
+        : `Switch to ${chain.name}`
+      : !connected
+        ? "Connect a wallet"
+        : send.isPending
+          ? "confirm in your wallet…"
+          : receipt.isLoading
+            ? step === "escrow"
+              ? "setting up Boost…"
+              : "creating the market…"
+            : prepared === null
+              ? "preparing…"
+              : prepared.escrowNeeded
+                ? "Set up Boost & Launch"
+                : "Launch";
 
   return (
     <div
@@ -415,6 +537,21 @@ export function Preview({
           <span>paid in ETH, for the life of the market</span>
         </p>
 
+        {/*
+          The address, spelled out at the last moment, because this is the last moment.
+
+          It is the one thing on this card that cannot be corrected afterwards — the vault fixes
+          it when the market is created — and it is the one thing nobody was asked to confirm in
+          a wallet. A creator who mistyped it has no other chance to notice.
+        */}
+        {sponsored && !settled && derived.feeRecipient !== null ? (
+          <p className="ax-preview-note">
+            Agen pays for this launch. Your fees go to{" "}
+            <span className="mono">{derived.feeRecipient}</span> and that cannot be changed once
+            the market exists — check it now.
+          </p>
+        ) : null}
+
         {settled ? (
           <div className="ax-preview-done">
             <p className="ax-preview-live">
@@ -465,7 +602,11 @@ export function Preview({
           <button
             type="button"
             className="ax-launch"
-            disabled={!wrongNetwork && (!connected || prepared === null || waiting)}
+            disabled={
+              sponsored
+                ? waiting || stuck
+                : !wrongNetwork && (!connected || prepared === null || waiting)
+            }
             onClick={() => {
               if (wrongNetwork) {
                 switchChain.mutate({ chainId: CHAIN_ID });
@@ -491,6 +632,18 @@ export function Preview({
         ) : null}
 
         {error === null ? null : <p className="ax-preview-note">{error}</p>}
+
+        {/*
+          Said plainly, because the instinct here is to press it again and that is the one thing
+          that could produce a second token. The market probably exists; the honest instruction is
+          to look rather than to retry.
+        */}
+        {stuck ? (
+          <p className="ax-preview-note">
+            The launch was sent and Agen did not hear back in time. Do not try again — check{" "}
+            <Link href="/markets">the markets</Link> in a minute, and if nothing appears, tell us.
+          </p>
+        ) : null}
         {send.error !== null && !isRejection(send.error) ? (
           <p className="ax-preview-note">{send.error.message}</p>
         ) : null}

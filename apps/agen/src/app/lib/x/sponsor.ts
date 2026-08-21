@@ -40,6 +40,9 @@ import "server-only";
  *     `deploy(opener, label)` is permissionless and takes the occupant as an argument.
  *   - A genuine seat, for `collect` and `sweep` only. Both are permissionless and can only pay
  *     the current occupant, so the sponsor covering that gas cannot redirect anything.
+ *   - A genuine `InstantFeeVault`, for `claimCreator` only. The same reasoning: the vault's
+ *     recipient is immutable, so the call has one possible destination and it is the creator's.
+ *     This is what lets somebody who launched without a wallet be paid without ever needing one.
  *
  * The opener may reach:
  *
@@ -52,9 +55,10 @@ import "server-only";
  * creator's seat. A route handler bug that let a target through would be a drain rather than a
  * mistake.
  *
- * The seat case cannot be an address list, because seats are per-creator and there is one for
- * everybody who has ever launched. It is proven instead — `isGenuine` on the factory, a CREATE2
- * re-derivation — which is a stronger check than a list would have been.
+ * Neither the seat case nor the vault case can be an address list, because there is one of each
+ * per creator and per market. They are proven instead — `isGenuine` on the factory and a CREATE2
+ * re-derivation for a seat, a registry lookup and a re-derived pool id for a vault — which is a
+ * stronger check than a list would have been, and one that cannot go stale as markets are made.
  *
  * ## What it costs
  *
@@ -78,6 +82,7 @@ import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { instant as instantSdk } from "@verdant/sdk";
 
 import { CHAIN_ID, CREATOR_SEAT_FACTORY, INSTANT_ADDRESSES, chain } from "../chain";
+import { readInstantVault } from "../instant-vault";
 import { publicClient } from "../onchain";
 import { XError } from "./errors";
 
@@ -137,6 +142,21 @@ const SPONSOR_SEAT_SELECTORS: readonly Hex[] = [
   toFunctionSelector("collect(address)"),
   toFunctionSelector("sweep(address)"),
 ];
+
+/**
+ * What the sponsor may call on a market's fee vault.
+ *
+ * One function, and it is the reason a walletless launch is walletless after the launch too.
+ * `claimCreator` pays `InstantFeeVault.creator`, which the factory fixed when the market was
+ * created and nothing can change — so this call cannot be aimed. Whoever sends it, the money
+ * goes to the address the creator named, and Agen covering the gas is Agen paying for a
+ * creator's withdrawal rather than touching it.
+ *
+ * `claimPlatform` is deliberately absent even though it is the same shape. It pays the treasury,
+ * and the treasury sweeping its own revenue is `sweep.ts`'s job with its own key; a hot wallet
+ * that signs for strangers' requests all day has no reason to be able to move platform income.
+ */
+const SPONSOR_VAULT_SELECTORS: readonly Hex[] = [toFunctionSelector("claimCreator()")];
 
 function keyOrNull(variable: string): Hex | null {
   const raw = process.env[variable]?.trim();
@@ -388,6 +408,47 @@ export async function sendSponsoredToSeat(
     call,
     undefined,
   );
+}
+
+/**
+ * Pay a market's creator what their vault owes them, at the platform's expense.
+ *
+ * The other half of a walletless launch. Somebody who launched with no wallet named an address
+ * for their fees and has no way to send a transaction; this is how the fees get there without
+ * one. Safe to expose because the destination is immutable and this call cannot choose it — the
+ * only thing a caller decides is *when*, and the only thing it can waste is Agen's gas, which is
+ * what the caller's own limits are for.
+ *
+ * The target is *derived*, not accepted. A caller names a token and `readInstantVault` reads the
+ * registry, so a request cannot point this key at a contract of its own choosing. That matters
+ * more than it looks: `claimCreator` cannot move the sponsor's money, but an attacker's contract
+ * with a function of that name could burn nine million gas per call, and gas is the only thing
+ * this wallet holds. The calldata is built from the proven address rather than checked against it,
+ * which is why the argument is a function.
+ */
+export async function sendSponsoredToVault(
+  { token }: { readonly token: Address },
+  build: (vault: Address) => SponsoredCall,
+): Promise<SponsoredSend & { readonly vault: Address }> {
+  assertChain();
+
+  const vault = await readInstantVault(token);
+  const call = build(vault);
+
+  if (call.to.toLowerCase() !== vault.toLowerCase()) {
+    throw new XError("UNAPPROVED_TARGET", "That call does not target the vault it was proven for.", {
+      details: { requested: call.to, vault },
+    });
+  }
+  assertSelector(call.data, SPONSOR_VAULT_SELECTORS, "sponsor");
+
+  const sent = await signAndSend(
+    accountFor("X_SPONSOR_PRIVATE_KEY", "launches cannot be paid for"),
+    call,
+    undefined,
+  );
+
+  return { ...sent, vault };
 }
 
 /**

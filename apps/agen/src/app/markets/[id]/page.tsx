@@ -27,6 +27,7 @@ import { Comments } from "./comments";
 import { CopyAddress } from "./copy";
 import { Holders } from "./holders";
 import { Mechanics } from "./mechanics";
+import { CreatorPayout } from "./payout";
 import { TradePanel } from "./trade";
 import { Trades } from "./trades";
 
@@ -271,6 +272,20 @@ export default async function Token({ params }: { params: Promise<{ id: string }
                 vault={market.vault as Address | null}
                 creator={market.creator as Address | null}
               />
+            ) : null}
+
+            {/*
+              The other half of a launch nobody signed for.
+
+              A market created through "Launch Instant NOW" has a creator who may hold no wallet
+              at all, so the claim on `/profile` — which needs one, and lists markets by whoever
+              sent the launch transaction — can never reach them. This card is the route that
+              does: `claimCreator` pays an address the vault made immutable, so pressing it needs
+              no wallet and no proof of being anyone. Renders nothing unless there is enough
+              waiting to be worth the gas.
+            */}
+            {market.kind === "instant" ? (
+              <CreatorPayout token={market.tokenAddress as Address | null} symbol={market.symbol} />
             ) : null}
 
             <section>

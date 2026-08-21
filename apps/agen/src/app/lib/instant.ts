@@ -122,6 +122,26 @@ export interface InstantDraft {
   /** Ignored while `useConnectedWallet` is on. */
   readonly feeReceiver: string;
   readonly useConnectedWallet: boolean;
+  /**
+   * Whether Agen pays for this launch, so the creator needs no wallet at all.
+   *
+   * The whole of what it changes here is who signs: with it on, the draft is posted to the
+   * server and the sponsor wallet submits it, exactly as an X launch is submitted. Nothing
+   * about the market differs — same factory, same supply, same fee split.
+   *
+   * It forces three other fields, and each is forced rather than merely defaulted because the
+   * cost of the client being wrong is the platform's money or a creator's fees:
+   *
+   *   - `useConnectedWallet` is meaningless, because there is no connected wallet to name. So
+   *     `feeReceiver` is the only possible answer to who gets the fees, and it is required.
+   *   - `initialBuy` must be nothing. `initialBuyAmount` is the transaction's `value`, and the
+   *     sponsor is what sends it — a first buy on a sponsored launch would be Agen buying a
+   *     stranger's tokens with its own ether.
+   *   - `boostCapable` is off, for the reason the X path gives: a launch that names an escrow
+   *     needs that escrow deployed and owned, and the address typed into this form is the
+   *     creator's own answer rather than something this side can prove they control.
+   */
+  readonly sponsored: boolean;
   /** Empty means no first buy. */
   readonly initialBuy: string;
   /**
@@ -151,6 +171,7 @@ export function emptyDraft(): InstantDraft {
     description: "",
     feeReceiver: "",
     useConnectedWallet: true,
+    sponsored: false,
     boostCapable: true,
     initialBuy: "",
     linkX: "",
@@ -310,6 +331,19 @@ export interface Derived {
 }
 
 /**
+ * Whether the connected wallet is this draft's answer to who gets the fees.
+ *
+ * A sponsored launch has no connected wallet — that is the whole of what makes it sponsored —
+ * so the box the creator ticked has nothing to resolve to and the typed address is the only
+ * answer available. Written once because `derive` and `validate` have to agree: one of them
+ * resolving a wallet while the other demanded an address would produce a draft that passes
+ * validation and cannot be launched.
+ */
+function usesConnectedWallet(draft: InstantDraft): boolean {
+  return draft.useConnectedWallet && !draft.sponsored;
+}
+
+/**
  * The one place text becomes values.
  *
  * Returns null only for a supply the chain could not open, which the fixed supply above
@@ -328,14 +362,26 @@ export function derive(draft: InstantDraft, connected: Address | undefined): Der
   }
 
   const typed = draft.feeReceiver.trim();
-  const receiver = draft.useConnectedWallet
+  const receiver = usesConnectedWallet(draft)
     ? connected
     : isAddress(typed, { strict: false })
       ? getAddress(typed)
       : undefined;
 
-  const initialBuyWei =
-    draft.initialBuy.trim() === "" ? 0n : parseDecimal(draft.initialBuy, BOUNDS.token.decimals);
+  /*
+   * Zero for a sponsored launch, whatever the field says.
+   *
+   * This number becomes the transaction's `value` and the sponsor wallet is what sends it, so
+   * a non-zero first buy here would spend the platform's ether on somebody else's tokens. The
+   * form does not offer it and the server rebuilds the draft, which makes this the third of
+   * three guards — kept because it is the one that makes `derived` safe to encode from no
+   * matter which of the other two is edited.
+   */
+  const initialBuyWei = draft.sponsored
+    ? 0n
+    : draft.initialBuy.trim() === ""
+      ? 0n
+      : parseDecimal(draft.initialBuy, BOUNDS.token.decimals);
 
   const x = normaliseLink(draft.linkX, "x");
   const website = normaliseLink(draft.website, "website");
@@ -348,7 +394,9 @@ export function derive(draft: InstantDraft, connected: Address | undefined): Der
     initialTick,
     image: draft.imageUrl === null ? null : absoluteUrl(draft.imageUrl),
     feeRecipient: receiver ?? null,
-    boostCapable: draft.boostCapable,
+    // See `InstantDraft.sponsored`: an escrow this side cannot prove the creator owns is worse
+    // than no escrow, so a sponsored launch names the address itself.
+    boostCapable: draft.boostCapable && !draft.sponsored,
     initialBuyWei: initialBuyWei ?? 0n,
     links: {
       ...(x === null ? {} : { x }),
@@ -406,14 +454,31 @@ export function validate(
     problems.push("That description is too long.");
   }
 
-  if (draft.useConnectedWallet) {
+  /*
+   * Who gets the fees, and the one case where there is nobody to fall back on.
+   *
+   * A wallet launch can name the connected address, so leaving the field blank is not an error.
+   * A sponsored launch cannot: nothing is connected, and `InstantFeeVault.creator` is fixed the
+   * moment the market is created. A sponsored launch with no address would put the creator's
+   * 1.00% somewhere nobody can ever collect it, permanently — so it is refused here rather
+   * than defaulted to anything at all, least of all to Agen.
+   */
+  if (draft.sponsored) {
+    if (!isAddress(draft.feeReceiver.trim(), { strict: false })) {
+      problems.push("Add the address your fees should go to — there is no wallet to use instead.");
+    }
+  } else if (draft.useConnectedWallet) {
     if (connected === undefined) problems.push("Connect a wallet to launch.");
   } else if (!isAddress(draft.feeReceiver.trim(), { strict: false })) {
     problems.push("The fee receiver is not an address.");
   }
 
   if (draft.initialBuy.trim() !== "") {
-    if (parseDecimal(draft.initialBuy, BOUNDS.token.decimals) === null) {
+    if (draft.sponsored) {
+      // Not a wording quibble: this amount is the transaction's `value` and the sponsor is what
+      // signs it. See `InstantDraft.sponsored`.
+      problems.push("A launch Agen pays for cannot include a first buy. Connect a wallet to buy at launch.");
+    } else if (parseDecimal(draft.initialBuy, BOUNDS.token.decimals) === null) {
       problems.push("The first buy is not an amount.");
     }
   }

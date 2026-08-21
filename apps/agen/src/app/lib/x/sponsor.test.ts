@@ -12,18 +12,32 @@
  * cannot be detected later, so it is refused at configuration time and asserted here.
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { toFunctionSelector, type Address, type Hex } from "viem";
 
-import {
+const VAULT = "0x7777777777777777777777777777777777777777" as Address;
+
+/*
+ * The registry, stubbed to a known vault.
+ *
+ * What is under test is that the *derived* address is the only one this key will sign for, so the
+ * derivation itself is out of the way and the assertions are about the pinning. `instant-vault.ts`
+ * is where the derivation is checked.
+ */
+vi.mock("../instant-vault", () => ({
+  readInstantVault: async () => VAULT,
+}));
+
+const {
   keySeparation,
   seatOpenerAddress,
   sendAsSeatOpener,
   sendSponsored,
   sendSponsoredToSeat,
+  sendSponsoredToVault,
   sponsorAddress,
   sponsorProblems,
-} from "./sponsor";
+} = await import("./sponsor");
 
 const SPONSOR_KEY = `0x${"11".repeat(32)}` as Hex;
 const OPENER_KEY = `0x${"22".repeat(32)}` as Hex;
@@ -165,5 +179,47 @@ describe("what the sponsor key will sign", () => {
     await expect(sendSponsored(call(STRANGER, "transfer(address,uint256)"))).rejects.toThrow(
       /may only call the Instant factory and the seat factory/,
     );
+  });
+});
+
+/**
+ * The vault case, which is what lets somebody who launched without a wallet be paid without one.
+ *
+ * `claimCreator` is safe to sponsor because the vault's recipient is immutable, so the call has one
+ * possible destination however it is sent. Everything else about the vault is not, and the two
+ * refusals below are the reasons why: a platform claim moves Agen's own revenue, and a target the
+ * caller chose could be a contract that burns the wallet's gas on every call.
+ */
+describe("what the sponsor key will sign on a fee vault", () => {
+  it("a creator claim, built from the vault the registry named", async () => {
+    configure({ sponsor: SPONSOR_KEY, opener: OPENER_KEY });
+
+    let asked: Address | null = null;
+    // Rejects at the send, which needs a chain. What matters is that it got that far, and with
+    // the derived address rather than anything a caller supplied.
+    await expect(
+      sendSponsoredToVault({ token: STRANGER }, (vault) => {
+        asked = vault;
+        return call(vault, "claimCreator()");
+      }),
+    ).rejects.toThrow();
+
+    expect(asked).toBe(VAULT);
+  });
+
+  it("not the platform's own half-percent, which is the treasury's to sweep", async () => {
+    configure({ sponsor: SPONSOR_KEY, opener: OPENER_KEY });
+
+    await expect(
+      sendSponsoredToVault({ token: STRANGER }, (vault) => call(vault, "claimPlatform()")),
+    ).rejects.toThrow(/may not make that call/);
+  });
+
+  it("not a destination the caller chose instead of the one that was proven", async () => {
+    configure({ sponsor: SPONSOR_KEY, opener: OPENER_KEY });
+
+    await expect(
+      sendSponsoredToVault({ token: STRANGER }, () => call(STRANGER, "claimCreator()")),
+    ).rejects.toThrow(/does not target the vault/);
   });
 });

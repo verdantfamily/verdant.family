@@ -214,6 +214,61 @@ describe("where the fees go", () => {
   });
 });
 
+/**
+ * A draft Agen pays for, which is the only kind that can be launched with nothing connected.
+ *
+ * These assertions are about the shared model rather than the server: `derive` and `validate` are
+ * what the form, the preview and `lib/instant-sponsor.ts` all read, so a disagreement between the
+ * two functions here would be a button that offers a launch the server refuses — or, far worse, a
+ * transaction that spends the platform's ether on a first buy.
+ */
+describe("a launch the platform pays for", () => {
+  it("is off unless it is asked for", () => {
+    expect(emptyDraft().sponsored).toBe(false);
+  });
+
+  it("launches with no wallet connected at all", () => {
+    const paid = draft({ sponsored: true, feeReceiver: OTHER });
+    expect(validate(paid, undefined)).toEqual([]);
+    expect(derive(paid, undefined)?.feeRecipient).toBe(OTHER);
+  });
+
+  /**
+   * The one refusal with no fallback behind it. `InstantFeeVault.creator` is fixed at creation,
+   * and there is neither a connected wallet to name nor a verified identity to derive a claimable
+   * seat from — so an address is the only thing that can make the fees reachable.
+   */
+  it("insists on an address, because there is nothing to fall back on", () => {
+    expect(validate(draft({ sponsored: true, feeReceiver: "" }), undefined)).toEqual([
+      "Add the address your fees should go to — there is no wallet to use instead.",
+    ]);
+  });
+
+  it("still insists on one when a wallet happens to be connected", () => {
+    // The box is on by default, and for a sponsored launch it must not resolve to the wallet:
+    // whoever is connected in this tab is not who the server will submit as.
+    expect(validate(draft({ sponsored: true }), CREATOR)).toEqual([
+      "Add the address your fees should go to — there is no wallet to use instead.",
+    ]);
+    expect(derive(draft({ sponsored: true }), CREATOR)?.feeRecipient).toBeNull();
+  });
+
+  /** The amount would be the transaction's `value`, and the sponsor wallet is what sends it. */
+  it("refuses a first buy, and derives zero even if one is left in the draft", () => {
+    const paid = draft({ sponsored: true, feeReceiver: OTHER, initialBuy: "0.5" });
+    expect(validate(paid, undefined)).toEqual([
+      "A launch Agen pays for cannot include a first buy. Connect a wallet to buy at launch.",
+    ]);
+    expect(derive(paid, undefined)?.initialBuyWei).toBe(0n);
+  });
+
+  /** An escrow has an owner, and a typed address is not proof of who that is. */
+  it("names the address itself rather than a Boost escrow", () => {
+    const paid = draft({ sponsored: true, feeReceiver: OTHER, boostCapable: true });
+    expect(derive(paid, undefined)?.boostCapable).toBe(false);
+  });
+});
+
 describe("the first buy", () => {
   it("is optional, and zero when left empty", () => {
     expect(validate(draft({ initialBuy: "" }), CREATOR)).toEqual([]);

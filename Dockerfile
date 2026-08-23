@@ -54,6 +54,17 @@ WORKDIR /app
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY apps/agen/package.json apps/agen/
 COPY packages/market-compiler/package.json packages/market-compiler/
+# The engine's canonical configuration, hashing and ABI. Its absence here is what the
+# build lines below cannot survive: `pnpm install` never learns this package exists, so
+# `viem` and `@types/node` are never installed for it, and the failure arrives twenty
+# steps later as `Cannot find module 'viem'` inside a package whose own manifest asks for
+# it. That reads like a broken dependency and is really a missing line in this list —
+# which is the same accident the note above the build lines describes, one stage earlier.
+#
+# `packages/agen-mcp` is deliberately still absent: nothing in the three closures built
+# below depends on it, so it is never installed and never built. It belongs here the day
+# it does.
+COPY packages/market-engine/package.json packages/market-engine/
 COPY packages/agen-runtime/package.json packages/agen-runtime/
 COPY packages/config/package.json packages/config/
 COPY packages/contracts/package.json packages/contracts/

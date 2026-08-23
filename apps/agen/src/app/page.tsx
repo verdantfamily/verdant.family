@@ -101,22 +101,59 @@ export default async function Home({
    * not a third product.
    */
   const instant = ordered.filter((market) => market.kind === "instant");
+
+  /*
+   * The Programmable shelf: launched markets only, both engines.
+   *
+   * `phase === "live"` rather than every programmable row, because `list()` returns builds
+   * as well as markets — a build that has been described and never launched is a draft
+   * belonging to its creator, and a catalogue that showed them would advertise tokens
+   * nobody can buy. The Instant shelf has no such filter only because an Instant market
+   * cannot exist unlaunched; this is the same rule, stated where it has to be.
+   *
+   * Not split by engine version. A market's engine is how Agen built it — generated
+   * contracts at engine 0, a configuration for the audited engine at v1 — and a reader
+   * looking for a programmable token does not care which, any more than the Instant shelf
+   * separates markets by which week their factory shipped. `mechanics` on the card already
+   * says what each one actually does.
+   */
+  const programmable = ordered.filter(
+    (market) => market.kind === "programmable" && market.phase === "live",
+  );
+
   // Chosen from the whole Instant shelf, not the current page or the current sort: a
   // Spotlight that followed "newest" would just be the first cards again.
   const spotlight = spotlightOf(all);
 
   /*
-   * Which page of the Instant shelf, and how the pager is built.
+   * Which page of each shelf, and how the pagers are built.
    *
    * A page is sixteen because that is four rows of the four-column grid, so a full page is
    * a rectangle rather than a grid with a ragged last row. Out-of-range pages are clamped
    * rather than 404ed: a stale link to page nine of a shelf that has shrunk to two should
    * show the last page, not an error about a number the reader never typed.
+   *
+   * Two shelves, two parameters. `page` stays the Instant shelf's so that every link
+   * anybody has already shared keeps meaning what it meant, and the Programmable shelf
+   * takes `ppage`. One parameter driving both would make paging one shelf silently move
+   * the other, and a reader who pages to the bottom of Instant would find Programmable
+   * showing its second page for no reason they could see.
    */
   const pages = Math.max(1, Math.ceil(instant.length / PER_PAGE));
   const requested = Number.parseInt(first("page"), 10);
   const page = Math.min(Math.max(Number.isNaN(requested) ? 1 : requested, 1), pages);
   const shown = instant.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+
+  const ppages = Math.max(1, Math.ceil(programmable.length / PER_PAGE));
+  const prequested = Number.parseInt(first("ppage"), 10);
+  const ppage = Math.min(Math.max(Number.isNaN(prequested) ? 1 : prequested, 1), ppages);
+  const pshown = programmable.slice((ppage - 1) * PER_PAGE, ppage * PER_PAGE);
+
+  /** Where each shelf's own pager points, with the other shelf's position preserved. */
+  const instantPage = (to: number): string =>
+    shelfHref({ sort: sort.key, query, page: to, ppage });
+  const programmablePage = (to: number): string =>
+    shelfHref({ sort: sort.key, query, page, ppage: to }, "#programmable");
 
   return (
     <div className="ax-page">
@@ -163,7 +200,12 @@ export default async function Home({
                 {sort.label}
               </Link>
 
-              <Pager page={page} pages={pages} sort={sort.key} query={query} />
+              <Pager
+                page={page}
+                pages={pages}
+                href={instantPage}
+                label="pages, Instant shelf"
+              />
             </div>
           </div>
         </div>
@@ -203,9 +245,8 @@ export default async function Home({
                 <Pager
                   page={page}
                   pages={pages}
-                  sort={sort.key}
-                  query={query}
-                  label="pages, end of shelf"
+                  href={instantPage}
+                  label="pages, end of Instant shelf"
                 />
               </div>
             </>
@@ -213,19 +254,43 @@ export default async function Home({
         </section>
 
         {/*
-          Named, and empty on purpose.
+          The markets Agen was built to make.
 
-          Programmable is real and not open, which is a different thing from absent — the
-          same reason the launch shelf keeps a card for it. What was here instead was three
-          test tokens from before Instant existed, which made the section look like the
-          product rather than like a placeholder for it.
+          This section said "coming soon" while Programmable was reachable but not open, and
+          kept saying it after engine v1 shipped and markets started landing — a shelf
+          contradicting the launch flow one tap away, and the same mistake the Instant card
+          in `launch/models.tsx` documents making about its own badge. What belongs here is
+          whatever has actually launched, so that is what it reads.
         */}
-        <section className="ax-shelf ax-reveal">
+        <section className="ax-shelf ax-reveal" id="programmable">
           <div className="ax-shelf-head">
             <h3>Explore Programmable v4</h3>
           </div>
 
-          <p className="ax-empty">Programmable v4 launches coming soon</p>
+          {pshown.length === 0 ? (
+            <p className="ax-empty">
+              {searching
+                ? `No Programmable token matches “${query}”.`
+                : "No Programmable token yet. The first one launched through Programmable appears here."}
+            </p>
+          ) : (
+            <>
+              <div className="ax-cards">
+                {pshown.map((market) => (
+                  <TokenCard market={market} usdPerEth={usdPerEth} now={now} key={market.id} />
+                ))}
+              </div>
+
+              <div className="ax-shelf-pager">
+                <Pager
+                  page={ppage}
+                  pages={ppages}
+                  href={programmablePage}
+                  label="pages, end of Programmable shelf"
+                />
+              </div>
+            </>
+          )}
         </section>
 
         <SiteFooter />
@@ -250,14 +315,20 @@ export default async function Home({
 function Pager({
   page,
   pages,
-  sort,
-  query,
+  href: hrefFor,
   label = "pages",
 }: {
   readonly page: number;
   readonly pages: number;
-  readonly sort: string;
-  readonly query: string;
+  /**
+   * Where a page number points.
+   *
+   * Passed in rather than built here, because there are now two independently paged
+   * shelves and each one's links have to carry the other's position. A pager that knew
+   * how to build its own URL would have to know which shelf it belonged to, which is
+   * exactly the knowledge that made one parameter drive both.
+   */
+  readonly href: (page: number) => string;
   /**
    * How this copy of the control names itself.
    *
@@ -279,7 +350,7 @@ function Pager({
       ) : (
         <Link
           className="ax-pager-arrow"
-          href={pageHref(page - 1, sort, query)}
+          href={hrefFor(page - 1)}
           aria-label="previous page"
         >
           <Caret />
@@ -292,7 +363,7 @@ function Pager({
             {number}
           </span>
         ) : (
-          <Link className="ax-pager-n" key={number} href={pageHref(number, sort, query)}>
+          <Link className="ax-pager-n" key={number} href={hrefFor(number)}>
             {number}
           </Link>
         ),
@@ -305,7 +376,7 @@ function Pager({
       ) : (
         <Link
           className="ax-pager-arrow next"
-          href={pageHref(page + 1, sort, query)}
+          href={hrefFor(page + 1)}
           aria-label="next page"
         >
           <Caret />
@@ -329,13 +400,35 @@ function sortHref(key: string, query: string): string {
   ]);
 }
 
-/** Keeps the ordering and the search when the page changes. */
-function pageHref(page: number, sort: string, query: string): string {
-  return href([
+/** Where both shelves are, which every link on this page has to carry in full. */
+interface ShelfPosition {
+  readonly sort: string;
+  readonly query: string;
+  /** The Instant shelf's page. Named `page` in the URL, as it always has been. */
+  readonly page: number;
+  /** The Programmable shelf's page. */
+  readonly ppage: number;
+}
+
+/**
+ * Keeps the ordering, the search and *both* shelf positions when one of them changes.
+ *
+ * Every field goes in even though a caller is only moving one of them: a link that
+ * omitted the other shelf's page would reset it to one, so paging to the end of Instant
+ * would quietly scroll Programmable back to its first sixteen. Defaults are still left
+ * out, so the ordinary URL stays `/`.
+ *
+ * `hash` is how the Programmable pager returns the reader to the shelf they were reading
+ * rather than to the top of the page, which is a long way up by the time a second shelf
+ * has pages at all.
+ */
+function shelfHref({ sort, query, page, ppage }: ShelfPosition, hash = ""): string {
+  return `${href([
     sort === "new" ? "" : `sort=${sort}`,
     query.length === 0 ? "" : `q=${encodeURIComponent(query)}`,
     page === 1 ? "" : `page=${String(page)}`,
-  ]);
+    ppage === 1 ? "" : `ppage=${String(ppage)}`,
+  ])}${hash}`;
 }
 
 /** One chevron, rotated by the stylesheet for the side it is on. */

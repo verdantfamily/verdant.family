@@ -178,7 +178,15 @@
     "verifiedAt": "2026-08-04",
     "scope": "All seven contracts below, submitted as standard JSON over the Blockscout v2 API. A full match in every case, not partial, with the licence recorded as MIT.",
     "method": "scripts/verify-blockscout.ts, which reconstructs the compiler input each contract's own metadata blob names out of the Foundry build artefacts that produced it, rather than recompiling the current working tree.",
-    "reproduce": "pnpm contracts:deps && pnpm contracts:build"
+    "reproduce": "pnpm contracts:deps && pnpm contracts:build",
+    "agenEngine": {
+      "blockscout": "partial",
+      "submittedAt": "2026-08-23",
+      "verified": ["agenEngineDeployer"],
+      "accepted": ["agenEngineFactory"],
+      "pending": ["agenEngineFactoryOrigin", "agenEngineRegistry", "agenEngineHook"],
+      "note": "All five were submitted from build-info 022570894b394905, the single compilation that produced them, matched by comparing the metadata blob in each deployed runtime against the artefacts. AgenEngineDeployer verified. AgenEngineFactory's submission was accepted (\"Smart-contract verification started\"). The remaining three could not be submitted or re-read: the explorer began answering 500, then 403 behind Cloudflare, for every address including contracts it verified in August. That is explorer availability rather than anything about this deployment, and the code's identity does not rest on it — the factory's and hook's runtime code hashes were read from the state trie via eth_getProof and equal the approved release exactly, the deployer's and registry's byte sizes equal this build, every immutable was checked from both ends by VerifyAgenEngine.s.sol with no failures and no warnings, and all five creation receipts have status 0x1. Re-run `pnpm verify:blockscout` when the explorer is healthy; it is idempotent and skips whatever is already verified."
+    }
   },
   "checkedAt": "2026-08-04T20:01:52Z"
 }

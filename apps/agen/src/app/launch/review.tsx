@@ -25,7 +25,12 @@
 import { useState } from "react";
 
 import type { FeeCollection, MarketSpecification } from "@verdant/market-compiler/browser";
-import { asPercent, behaviourCards, materialAssumptions } from "@verdant/market-compiler/browser";
+import {
+  asPercent,
+  behaviourCards,
+  keepAdaptation,
+  materialAssumptions,
+} from "@verdant/market-compiler/browser";
 
 import type { PublicJob } from "../lib/builds";
 import { Launch as LaunchPanel } from "./launch";
@@ -65,6 +70,47 @@ function Behaviour({
   );
 }
 
+/** The prompt-to-rule and rule-to-runtime chain the launch approval is bound to. */
+function Proof({ job }: { readonly job: PublicJob }) {
+  if (job.intent === null || job.semanticCoverage === null) return null;
+
+  const rules = job.semanticCoverage.claims.filter((claim) => claim.kind === "rule");
+  const proven = rules.filter((claim) => claim.status === "proven").length;
+
+  return (
+    <section className="review-section">
+      <h2 className="review-h2">What Agen proved</h2>
+      <div className="notice-card">
+        <span className="notice-label">Prompt → contract</span>
+        <p className="notice-title">
+          {String(proven)} of {String(rules.length)} market rules have passing runtime evidence.
+        </p>
+        <p className="notice-body">
+          Every objective number, side and boundary in your description survived interpretation.
+          Launch remains blocked until your wallet approves the exact specification and compiled
+          implementation hashes.
+        </p>
+      </div>
+
+      <div className="files">
+        {job.intent.atoms.map((atom) => (
+          <details key={atom.id}>
+            <summary>
+              {atom.status === "missing" ? "Missing" : atom.objective ? "Matched" : "Review"}:{" "}
+              {atom.quote}
+            </summary>
+            <p className="deploy-note">
+              {atom.ruleIds.length === 0
+                ? "Recorded for your explicit review."
+                : `Implemented by ${atom.ruleIds.join(", ")}.`}
+            </p>
+          </details>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 /**
  * The decisions Agen made that the description did not.
  *
@@ -75,6 +121,7 @@ function Behaviour({
 function Decisions({
   specification,
   adaptations,
+  prompt,
 }: {
   readonly specification: MarketSpecification;
   readonly adaptations: readonly {
@@ -82,11 +129,13 @@ function Decisions({
     readonly implemented: string;
     readonly reason: string;
   }[];
+  readonly prompt: string;
 }) {
   const assumptions = materialAssumptions(specification);
   const unsupported = specification.unsupported;
+  const decided = adaptations.filter((adaptation) => keepAdaptation(adaptation, prompt));
 
-  if (assumptions.length === 0 && adaptations.length === 0 && unsupported.length === 0) {
+  if (assumptions.length === 0 && decided.length === 0 && unsupported.length === 0) {
     return null;
   }
 
@@ -94,7 +143,7 @@ function Decisions({
     <section className="review-section">
       <h2 className="review-h2">What Agen decided</h2>
 
-      {adaptations.map((adaptation) => (
+      {decided.map((adaptation) => (
         <div className="notice-card" key={adaptation.requested}>
           <span className="notice-label">Built differently</span>
           <p className="notice-title">{adaptation.implemented}</p>
@@ -151,9 +200,28 @@ function Verified({ job }: { readonly job: PublicJob }) {
   );
 }
 
-/** A last change, in a sentence, without going back to the beginning. */
-function EditWithAgen({ onEdit }: { readonly onEdit: () => void }) {
+/** A last change, in a sentence, applied to this exact specification. */
+function EditWithAgen({
+  onEdit,
+}: {
+  readonly onEdit: (instruction: string) => Promise<void>;
+}) {
   const [instruction, setInstruction] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (): Promise<void> => {
+    const change = instruction.trim();
+    if (change === "" || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onEdit(change);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Agen could not apply that change.");
+      setBusy(false);
+    }
+  };
 
   return (
     <section className="edit-card">
@@ -168,14 +236,20 @@ function EditWithAgen({ onEdit }: { readonly onEdit: () => void }) {
             setInstruction(event.currentTarget.value);
           }}
           onKeyDown={(event) => {
-            if (event.key === "Enter") onEdit();
+            if (event.key === "Enter") void submit();
           }}
         />
-        <button type="button" className="secondary" onClick={onEdit}>
-          Update token
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy || instruction.trim() === ""}
+          onClick={() => void submit()}
+        >
+          {busy ? "Updating…" : "Update token"}
         </button>
       </div>
 
+      {error === null ? null : <p className="notice">{error}</p>}
       <p className="edit-examples">
         e.g. &ldquo;make the sell fee 1%&rdquo; · &ldquo;change the streak to 10 buys&rdquo;
       </p>
@@ -383,10 +457,10 @@ export function Review({
   onEdit,
 }: {
   readonly job: PublicJob;
-  readonly onEdit: () => void;
+  readonly onEdit: (instruction: string) => Promise<void>;
 }) {
   const specification = job.specification;
-  const ready = job.stage === "deployment_ready";
+  const ready = job.stage === "deployment_ready" && job.launch !== null;
 
   return (
     <div className="review">
@@ -408,8 +482,14 @@ export function Review({
         />
       )}
 
+      <Proof job={job} />
+
       {specification === null ? null : (
-        <Decisions specification={specification} adaptations={job.plan?.adaptations ?? []} />
+        <Decisions
+          specification={specification}
+          adaptations={job.plan?.adaptations ?? []}
+          prompt={job.prompt}
+        />
       )}
 
       <EditWithAgen onEdit={onEdit} />

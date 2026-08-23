@@ -36,9 +36,16 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatEther, isAddress } from "viem";
-import { useAccount, useSendTransaction, useSwitchChain, useWaitForTransactionReceipt } from "wagmi";
+import {
+  useAccount,
+  useSendTransaction,
+  useSignMessage,
+  useSwitchChain,
+  useWaitForTransactionReceipt,
+} from "wagmi";
 
 import { AGEN_LAUNCH } from "@verdant/config";
+import { approvalMessage } from "@verdant/market-compiler/browser";
 import { agen } from "@verdant/sdk";
 
 import { AGEN_ADDRESSES, CHAIN_ID, EXPLORER_URL, chain, shortAddress } from "../lib/chain";
@@ -79,6 +86,7 @@ export function Launch({ job }: { readonly job: PublicJob }) {
   const { address, chainId, status } = useAccount();
   const switchChain = useSwitchChain();
   const send = useSendTransaction();
+  const sign = useSignMessage();
   const receipt = useWaitForTransactionReceipt({ hash: send.data });
 
   const [devBuy, setDevBuy] = useState("");
@@ -98,10 +106,19 @@ export function Launch({ job }: { readonly job: PublicJob }) {
   const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [prepared, setPrepared] = useState<Prepared | null>(null);
+  const [approvedBy, setApprovedBy] = useState<string | null>(job.approval?.approvedBy ?? null);
 
   const launch = job.launch;
   const connected = status === "connected" && address !== undefined;
   const wrongNetwork = connected && chainId !== CHAIN_ID;
+  const approved =
+    connected &&
+    approvedBy !== null &&
+    approvedBy.toLowerCase() === address.toLowerCase();
+
+  useEffect(() => {
+    setApprovedBy(job.approval?.approvedBy ?? null);
+  }, [job.approval?.approvedBy]);
 
   // Where the fees go, defaulted to whoever is launching. Typed only by somebody who
   // wants it elsewhere, which is a real case — a multisig, a splitter — and a rare one.
@@ -117,10 +134,43 @@ export function Launch({ job }: { readonly job: PublicJob }) {
     if (launch === null) return "This build was not cleared, so it cannot be launched.";
     if (!connected) return "Connect a wallet to launch.";
     if (wrongNetwork) return null;
+    if (!approved) return "Approve this exact specification and compiled implementation first.";
     if (!buyIsAmount) return "The initial buy is not an amount.";
     if (!payToIsAddress) return "The fee receiver is not an address.";
     return null;
-  }, [launch, connected, wrongNetwork, buyIsAmount, payToIsAddress]);
+  }, [launch, connected, wrongNetwork, approved, buyIsAmount, payToIsAddress]);
+
+  const approve = useCallback(async () => {
+    if (address === undefined || launch === null) return;
+    setError(null);
+
+    try {
+      const message = approvalMessage({
+        jobId: job.id,
+        specificationVersion: launch.specificationVersion,
+        specificationHash: launch.specificationHash,
+        implementationHash: launch.implementationHash,
+        intentHash: launch.intentHash,
+        creator: address,
+      });
+      const signature = await sign.signMessageAsync({ message });
+      const response = await fetch(`/api/markets/${job.id}/approve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ creator: address, signature }),
+      });
+      const body = (await response.json()) as { ok?: boolean; error?: string };
+      if (!response.ok || body.ok !== true) {
+        setError(body.error ?? "The build could not be approved.");
+        return;
+      }
+      setApprovedBy(address);
+    } catch (approvalError) {
+      if (!isRejection(approvalError)) {
+        setError("The approval signature could not be verified.");
+      }
+    }
+  }, [address, job.id, launch, sign]);
 
   const go = useCallback(async () => {
     setPreparing(true);
@@ -204,6 +254,31 @@ export function Launch({ job }: { readonly job: PublicJob }) {
   return (
     <section className="launch-panel">
       <h2>Ready to launch</h2>
+
+      <div className="notice-card">
+        <span className="notice-label">Exact-build approval</span>
+        <p className="notice-title">
+          {approved
+            ? "This wallet approved the specification and compiled contracts."
+            : "Approve the exact market you reviewed before launching."}
+        </p>
+        <p className="notice-body">
+          {job.semanticCoverage?.claims.filter((claim) => claim.status === "proven").length ?? 0}{" "}
+          behavior claims have passing runtime evidence. Approval is bound to specification v
+          {launch?.specificationVersion ?? 1} and implementation{" "}
+          <span className="mono">{launch?.implementationHash.slice(0, 10) ?? "—"}…</span>.
+        </p>
+        {approved ? null : (
+          <button
+            type="button"
+            className="secondary"
+            disabled={!connected || launch === null || sign.isPending}
+            onClick={() => void approve()}
+          >
+            {sign.isPending ? "confirm in your wallet…" : "Approve exact contract"}
+          </button>
+        )}
+      </div>
 
       <div className="launch-fields">
         {/*
@@ -521,6 +596,9 @@ function Launched({
 }
 
 /** A declined request is not an error worth reporting: they did it a second ago. */
-function isRejection(error: Error): boolean {
-  return /user rejected|user denied|rejected the request/i.test(error.message);
+function isRejection(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /user rejected|user denied|rejected the request/i.test(error.message)
+  );
 }

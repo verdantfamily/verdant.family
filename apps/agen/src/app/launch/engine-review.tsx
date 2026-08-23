@@ -158,7 +158,7 @@ function Simulation({ simulation }: { readonly simulation: EngineSimulation }) {
   return (
     <details className="engine-sim">
       <summary className="engine-sim-summary">
-        What specific trades cost ({simulation.cases.length} cases, every threshold's edge)
+        What specific trades cost ({simulation.cases.length} cases, every threshold&apos;s edge)
       </summary>
 
       <table className="engine-sim-table">

@@ -102,14 +102,14 @@ function valueImportsFrom(file: string, packageName: string): readonly string[] 
 }
 
 describe("the engine path's call surface into the compiler", () => {
-  for (const module of ENGINE_PATH) {
-    it(`${module} calls only engine entry points`, () => {
-      const imported = valueImportsFrom(resolve(APP, module), "@verdant/market-compiler");
+  for (const file of ENGINE_PATH) {
+    it(`${file} calls only engine entry points`, () => {
+      const imported = valueImportsFrom(resolve(APP, file), "@verdant/market-compiler");
 
       for (const symbol of imported) {
         expect(
           PERMITTED_COMPILER_VALUES.includes(symbol),
-          `${module} calls ${symbol}, which is not on the engine's permitted surface. If this ` +
+          `${file} calls ${symbol}, which is not on the engine's permitted surface. If this ` +
             `is an engine entry point, add it to PERMITTED_COMPILER_VALUES and say why. If it ` +
             `is part of the generated-Solidity pipeline, the engine path must not reach it.`,
         ).toBe(true);
@@ -122,8 +122,8 @@ describe("the engine path's call surface into the compiler", () => {
    * regex, a renamed package — every assertion above would pass vacuously.
    */
   it("is actually reading imports", () => {
-    const surface = ENGINE_PATH.flatMap((module) =>
-      valueImportsFrom(resolve(APP, module), "@verdant/market-compiler"),
+    const surface = ENGINE_PATH.flatMap((file) =>
+      valueImportsFrom(resolve(APP, file), "@verdant/market-compiler"),
     );
 
     expect(surface.length).toBeGreaterThan(0);
@@ -157,8 +157,8 @@ describe("the engine path's own modules", () => {
   ];
 
   it("does not reuse engine 0's launch or review screens", () => {
-    for (const module of ["launch/engine-review.tsx", "launch/engine-launch.tsx"]) {
-      const source = readFileSync(resolve(APP, module), "utf8");
+    for (const file of ["launch/engine-review.tsx", "launch/engine-launch.tsx"]) {
+      const source = readFileSync(resolve(APP, file), "utf8");
 
       for (const forbidden of GENERATED_APP_MODULES) {
         if (forbidden === "./mechanics") continue;
@@ -167,7 +167,7 @@ describe("the engine path's own modules", () => {
           new RegExp(String.raw`from\s+["']${forbidden.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']`).test(
             source,
           ),
-          `${module} imports ${forbidden}, which is engine 0's presentation of a generated market`,
+          `${file} imports ${forbidden}, which is engine 0's presentation of a generated market`,
         ).toBe(false);
       }
     }

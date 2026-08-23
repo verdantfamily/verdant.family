@@ -255,7 +255,7 @@ export function EngineLaunch({
 
       <article className="engine-card">
         <label className="engine-question" htmlFor="engine-fee-receiver">
-          Who collects the liquidity's trading fees
+          Who collects the liquidity&apos;s trading fees
         </label>
         <p className="engine-card-summary">
           Separate from the fee split above, which the configuration fixes. Leave it blank to use

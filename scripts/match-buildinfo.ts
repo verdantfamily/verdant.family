@@ -26,6 +26,13 @@ const TARGETS: Record<string, string> = {
   hook: "0xf998c32CDdFA6354bd80Aab470C6ECF4d83Bb880",
   factory: "0x661A5B2A8d7DC0EaEd98B335e070478b40B92Dd9",
   feeForwarderFactory: "0x266DEbCE6d33a4b84C140541bC142c7C8b46ae63",
+
+  // The engine, broadcast 2026-08-23 in blocks 44,230,687 to 44,230,688.
+  agenEngineFactoryOrigin: "0x79Fcd7E5aF04BD28AdD9AF681Fd833D8e0273cF6",
+  agenEngineDeployer: "0x633525243d3C2b0419dB462C9eD13B3f52f49147",
+  agenEngineRegistry: "0x71a284dd8Efe6aBFd240B96E861486638B0099eE",
+  agenEngineHook: "0x41BC055e9abc03fAd3A8f65da05B93F449f3F8Cc",
+  agenEngineFactory: "0x20D5F0867C7dcFfa86f6C411aab4752E1A04b22d",
 };
 
 const CONTRACT_NAME: Record<string, string> = {
@@ -36,6 +43,12 @@ const CONTRACT_NAME: Record<string, string> = {
   hook: "VerdantHook",
   factory: "VerdantFactory",
   feeForwarderFactory: "FeeForwarderFactory",
+
+  agenEngineFactoryOrigin: "FactoryOrigin",
+  agenEngineDeployer: "AgenEngineDeployer",
+  agenEngineRegistry: "AgenMarketRegistry",
+  agenEngineHook: "AgenEngineHook",
+  agenEngineFactory: "AgenEngineFactory",
 };
 
 /**

@@ -20,7 +20,7 @@
  * Idempotent: a contract already verified is skipped.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const EXPLORER = "https://robinhoodchain.blockscout.com";
 const COMPILER = "v0.8.26+commit.8a97fa7a";
@@ -75,6 +75,45 @@ const SOURCES: readonly Target[] = [
     contract: "FeeForwarderFactory",
     file: "src/FeeForwarderFactory.sol",
     buildInfo: "31eb01b86ed90c90.json",
+  },
+
+  // The deterministic engine, broadcast 2026-08-23 in blocks 44,230,687 to 44,230,688. All
+  // five came out of one compilation, which is why they share a build-info; `match-buildinfo`
+  // established that by comparing the metadata blob in each deployed runtime against the
+  // artefacts, rather than by assuming the current tree is what is on chain.
+  //
+  // `FactoryOrigin` appears twice in this list, at two addresses. It is the same source: the
+  // engine has its own anchor because an anchor can create once, and verification is per
+  // address, so both are submitted.
+  {
+    address: "0x79Fcd7E5aF04BD28AdD9AF681Fd833D8e0273cF6",
+    contract: "FactoryOrigin",
+    file: "src/FactoryOrigin.sol",
+    buildInfo: "022570894b394905.json",
+  },
+  {
+    address: "0x633525243d3C2b0419dB462C9eD13B3f52f49147",
+    contract: "AgenEngineDeployer",
+    file: "src/agen/engine/AgenEngineDeployer.sol",
+    buildInfo: "022570894b394905.json",
+  },
+  {
+    address: "0x71a284dd8Efe6aBFd240B96E861486638B0099eE",
+    contract: "AgenMarketRegistry",
+    file: "src/agen/AgenMarketRegistry.sol",
+    buildInfo: "022570894b394905.json",
+  },
+  {
+    address: "0x41BC055e9abc03fAd3A8f65da05B93F449f3F8Cc",
+    contract: "AgenEngineHook",
+    file: "src/agen/engine/AgenEngineHook.sol",
+    buildInfo: "022570894b394905.json",
+  },
+  {
+    address: "0x20D5F0867C7dcFfa86f6C411aab4752E1A04b22d",
+    contract: "AgenEngineFactory",
+    file: "src/agen/engine/AgenEngineFactory.sol",
+    buildInfo: "022570894b394905.json",
   },
 ];
 
@@ -164,15 +203,40 @@ async function submit(target: Target): Promise<string> {
   return `${response.status} ${text.slice(0, 300)}`;
 }
 
+/**
+ * Whether the compilation this contract came out of is still on disk.
+ *
+ * `out/` is generated and gitignored, so it holds the build-infos of whatever was compiled
+ * most recently. A contract deployed a year and many rebuilds ago has no build-info here, and
+ * its submission cannot be reconstructed from this tree at all — that is the whole reason this
+ * script reads the original compiler input rather than recompiling.
+ *
+ * Reported and skipped rather than thrown, because it is a fact about the working tree and not
+ * a fault: the contracts it applies to were verified years ago from the tree that built them.
+ * Throwing meant one absent file aborted the run before reaching anything new, which is how a
+ * freshly deployed contract stayed unverified for a reason that had nothing to do with it.
+ */
+function reconstructable(target: Target): boolean {
+  return existsSync(new URL(`build-info/${target.buildInfo}`, OUT));
+}
+
 async function main(): Promise<void> {
   const dryRun = process.argv.includes("--dry-run");
   console.log(`Blockscout verification — ${SOURCES.length} contracts\n`);
+
+  const skipped: Target[] = [];
 
   for (const target of SOURCES) {
     process.stdout.write(`${target.contract.padEnd(22)}`);
 
     if (await isVerified(target.address)) {
       console.log("already verified");
+      continue;
+    }
+
+    if (!reconstructable(target)) {
+      skipped.push(target);
+      console.log(`no build-info ${target.buildInfo} in out/ — not built by this tree`);
       continue;
     }
 
@@ -198,14 +262,31 @@ async function main(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20000));
 
   let verified = 0;
+  const unverified: Target[] = [];
   for (const target of SOURCES) {
     const ok = await isVerified(target.address);
     if (ok) verified += 1;
-    console.log(`  ${ok ? "verified    " : "not verified"}  ${target.contract}`);
+    else unverified.push(target);
+    console.log(`  ${ok ? "verified    " : "not verified"}  ${target.contract}  ${target.address}`);
   }
 
   console.log(`\n${verified} of ${SOURCES.length} verified.`);
-  if (verified < SOURCES.length) process.exit(1);
+
+  if (skipped.length > 0) {
+    console.log(
+      `\n${String(skipped.length)} could not be submitted from this tree, for want of the ` +
+        `compilation that produced them:`,
+    );
+    for (const target of skipped) {
+      console.log(`  ${target.contract.padEnd(22)} wants build-info ${target.buildInfo}`);
+    }
+  }
+
+  // Only a contract this tree could actually have submitted counts against the exit status.
+  // A missing build-info is a fact about `out/`, and failing on it would mean this script
+  // could never pass again after a rebuild — which is the same as having no check.
+  const failed = unverified.filter((target) => reconstructable(target));
+  if (failed.length > 0) process.exit(1);
 }
 
 await main();

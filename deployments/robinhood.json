@@ -112,6 +112,51 @@
       "transactionHash": "0x6dffa4e9bdc1ae22d1b6021afa78940461c911616fd50d4327dcbfa4cc603d9f",
       "explorer": "https://robinhoodchain.blockscout.com/address/0x266DEbCE6d33a4b84C140541bC142c7C8b46ae63",
       "enabled": false
+    },
+    "agenEngineFactoryOrigin": {
+      "address": "0x79Fcd7E5aF04BD28AdD9AF681Fd833D8e0273cF6",
+      "runtimeCodeHash": "0x36029e0e802a3a07d18fcafd8d2e6642c5c0ee05597714ce1b4308f520113d7a",
+      "runtimeCodeSize": 1070,
+      "transactionHash": "0xa60146c07ae30c00f63c3c799a8cb2868eb29ee32c18107a8b542154b6e58317",
+      "explorer": "https://robinhoodchain.blockscout.com/address/0x79Fcd7E5aF04BD28AdD9AF681Fd833D8e0273cF6",
+      "enabled": true,
+      "note": "The engine's own anchor, and the reason its factory's address could be known before the factory's code existed: it publishes the address of its first and only creation, which the hook's initcode then embeds. Its one creation is spent. A second engine means a second anchor, never this one again."
+    },
+    "agenEngineDeployer": {
+      "address": "0x633525243d3C2b0419dB462C9eD13B3f52f49147",
+      "runtimeCodeHash": "0x9ad72cf608d19209dbefb4c00822f6149c7f849afe0e64c90b9751b53f32127c",
+      "runtimeCodeSize": 21810,
+      "transactionHash": "0xa32e2cdca5f48976a3611bce37fdc2bf444bed81ad6c88d3e43036dea06373c8",
+      "explorer": "https://robinhoodchain.blockscout.com/address/0x633525243d3C2b0419dB462C9eD13B3f52f49147",
+      "enabled": true,
+      "note": "Holds the token, vault and locker creation code for every engine market, and refuses every caller but AgenEngineFactory. It exists so the factory stays under EIP-170; at 21,810 bytes it has the least margin of anything in the repository."
+    },
+    "agenEngineRegistry": {
+      "address": "0x71a284dd8Efe6aBFd240B96E861486638B0099eE",
+      "runtimeCodeHash": "0xcb67d59c2ce2cf9fa3eab364e78a14ed6ab691fa553fa06195c679b0afe500ba",
+      "runtimeCodeSize": 5918,
+      "transactionHash": "0x1ca18816e904277da47503b972e2841105f745c845fb4f9f55f79eed8b16968e",
+      "explorer": "https://robinhoodchain.blockscout.com/address/0x71a284dd8Efe6aBFd240B96E861486638B0099eE",
+      "enabled": true,
+      "note": "A second AgenMarketRegistry instance, not a second use of the engine-0 one at 0x3AE1a797. That registry's writer is an immutable naming AgenFactory and could not accept writes from here. The separation is also what guarantees no engine-0 market is reinterpreted: nothing in this deployment reads or writes the older table."
+    },
+    "agenEngineHook": {
+      "address": "0x41BC055e9abc03fAd3A8f65da05B93F449f3F8Cc",
+      "runtimeCodeHash": "0x77fbe101096096af54ce3ea0e615ab1d669632b4675d132c60b9b2d64886ee28",
+      "runtimeCodeSize": 18007,
+      "transactionHash": "0x789f6f8c82b78290f232a7889b7743ee613f7304703959892d8b41e7b1ddc712",
+      "explorer": "https://robinhoodchain.blockscout.com/address/0x41BC055e9abc03fAd3A8f65da05B93F449f3F8Cc",
+      "enabled": true,
+      "note": "One hook shared by every engine market, mined under salt 0x4382 so its low 14 bits are 0x38cc: the four VerdantHook has, plus afterSwap and both returns-delta bits. The delta bits are what let it charge a fee at all — without them the PoolManager never reads what the hook returns, every swap balances, and every market charges nothing while appearing to work. Because it is shared, it is never a market identifier; a market is identified by its pool id and by the factory that deployed it."
+    },
+    "agenEngineFactory": {
+      "address": "0x20D5F0867C7dcFfa86f6C411aab4752E1A04b22d",
+      "runtimeCodeHash": "0x18ebda0132f2c12d937a318be43bc33e24bf2e8a5638da07c732fbae31ca20fe",
+      "runtimeCodeSize": 14651,
+      "transactionHash": "0xe71151350e2b3b797438d689f7eed8a0535d2b7e24f5d3b90714e994265e1c20",
+      "explorer": "https://robinhoodchain.blockscout.com/address/0x20D5F0867C7dcFfa86f6C411aab4752E1A04b22d",
+      "enabled": false,
+      "note": "Agen's deterministic engine: a market is a configuration this factory records, not Solidity generated per creator. Broadcast 2026-08-23, blocks 44,230,687 to 44,230,688, from operator 0x1f23c28F93aE48E6346DD05Ca66ba5e2213b00b8 at nonce 19, for 13,561,437 gas. Its treasury is 0xabfB34D1C870c7b2334E93b25B1299346209bE38, immutable here and resolved into every market's split at creation. VerifyAgenEngine.s.sol passed against these with no failures and no warnings before they were recorded: every counterparty names this factory back, the hook's permissions were recomputed from its own address, and the factory's and hook's runtime code hashes matched the approved release exactly. The transaction hash is the call to the anchor, which is what created the factory. `enabled` is false because recording the addresses and opening the product are deliberately separate decisions, exactly as INSTANT_LAUNCHABLE is; AGEN_ENGINE_VERSION is the switch."
     }
   },
   "hookPermissions": {

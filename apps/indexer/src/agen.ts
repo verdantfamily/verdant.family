@@ -115,6 +115,14 @@ ponder.on("AgenFactory:MarketDeployed", async ({ event, context }) => {
     implementationHash: record.implementationHash,
     metadataURI: record.metadataURI,
 
+    // A generated market, stated rather than left to be inferred from the four engine columns
+    // being null. See `src/agen-engine.ts` for the other path onto this table.
+    engineVersion: 0,
+    configHash: null,
+    encodedConfig: null,
+    vault: null,
+    feeCurrency: null,
+
     name,
     symbol,
     decimals,
@@ -204,6 +212,16 @@ export async function indexAgenSwap({ event, context }: SwapHandler): Promise<bo
     liquidity: event.args.liquidity,
     tick: event.args.tick,
     feePpm: event.args.fee,
+    /*
+     * Null, and stays null for a generated market.
+     *
+     * These two columns carry what the *engine* charged, which only an engine market has. A
+     * generated market's rate is `feePpm` above — the pool's own reported fee, which for those
+     * pools is the hook's per-swap override and therefore the truth. Writing zeros here would
+     * say an engine fee of zero was measured rather than that none applies.
+     */
+    programmableFeePpm: null,
+    feeAmount: null,
     timestamp: Number(event.block.timestamp),
     blockNumber: event.block.number,
     logIndex: event.log.logIndex,

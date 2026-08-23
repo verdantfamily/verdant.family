@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@verdant/config": "workspace:*",
+    "@verdant/market-engine": "workspace:*",
     "@verdant/sdk": "workspace:*",
     "@verdant/ui": "workspace:*",
     "hono": "^4.12.33",

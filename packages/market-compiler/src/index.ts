@@ -18,6 +18,7 @@
  */
 
 export * from "./artifacts.js";
+export * from "./approval.js";
 export * from "./blocker.js";
 export * from "./playbook.js";
 export * from "./recovery.js";
@@ -38,6 +39,9 @@ export * from "./threshold.js";
 export * from "./deployment.js";
 export * from "./deployment-spec.js";
 export * from "./deployment-validation.js";
+export * from "./fee-policy.js";
+export * from "./intent.js";
+export * from "./semantic-coverage.js";
 export * from "./preflight.js";
 export * from "./contract-api.js";
 export * from "./core-tests.js";
@@ -48,6 +52,32 @@ export * from "./manifest.js";
 export * from "./mining.js";
 export * from "./model.js";
 export * from "./pipeline.js";
+
+/*
+ * Engine v1, exported separately from engine 0's pipeline above.
+ *
+ * Two names rather than one dispatching function, deliberately: a caller has to say which
+ * pipeline it wants, and there is no signature under which an engine-v1 launch could
+ * accidentally become an engine-0 one. The routing decision is the app's and it should be
+ * visible at the call site.
+ */
+export {
+  runEngineBuild,
+  runEngineBuildForTest,
+  type EngineBuildOptions,
+  type EngineBuildRequest,
+  type EngineBuildResult,
+  type LaunchProver,
+} from "./engine/pipeline.js";
+export {
+  PrepareError,
+  prepareLaunch,
+  type EngineAddresses,
+  type LaunchParameters,
+  type PreparedLaunch,
+  type PreparedRecipient,
+} from "./engine/prepare.js";
+export { ENVELOPE_SCHEMA, interpretForEngine, type InterpretRequest } from "./engine/interpret.js";
 export * from "./plan.js";
 export * from "./prelude.js";
 export * from "./spec.js";

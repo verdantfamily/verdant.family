@@ -258,3 +258,67 @@ function resolveAgenLayer(): AgenLayer {
 }
 
 export const AGEN = resolveAgenLayer();
+
+// Agen's deterministic engine, which is a second launch path onto the same registry rather
+// than a replacement for the first. Both layers stay registered forever: engine-0 markets
+// exist on chain and must keep being indexed exactly as they were, and engine-1 markets are
+// mechanically different — one shared hook, a configuration instead of a contract — so they
+// are recognised by which factory deployed them and never by their hook.
+//
+// Env-only for now, because these contracts are not in `@verdant/config`'s deployment record
+// yet. When they are broadcast they move into it and this reads from there instead, at which
+// point an unset address becomes a deployment bug rather than an expected state. Same
+// all-or-nothing rule as above, and for the same reason: the hook pins the factory and the
+// factory pins the hook, so a mixed pair describes a deployment that cannot exist.
+
+interface AgenEngineLayer {
+  readonly deployed: boolean;
+  readonly factory: Address;
+  /** Shared by every engine market. Never a market identifier. See `agen-engine.ts`. */
+  readonly hook: Address;
+  readonly registry: Address;
+  readonly startBlock: number;
+}
+
+function resolveAgenEngineLayer(): AgenEngineLayer {
+  const fromEnv = [
+    process.env.AGEN_ENGINE_FACTORY,
+    process.env.AGEN_ENGINE_HOOK,
+    process.env.AGEN_ENGINE_REGISTRY,
+  ];
+  const supplied = fromEnv.filter((value) => value !== undefined).length;
+
+  if (supplied !== 0 && supplied !== 3) {
+    throw new Error(
+      `Agen's engine needs AGEN_ENGINE_FACTORY, AGEN_ENGINE_HOOK and AGEN_ENGINE_REGISTRY, ` +
+        `or none of them. ${String(supplied)} was set. Each pins the others in immutables, so ` +
+        `a partial set describes a deployment that does not exist.`,
+    );
+  }
+
+  if (supplied !== 3) {
+    return {
+      deployed: false,
+      factory: NOT_DEPLOYED,
+      hook: NOT_DEPLOYED,
+      registry: NOT_DEPLOYED,
+      startBlock: START_BLOCK,
+    };
+  }
+
+  const [factory, hook, registry] = fromEnv as [string, string, string];
+  return {
+    deployed: true,
+    factory: factory as Address,
+    hook: hook as Address,
+    registry: registry as Address,
+    startBlock: Number(
+      process.env.AGEN_ENGINE_START_BLOCK ??
+        process.env.AGEN_START_BLOCK ??
+        process.env.VERDANT_START_BLOCK ??
+        0,
+    ),
+  };
+}
+
+export const AGEN_ENGINE = resolveAgenEngineLayer();

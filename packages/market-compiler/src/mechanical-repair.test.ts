@@ -11,7 +11,7 @@ import type { Abi } from "viem";
 
 import { apiFromAbi } from "./contract-api.js";
 import type { Diagnostic } from "./foundry.js";
-import { mechanicalRepair } from "./mechanical-repair.js";
+import { mechanicalRepair, renameReservedIdentifiers } from "./mechanical-repair.js";
 
 function error(over: Partial<Diagnostic>): Diagnostic {
   return {
@@ -226,5 +226,38 @@ describe("what it refuses to touch", () => {
 
     expect(repaired.files).toHaveLength(0);
     expect(repaired.notes).toHaveLength(0);
+  });
+});
+
+/**
+ * TESTC spent a compile round on `uint256 after`. The word is reserved in 0.8.26 and
+ * the parser does not say "rename this variable".
+ */
+describe("a reserved identifier in generated Solidity", () => {
+  it("renames every use of the reserved word together", () => {
+    const source = [
+      "function test_fee() public {",
+      "    uint256 after = tokenBalance(TRADER);",
+      "    sell(uint128(after / 2));",
+      "    assertGt(tokenBalance(TRADER), after);",
+      "}",
+    ].join("\n");
+
+    const renamed = renameReservedIdentifiers(source);
+
+    expect(renamed).toContain("uint256 after_ = tokenBalance(TRADER);");
+    expect(renamed).toContain("sell(uint128(after_ / 2));");
+    expect(renamed).toContain("assertGt(tokenBalance(TRADER), after_);");
+    expect(renamed).not.toMatch(/(?<![A-Za-z0-9_])after(?![A-Za-z0-9_])/);
+  });
+
+  it("leaves afterSwap, comments and strings alone", () => {
+    const source = [
+      "// measured after the swap",
+      'string memory note = "after";',
+      "function afterSwap() public {}",
+    ].join("\n");
+
+    expect(renameReservedIdentifiers(source)).toBe(source);
   });
 });

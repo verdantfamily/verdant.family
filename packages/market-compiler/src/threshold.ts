@@ -234,6 +234,47 @@ export interface FeeSchedule {
   } | null;
 }
 
+/**
+ * One rate in a side's ladder, and what has to hold for a trade to pay it.
+ *
+ * The distinction `kind` draws is about who writes the comparison, not about how
+ * complicated the rule is. A size branch is arithmetic over numbers this package already
+ * holds, so Agen writes it and nothing can move the boundary. A state branch turns on a
+ * streak, a window, a phase or a wallet — something the hook has to keep — so the hook
+ * answers whether it holds, and Agen still owns the rate that follows from the answer.
+ */
+export interface FeeBranch {
+  readonly kind: "size" | "state";
+  readonly ruleId: string;
+  /** What a trade pays when this branch applies, in ppm, already resolved. */
+  readonly ppm: number;
+  /** The comparison Agen writes itself. Set on a size branch. */
+  readonly threshold: SizeThreshold | null;
+  /** The identifier the policy takes the hook's answer under. Set on a state branch. */
+  readonly name: string | null;
+  /** The gate in the creator's words, for the doc comment and the generator's brief. */
+  readonly phrase: string;
+}
+
+/**
+ * A side's whole fee ladder: what a plain trade pays, and every branch off it.
+ *
+ * This is the reading `feeSchedule` refuses. A market with a streak beside its size tier
+ * does not have unknowable rates — it has one gate this package cannot compute and
+ * several facts it can, and answering `null` to the whole thing handed the rates back to
+ * a model with no better information than the specification it was copying from. EXCT is
+ * the case: a consecutive-buy waiver on one side meant the 0.5%/4% ladder on the other
+ * stopped being written here, for no reason connected to the ladder.
+ *
+ * Branches come out in specification order, because the order a creator wrote their
+ * rules in is the only statement of precedence a prompt makes.
+ */
+export interface FeeProgram {
+  readonly side: Side;
+  readonly basePpm: number;
+  readonly branches: readonly FeeBranch[];
+}
+
 /** Effect kinds that change what a trade pays. */
 const FEE_EFFECTS = new Set(["extraFee", "setFee", "waiveFee", "routeFee", "chargeFee"]);
 
@@ -241,12 +282,49 @@ function chargesFee(effect: Rule["then"][number]): boolean {
   return FEE_EFFECTS.has(effect.kind) || /fee|tax|charge|skim|toll|cut/i.test(effect.kind);
 }
 
+/** Triggers that fire on both sides of a trade, however interpretation named them. */
+const BOTH_SIDES = new Set(["swap", "trade", "buyOrSell", "buyAndSell", "any"]);
+
 function appliesTo(rule: Rule, side: Side): boolean {
-  return rule.when.kind === side || rule.when.kind === "swap" || rule.when.kind === "trade";
+  return rule.when.kind === side || BOTH_SIDES.has(rule.when.kind);
 }
 
 /** Triggers that name a trade side, so a rule on the other side cannot affect this one. */
 const SIDED = new Set(["buy", "sell"]);
+
+/**
+ * Whether a rule fires on a fee that has already been taken, rather than on a trade.
+ *
+ * Where a fee *goes* is a separate rule from what a trade *pays*, and interpretations write
+ * it that way: EMBR asked for 3% on sells and 1% on buys, both stated plainly, and a third
+ * rule sent the proceeds to the creator — `transferFee` on `feeCollected`. Read as one more
+ * rule that might touch a fee, it made both sides unreadable.
+ *
+ * Exact Flow lost the same way and worse. Its "send 80% to the creator and 20% to the fee
+ * vault" arrived as `splitCollectedFee` on `feeCollected`, the effect kind contains "Fee",
+ * and so the whole ladder — 0.5%, 4% above 1% of supply, the inclusive boundary — went back
+ * to being a model's copy of a number, because this module refused to read a market with a
+ * payout rule in it. The fee policy was silently not generated at all.
+ *
+ * Narrow on purpose, in the direction that costs nothing. Mistaking a real trade fee for a
+ * routing rule would mean claiming a rate another rule changes, so both halves are
+ * required: the trigger has to name a fee *and* say it already happened.
+ */
+export function downstreamOfTheCharge(rule: Rule): boolean {
+  const kind = rule.when.kind.toLowerCase();
+  if (/fee/.test(kind) && /collect|charged|taken|received|accru|earned/.test(kind)) return true;
+
+  /*
+   * And anything a trade cannot trigger at all.
+   *
+   * HOLD charges 0.3% on every swap and pays it out to holders when they claim. The payout
+   * rule fires on `claim`, mentions fees because that is what it distributes, and made the
+   * flat 0.3% unreadable — so the one number the market is built on was asserted by nothing.
+   * A claim, a withdrawal or a settlement happens because somebody asked for it, never
+   * because somebody traded, so no such rule can change what a trade pays.
+   */
+  return /^(?:claim|withdraw|harvest|redeem|distribut|settle|payout)/.test(kind);
+}
 
 /**
  * The rate an effect states for one side, in ppm.
@@ -296,13 +374,21 @@ function applyEffects(rule: Rule, side: Side, from: number): number | null {
       continue;
     }
 
-    const stated = rateOf(effect.parameters, side);
+    const stated = rateOf(effect.parameters, side) ?? rateInProse(effect.description);
     if (stated === null) return null;
 
     ppm = effect.kind === "extraFee" ? ppm + stated : stated;
   }
 
   return ppm;
+}
+
+/** `charge a 4% fee` is a rate even when the parameter bag is empty. */
+function rateInProse(text: string): number | null {
+  const match = /(\d+(?:\.\d+)?)\s*%/.exec(text);
+  if (match === null) return null;
+  const ppm = Math.round(Number(match[1]!) * 10_000);
+  return Number.isInteger(ppm) && ppm >= 0 && ppm <= 1_000_000 ? ppm : null;
 }
 
 /**
@@ -321,16 +407,34 @@ function sideOnly(condition: Condition): boolean {
 }
 
 /**
- * What one side of this market charges, as a base and at most one size-gated tier.
+ * A size test that names the trades *under* the threshold.
  *
- * `null` for anything this cannot read completely, and that is the common answer: a
- * streak, a phase, a window or a second threshold all mean the fee depends on something
- * this function does not model, and a schedule that quietly ignored the rest of the
- * market would be a confident answer about the wrong market. Only the two shapes that
- * cover almost every prompt are claimed — a flat fee, and a flat fee with a surcharge
- * above a size.
+ * FLOR writes the 0.5% as "not a large sell" and the 4% as "at least 1%". Both
+ * are size conditions; only the second is a tier. Counting the inverse as a
+ * second gate makes the schedule unreadable, and then the hook is free to invent
+ * one.
  */
-export function feeSchedule(specification: MarketSpecification, side: Side): FeeSchedule | null {
+function inverseSizeGate(condition: Condition): boolean {
+  const sized =
+    thresholdIn(condition) !== null ||
+    (condition.children ?? []).some((child) => thresholdIn(child) !== null);
+  if (!sized) return false;
+  if (condition.combinator === "not") return true;
+  const operator = String(condition.parameters?.operator ?? "");
+  return operator === "<" || operator === "<=";
+}
+
+/**
+ * What one side of this market charges, branch by branch.
+ *
+ * Still `null` for a market whose *rates* cannot be read — a rule whose effect states no
+ * rate this can recover, or a phase that changes which rules are live at all. Those are
+ * judgements, and inventing a number for one would be the crime this module exists to
+ * stop. What no longer returns `null` is a rate that is perfectly readable sitting next
+ * to a gate that is not: the gate becomes a named question for the hook, and the rate
+ * stays here.
+ */
+export function feeProgram(specification: MarketSpecification, side: Side): FeeProgram | null {
   const charging = specification.rules.filter((rule) => rule.then.some(chargesFee));
 
   /*
@@ -343,43 +447,120 @@ export function feeSchedule(specification: MarketSpecification, side: Side): Fee
    * time. Without that, every two-sided market answered `null` here and the cards fell back to
    * a figure with no threshold in it.
    */
-  if (charging.some((rule) => !appliesTo(rule, side) && !SIDED.has(rule.when.kind))) return null;
+  if (
+    charging.some(
+      (rule) =>
+        !appliesTo(rule, side) && !SIDED.has(rule.when.kind) && !downstreamOfTheCharge(rule),
+    )
+  ) {
+    return null;
+  }
 
   const relevant = charging.filter((rule) => appliesTo(rule, side));
 
-  const gates = (rule: Rule): readonly Condition[] => rule.conditions.filter((clause) => !sideOnly(clause));
+  const gates = (rule: Rule): readonly Condition[] =>
+    rule.conditions.filter((clause) => !sideOnly(clause) && !inverseSizeGate(clause));
 
   const phased = (rule: Rule): boolean =>
     rule.onceOnly === true || (rule.activeInPhases ?? []).length > 0;
 
+  // A rule that is only live in some phases, or only once ever, changes which ladder
+  // applies rather than adding a rung to this one.
   if (relevant.some(phased)) return null;
 
-  const flat = relevant.filter((rule) => gates(rule).length === 0);
-  const gated = relevant.filter((rule) => gates(rule).length > 0);
-
   let basePpm: number | null = specification.baseFeePpm;
-  for (const rule of flat) {
+  for (const rule of relevant.filter((rule) => gates(rule).length === 0)) {
     basePpm = basePpm === null ? null : applyEffects(rule, side, basePpm);
   }
   if (basePpm === null) return null;
 
-  if (gated.length === 0) return { side, basePpm, tier: null };
+  const branches: FeeBranch[] = [];
 
-  // More than one gated fee rule is a schedule with steps this does not represent, and
-  // one gated on something other than a size is a market whose fee turns on state.
-  if (gated.length > 1) return null;
+  for (const rule of relevant) {
+    const clauses = gates(rule);
+    if (clauses.length === 0) continue;
 
-  const rule = gated[0]!;
-  const clauses = gates(rule);
-  if (clauses.length !== 1) return null;
+    const ppm = applyEffects(rule, side, basePpm) ?? rateInProse(rule.title);
+    if (ppm === null) return null;
 
-  const threshold = thresholdIn(clauses[0]!);
-  if (threshold === null) return null;
+    // One clause naming a size is the only gate this package can compute. Everything
+    // else — two clauses, a streak, a duration — is the hook's to answer.
+    const threshold = clauses.length === 1 ? thresholdIn(clauses[0]!) : null;
 
-  const ppm = applyEffects(rule, side, basePpm);
-  if (ppm === null) return null;
+    branches.push(
+      threshold === null
+        ? {
+            kind: "state",
+            ruleId: rule.id,
+            ppm,
+            threshold: null,
+            name: predicateName(rule.id),
+            phrase: gatePhrase(rule, clauses),
+          }
+        : {
+            kind: "size",
+            ruleId: rule.id,
+            ppm,
+            threshold,
+            name: null,
+            phrase: thresholdEnglish(threshold),
+          },
+    );
+  }
 
-  return { side, basePpm, tier: { threshold, ppm } };
+  return { side, basePpm, branches };
+}
+
+/**
+ * What one side of this market charges, as a base and at most one size-gated tier.
+ *
+ * The narrow reading, kept narrow. Cards, `core-tests.ts` and `requirements.ts` all say
+ * "this market charges X, and Y above a size" in the creator's language, and a ladder
+ * with a streak in it cannot be said that way without leaving the streak out. So this
+ * still answers `null` there, and `feeProgram` is what the generated Solidity is built
+ * from.
+ */
+export function feeSchedule(specification: MarketSpecification, side: Side): FeeSchedule | null {
+  const program = feeProgram(specification, side);
+  if (program === null) return null;
+
+  const { basePpm, branches } = program;
+  if (branches.length === 0) return { side, basePpm, tier: null };
+  if (branches.length > 1) return null;
+
+  const only = branches[0]!;
+  if (only.kind !== "size" || only.threshold === null) return null;
+
+  return { side, basePpm, tier: { threshold: only.threshold, ppm: only.ppm } };
+}
+
+/**
+ * The identifier a state gate is answered under, from the rule's own id.
+ *
+ * Derived rather than invented so the parameter in the generated library, the entry in
+ * the generator's brief and the rule on the token page are all traceable to one another
+ * by name. Rule ids are already `[a-z0-9-]`, so camel-casing produces an identifier.
+ */
+function predicateName(ruleId: string): string {
+  const parts = ruleId.split(/[^a-zA-Z0-9]+/).filter((part) => part.length > 0);
+  const camel = parts
+    .map((part, index) =>
+      index === 0 ? part.toLowerCase() : part[0]!.toUpperCase() + part.slice(1).toLowerCase(),
+    )
+    .join("");
+
+  return /^[a-z]/.test(camel) ? camel : `gate${camel.charAt(0).toUpperCase()}${camel.slice(1)}`;
+}
+
+/** A rule's gate in the creator's words, for a reader who has to check it. */
+function gatePhrase(rule: Rule, clauses: readonly Condition[]): string {
+  const said = clauses
+    .map((clause) =>
+      clause.description.trim().length > 0 ? clause.description.trim() : words(clause.kind),
+    )
+    .filter((text) => text.length > 0);
+
+  return said.length > 0 ? said.join(", and ") : rule.title;
 }
 
 /**
@@ -448,9 +629,24 @@ export function thresholdEnglish(threshold: SizeThreshold): string {
  * The comparison a generated hook has to make, as Solidity.
  *
  * Written out so the contract, the card and the tests are three renderings of one value
- * rather than three chances to disagree. A whole percentage gets the form somebody would
- * write by hand; a fractional one gets the ppm form, because `2.5 / 100` is not
- * expressible in integer arithmetic and rounding it silently is how a threshold moves.
+ * rather than three chances to disagree — and in the same arithmetic as `overThreshold`,
+ * which is the point of writing it here at all.
+ *
+ * That last part used to be untrue, twice.
+ *
+ * A whole percentage got `basis * 2 / 100`, the form somebody would write by hand, and
+ * integer division truncates it: against a basis of 101 the boundary lands at 2 rather
+ * than 2.02, so a trade of exactly 2 is over the line in the contract and under it
+ * everywhere else. It never showed against a supply, which is round by construction, and
+ * it was always wrong against the pool's liquidity, which is whatever the last trade left
+ * behind. Scaling the amount up instead cannot truncate, so both percentages get that form.
+ *
+ * And a zero basis read as every trade being enormous. `overThreshold` has always said a
+ * threshold against nothing is not exceeded; the Solidity said `1 * 1_000_000 > 0`, which
+ * is true, so a market with a liquidity gate charged its surcharge on every trade the
+ * moment a hook passed a basis it did not have — which the hooks do, because the ones with
+ * a supply gate pass zero for liquidity and the reverse. Found by the vector table on the
+ * first market it ran against, which is the entire argument for having one.
  */
 export function thresholdSolidity(
   threshold: SizeThreshold,
@@ -458,13 +654,9 @@ export function thresholdSolidity(
 ): string {
   const operator = threshold.inclusive === true ? ">=" : ">";
   const basis = BASIS_SOLIDITY[threshold.basis];
-
-  if (Number.isInteger(threshold.percent)) {
-    return `${amountExpression} ${operator} ${basis} * ${String(threshold.percent)} / 100`;
-  }
-
   const ppm = Math.round(threshold.percent * 10_000);
-  return `${amountExpression} * 1_000_000 ${operator} ${basis} * ${grouped(ppm)}`;
+
+  return `${basis} != 0 && ${amountExpression} * 1_000_000 ${operator} ${basis} * ${grouped(ppm)}`;
 }
 
 /** `25000` as `25_000`, which is how the rest of this package writes a constant. */

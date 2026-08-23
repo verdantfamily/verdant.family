@@ -16,13 +16,19 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyStatedEconomics,
+  applyStatedThresholds,
+  keepAdaptation,
   lockedRates,
   lockedThresholds,
+  statedFreeSides,
   statedRates,
   statedThresholds,
   unmetRates,
+  unmetSides,
   unmetThresholds,
 } from "./requirements.js";
+import { feeSchedule, thresholdIn } from "./threshold.js";
 import type { MarketSpecification } from "./spec.js";
 
 function specification(
@@ -146,6 +152,37 @@ describe("numbers that only look like a rate", () => {
     expect(statedRates("burn 1% of supply on every taxed sell")).toEqual([]);
     expect(statedRates("the top 5% of holders share the fee pool")).toEqual([]);
     expect(statedRates("allow up to 3% slippage on the taxed swap")).toEqual([]);
+  });
+
+  it("does not turn a restated boundary or an 80/20 distribution into trade fees", () => {
+    const prompt =
+      "Charge 0.5% on every buy and every sell. When a sell is at least 1% of the " +
+      "token’s immutable total supply, charge 4% instead. A sell of exactly 1% must pay " +
+      "4%, not 0.5%. Send 80% of every collected fee to the creator and 20% to the fee vault.";
+
+    expect(statedRates(prompt).map((rate) => rate.ppm)).toEqual([5_000, 40_000]);
+    expect(statedThresholds(prompt).map((threshold) => threshold.percent)).toEqual([1]);
+  });
+
+  it("does not read routing shares out of a fee effect as rates charged to traders", () => {
+    const routed = specification([
+      {
+        id: "route",
+        title: "ROUTE FEE",
+        when: { kind: "swap", description: "a trade" },
+        conditions: [],
+        then: [
+          {
+            kind: "routeFee",
+            description: "80% to creator, 20% to vault",
+            parameters: { creatorSharePercent: 80, vaultSharePercent: 20 },
+            writes: [],
+          },
+        ],
+      },
+    ] as unknown as MarketSpecification["rules"], { baseFeePpm: 5_000, maxFeePpm: 40_000 });
+
+    expect([...lockedRates(routed)].sort((left, right) => left - right)).toEqual([5_000, 40_000]);
   });
 
   it("says nothing about a percentage with no fee anywhere near it", () => {
@@ -416,5 +453,336 @@ describe("whether the locked market still measures what was asked", () => {
     expect(unmetThresholds("sells pay a 0.5% fee", specification(sellFee({ feePpm: 5_000 })))).toEqual(
       [],
     );
+  });
+});
+
+/**
+ * Putting the number back, so a dropped threshold becomes the market that was asked
+ * for rather than a decision note about a missing X.
+ */
+describe("restoring a threshold the creator already named", () => {
+  it("rewrites a substituted 1% lock back to the stated 2% of supply", () => {
+    const locked = specification(gatedSell({ operator: ">", percent: 1, basis: "totalSupply" }));
+    const restored = applyStatedThresholds(PUSH_PROMPT, locked);
+
+    expect(unmetThresholds(PUSH_PROMPT, restored)).toEqual([]);
+    expect(lockedThresholds(restored).map((entry) => entry.percent)).toEqual([2]);
+    expect(thresholdIn(restored.rules[0]!.conditions[0]!)!.inclusive).toBe(false);
+  });
+
+  /**
+   * THLD: the 5% rule arrived as "on every sell", with no size condition, and the
+   * architecture stage called the 2% "missing threshold X". The prompt had named it.
+   */
+  it("attaches a dropped supply gate to the large-sell rule", () => {
+    const dropped = specification([
+      {
+        id: "base-fee",
+        title: "BASE FEE",
+        when: { kind: "swap", description: "any trade" },
+        conditions: [],
+        then: [{ kind: "setFee", description: "charge 2%", parameters: { feePpm: 20_000 }, writes: [] }],
+      },
+      {
+        id: "large-sell",
+        title: "5% LARGE SELL FEE",
+        when: { kind: "sell", description: "on every sell" },
+        conditions: [],
+        then: [{ kind: "setFee", description: "charge 5%", parameters: { feePpm: 50_000 }, writes: [] }],
+      },
+    ] as unknown as MarketSpecification["rules"]);
+
+    const restored = applyStatedThresholds(PUSH_PROMPT, dropped);
+    const sell = feeSchedule(restored, "sell")!;
+
+    expect(unmetThresholds(PUSH_PROMPT, restored)).toEqual([]);
+    expect(sell.basePpm).toBe(20_000);
+    expect(sell.tier?.ppm).toBe(50_000);
+    expect(sell.tier?.threshold.percent).toBe(2);
+    expect(sell.tier?.threshold.basis).toBe("supply");
+    expect(sell.tier?.threshold.inclusive).toBe(false);
+  });
+
+  it("does not invent a threshold a prompt never stated", () => {
+    const flat = specification(sellFee({ feePpm: 5_000 }));
+    expect(applyStatedThresholds("sells pay a 0.5% fee", flat)).toBe(flat);
+  });
+
+  it("leaves a missing threshold alone when no sell rule can carry it", () => {
+    const buys = specification([
+      {
+        id: "buy-fee",
+        title: "BUY FEE",
+        when: { kind: "buy", description: "a buy" },
+        conditions: [],
+        then: [{ kind: "setFee", description: "charge 2%", parameters: { feePpm: 20_000 }, writes: [] }],
+      },
+    ] as unknown as MarketSpecification["rules"]);
+
+    expect(applyStatedThresholds(PUSH_PROMPT, buys)).toBe(buys);
+    expect(unmetThresholds(PUSH_PROMPT, buys).map((entry) => entry.fault)).toEqual(["missing"]);
+  });
+
+  it("does not hang a sell gate on a buy rule that happens to charge the same 5%", () => {
+    const buys = specification([
+      {
+        id: "buy-fee",
+        title: "BUY FEE",
+        when: { kind: "buy", description: "a buy" },
+        conditions: [],
+        then: [{ kind: "setFee", description: "charge 2%", parameters: { feePpm: 20_000 }, writes: [] }],
+      },
+      {
+        id: "buy-surcharge",
+        title: "LARGE BUY",
+        when: { kind: "buy", description: "a large buy" },
+        conditions: [],
+        then: [{ kind: "setFee", description: "charge 5%", parameters: { feePpm: 50_000 }, writes: [] }],
+      },
+    ] as unknown as MarketSpecification["rules"]);
+
+    expect(applyStatedThresholds(PUSH_PROMPT, buys)).toBe(buys);
+    expect(unmetThresholds(PUSH_PROMPT, buys).map((entry) => entry.fault)).toEqual(["missing"]);
+  });
+
+  it("drops a planning note that pretends a named threshold was never given", () => {
+    expect(
+      keepAdaptation(
+        {
+          requested: "implement the threshold",
+          implemented: "require the missing threshold X as a compile-time constant",
+          reason: "choosing either omitted value would invent market economics",
+        },
+        PUSH_PROMPT,
+      ),
+    ).toBe(false);
+
+    expect(
+      keepAdaptation(
+        {
+          requested: "pay every holder on every sell",
+          implemented: "a claimable reward-per-share accumulator",
+          reason: "a loop over holders cannot run on every swap",
+        },
+        PUSH_PROMPT,
+      ),
+    ).toBe(true);
+  });
+
+  it("drops a planning note that pretends a named 1% / 4% were never given", () => {
+    const flor =
+      "Charge 0.5% on every buy and every sell. On any sell of at least 1% of the " +
+      "token's immutable total supply, charge 4% instead.";
+
+    expect(
+      keepAdaptation(
+        {
+          requested: "apply a larger sell fee when a sell exceeds the unspecified large-sell threshold.",
+          implemented:
+            "A sell is large when its actual FLOR input is strictly greater than 1% of immutableTotalSupply, and its fee is 40000ppm.",
+          reason:
+            "The specification defines neither the threshold nor the large-sell rate; 1% and the stated hard ceiling are explicit implementation choices.",
+        },
+        flor,
+      ),
+    ).toBe(false);
+
+    expect(
+      keepAdaptation(
+        {
+          requested: "apply the small-sell fee without specifying a separate rate.",
+          implemented: "Small sells use the exact base rate of 5000ppm, as do buys.",
+          reason: "No distinct small-sell rate was supplied, while the invariants require the base fee to be exactly 5000ppm.",
+        },
+        flor,
+      ),
+    ).toBe(false);
+  });
+
+  it("drops the live Floor notes that pretend 1% and 4% were Agen's idea", () => {
+    const flor =
+      "Charge 0.5% on every buy and every sell. On any sell of at least 1% of the " +
+      "token's immutable total supply, charge 4% instead.";
+
+    expect(
+      keepAdaptation(
+        {
+          requested: "a large-sell fee without specifying a threshold",
+          implemented:
+            "A sell qualifies when its FLOR input amount is at least 1% of immutableTotalSupply.",
+          reason:
+            "You requested a large-sell fee without specifying a threshold. Agen decided on a " +
+            "deterministic on-chain qualification predicate using supply-relative sizing (1%).",
+        },
+        flor,
+      ),
+    ).toBe(false);
+
+    expect(
+      keepAdaptation(
+        {
+          requested: "a large-sell fee with a maximum cap",
+          implemented: "The qualifying-sell fee is exactly 40000 ppm; the ordinary fee remains exactly 5000 ppm.",
+          reason:
+            "You wanted a large-sell fee with a maximum cap of 40,000 ppm but didn't specify the exact rate.",
+        },
+        flor,
+      ),
+    ).toBe(false);
+  });
+
+  it("drops a planning note that pretends a named rate was left open", () => {
+    expect(
+      keepAdaptation(
+        {
+          requested: "A large-sell fee subject to the stated 40000 ppm ceiling, without a separate large-sell rate.",
+          implemented: "Use 40000 ppm as the defined large-sell fee.",
+          reason: "The large-sell rate was left open; selecting the stated ceiling creates an explicit second defined fee.",
+        },
+        "Charge 0.5% on every buy and every sell. On any sell of at least 1% of supply, charge 4% instead.",
+      ),
+    ).toBe(false);
+  });
+
+  /**
+   * FLOR, second live run: 0.5% and 4% were in the prompt, and Agen still added its
+   * 0.3% default as a pool LP fee and hung the sell gate on buys.
+   */
+  it("strips the invented 0.3% and keeps the 1% gate on sells only", () => {
+    const flor =
+      "Charge 0.5% on every buy and every sell. On any sell of at least 1% of the " +
+      "token's immutable total supply, charge 4% instead.";
+
+    const invented = specification(
+      [
+        {
+          id: "default",
+          title: "CHARGE 0.5% ON BUYS AND SUB-1% SELLS",
+          when: { kind: "buyOrSell", description: "On every trade" },
+          conditions: [
+            {
+              kind: "tradeSizeVsSupply",
+              description: "more than 1% of the total supply",
+              parameters: { operator: ">", percent: 1, basis: "totalSupply" },
+            },
+          ],
+          then: [{ kind: "chargeFee", description: "0.5%", parameters: { feePercent: 0.5 }, writes: [] }],
+        },
+        {
+          id: "large-sell",
+          title: "CHARGE 4% ON LARGE SELLS",
+          when: { kind: "sell", description: "On every sell" },
+          conditions: [
+            {
+              kind: "tradeSizeVsSupply",
+              description: "at least 1% of the total supply",
+              parameters: { operator: ">=", percent: 1, basis: "totalSupply" },
+            },
+          ],
+          then: [{ kind: "chargeFee", description: "4%", parameters: { feePercent: 4 }, writes: [] }],
+        },
+      ] as unknown as MarketSpecification["rules"],
+      { baseFeePpm: 3_000, maxFeePpm: 40_000 },
+    );
+
+    const restored = applyStatedEconomics(flor, {
+      ...invented,
+      assumptions: [
+        {
+          id: "ordinary-fee",
+          term: "ordinary trading fee",
+          interpretation: "The pool uses Agen's default 3,000 ppm (0.3%) LP fee beneath the hook surcharge.",
+          why: "The creator did not name a pool fee.",
+          importance: "medium",
+        },
+      ],
+    });
+
+    const sell = feeSchedule(restored, "sell")!;
+    const buy = feeSchedule(restored, "buy")!;
+
+    expect(restored.baseFeePpm).toBe(5_000);
+    expect(restored.assumptions).toEqual([]);
+    expect(buy.basePpm).toBe(5_000);
+    expect(buy.tier).toBe(null);
+    expect(sell.basePpm).toBe(5_000);
+    expect(sell.tier?.ppm).toBe(40_000);
+    expect(sell.tier?.threshold.percent).toBe(1);
+    expect(sell.tier?.threshold.inclusive).toBe(true);
+  });
+});
+
+describe("a side the creator named", () => {
+  it("reads 'buys pay nothing' as a free buy, not as silence", () => {
+    expect(statedFreeSides("Sells pay half a percent. Buys pay nothing.")).toEqual(["buy"]);
+    expect(statedFreeSides("no fee on buys, sells pay 1%")).toEqual(["buy"]);
+    expect(statedFreeSides("Charge 0.5% on every buy and every sell.")).toEqual([]);
+  });
+
+  it("does not take 'nothing crazy' as a free side", () => {
+    expect(
+      statedFreeSides("if you're selling you pay a small fee, half a percent, nothing crazy"),
+    ).toEqual([]);
+  });
+
+  it("restores a one-sided fee that interpretation charged on both sides", () => {
+    const prompt = "Sells pay half a percent. Buys pay nothing.";
+    const both = specification([
+      {
+        id: "fee",
+        title: "FEE",
+        when: { kind: "buyOrSell", description: "any trade" },
+        conditions: [],
+        then: [{ kind: "setFee", description: "0.5%", parameters: { feePpm: 5_000 }, writes: [] }],
+      },
+    ] as unknown as MarketSpecification["rules"]);
+
+    const restored = applyStatedEconomics(prompt, both);
+
+    expect(feeSchedule(restored, "buy")?.basePpm).toBe(0);
+    expect(feeSchedule(restored, "sell")?.basePpm).toBe(5_000);
+    expect(unmetSides(prompt, restored)).toEqual([]);
+  });
+
+  it("refuses a reading that still charges a side the creator freed", () => {
+    const charged = specification(sellFee({ feePpm: 5_000 }), { baseFeePpm: 5_000, maxFeePpm: 5_000 });
+    // A sell-only rule leaves buys at baseFeePpm, which is still a charge.
+    expect(unmetSides("Sells pay 0.5%. Buys pay nothing.", charged)).toEqual(["buy"]);
+  });
+
+  it("treats 'instead' as a replacement, not a stack on the base", () => {
+    const flor =
+      "Charge 0.5% on every buy and every sell. On any sell of at least 1% of the " +
+      "token's immutable total supply, charge 4% instead.";
+
+    const stacked = specification(
+      [
+        {
+          id: "base",
+          title: "BASE",
+          when: { kind: "swap", description: "any trade" },
+          conditions: [],
+          then: [{ kind: "setFee", description: "0.5%", parameters: { feePpm: 5_000 }, writes: [] }],
+        },
+        {
+          id: "large",
+          title: "LARGE",
+          when: { kind: "sell", description: "a sell" },
+          conditions: [
+            {
+              kind: "tradeSizeVsSupply",
+              description: "at least 1% of supply",
+              parameters: { operator: ">=", percent: 1, basis: "totalSupply" },
+            },
+          ],
+          then: [{ kind: "extraFee", description: "4% more", parameters: { feePpm: 40_000 }, writes: [] }],
+        },
+      ] as unknown as MarketSpecification["rules"],
+      { baseFeePpm: 5_000, maxFeePpm: 45_000 },
+    );
+
+    const sell = feeSchedule(applyStatedEconomics(flor, stacked), "sell")!;
+    expect(sell.basePpm).toBe(5_000);
+    expect(sell.tier?.ppm).toBe(40_000);
   });
 });

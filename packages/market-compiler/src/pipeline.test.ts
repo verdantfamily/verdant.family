@@ -146,6 +146,34 @@ function revisionAnswer(change: string) {
   };
 }
 
+/** The concrete rule set produced by "Make the sell fee 1% instead". */
+function sellFeeRevisionAnswer() {
+  const { summary, rules } = specificationAnswer();
+
+  return {
+    summary,
+    rules: [
+      ...rules,
+      {
+        id: "sell-fee",
+        title: "SELL FEE",
+        when: { kind: "sell", description: "Somebody sells", parameters: null },
+        conditions: [],
+        then: [
+          {
+            kind: "setFee",
+            description: "Charge 1% on sells",
+            parameters: [{ key: "feePpm", value: 10_000 }],
+            writes: [],
+          },
+        ],
+        activeInPhases: [],
+        onceOnly: false,
+      },
+    ],
+  };
+}
+
 /** Planning is two calls: what is already solved, then what to build. */
 function matchAnswer() {
   return {
@@ -245,13 +273,20 @@ import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
+import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
 import {SwapParams} from "v4-core/src/types/PoolOperation.sol";
 import {AgenBaseHook} from "./AgenBaseHook.sol";
+import {AgenFeePolicy} from "./AgenFeePolicy.sol";
 
 contract StreakHook is AgenBaseHook {
-    uint256 public consecutiveBuys;
+    using PoolIdLibrary for PoolKey;
+
+    /// Keyed by pool, because anybody may open a second pool naming this hook and its
+    /// swaps reach this same callback. One counter for all of them is a counter a
+    /// stranger drives in a market nobody is trading.
+    mapping(PoolId => uint256) public consecutiveBuys;
 
     constructor(IPoolManager manager_) AgenBaseHook(manager_) {}
 
@@ -274,24 +309,28 @@ contract StreakHook is AgenBaseHook {
         });
     }
 
-    function _beforeSwap(address, PoolKey calldata, SwapParams calldata params, bytes calldata)
+    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)
         internal
         override
         returns (BeforeSwapDelta, uint24)
     {
-        uint24 feePpm;
+        PoolId pool = key.toId();
+        bool streakComplete;
+
         if (!isBuy(params)) {
-            consecutiveBuys = 0;
-            feePpm = 5_000;
+            consecutiveBuys[pool] = 0;
         } else {
-            consecutiveBuys += 1;
-            if (consecutiveBuys >= 10) {
-                consecutiveBuys = 0;
-                feePpm = 0;
-            } else {
-                feePpm = 5_000;
+            consecutiveBuys[pool] += 1;
+            if (consecutiveBuys[pool] >= 10) {
+                consecutiveBuys[pool] = 0;
+                streakComplete = true;
             }
         }
+
+        // The rate is Agen's; the streak is this hook's. It answers the question and
+        // takes the number back rather than deciding both.
+        uint24 feePpm = AgenFeePolicy.feePpm(isBuy(params), 0, 0, 0, streakComplete);
+
         return (
             BeforeSwapDeltaLibrary.ZERO_DELTA,
             feePpm | LPFeeLibrary.OVERRIDE_FEE_FLAG
@@ -304,7 +343,10 @@ function withHookFunction(source: string): string {
   return GOOD_HOOK.replace("    function _beforeSwap(", `${source}\n\n    function _beforeSwap(`);
 }
 
-const BROKEN_HOOK = GOOD_HOOK.replace("consecutiveBuys += 1;", "consecutiveBuys += undeclaredThing;");
+const BROKEN_HOOK = GOOD_HOOK.replace(
+  "consecutiveBuys[pool] += 1;",
+  "consecutiveBuys[pool] += undeclaredThing;",
+);
 
 const GOOD_TESTS = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
@@ -312,22 +354,60 @@ pragma solidity 0.8.26;
 import {MarketTestBase} from "./MarketTestBase.sol";
 
 contract StreakHookTest is MarketTestBase {
+    /// Intent: intent-1
     function test_feeCeiling_isNeverExceeded(uint8 trades) public {
         trades = uint8(bound(trades, 1, 12));
         for (uint256 i = 0; i < trades; i++) {
             assertGt(buy(0.000001 ether), 0);
-            assertLe(hook.consecutiveBuys(), 9);
+            assertLe(hook.consecutiveBuys(marketPoolId()), 9);
         }
     }
 
+    /// Intent: intent-2
+    /// Intent: intent-3
+    /// Rule: buy-streak
     function test_theTenthBuyIsFree() public {
         for (uint256 i = 0; i < 10; i++) {
             buy(0.000001 ether);
         }
-        assertEq(hook.consecutiveBuys(), 0);
+        assertEq(hook.consecutiveBuys(marketPoolId()), 0);
     }
 }
 `;
+
+/**
+ * The same hook after "make the sell fee 1% instead".
+ *
+ * Identical to the original on purpose, and that is the change worth noticing: the rates
+ * live in AgenFeePolicy, which Agen rewrites from the revised specification, so an edit to
+ * a number is not an edit to the hook at all. What the hook contributes — the streak — did
+ * not change, so neither does its source.
+ */
+const EDITED_HOOK = GOOD_HOOK;
+
+const EDITED_TESTS = GOOD_TESTS.replace(
+  "    function test_feeCeiling_isNeverExceeded",
+  `    /// Intent: intent-4
+    /// Rule: sell-fee
+    function test_edited_sell_fee_is_exercised() public {
+        uint256 bought = buy(0.001 ether);
+        uint256 received = sell(uint128(bought));
+        assertGt(received, 0);
+    }
+
+    function test_feeCeiling_isNeverExceeded`,
+);
+
+const BATCH_TESTS = GOOD_TESTS.replace(
+  "    /// Rule: buy-streak",
+  `    /// Rule: buy-streak
+    /// Rule: two
+    /// Rule: three
+    /// Rule: four
+    /// Rule: five
+    /// Rule: six
+    /// Rule: seven`,
+);
 
 const MANUAL_CONSTRUCTOR_TESTS = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
@@ -342,12 +422,12 @@ contract ConstructorTest is MarketTestBase {
 `;
 
 const FAILING_TESTS = GOOD_TESTS.replace(
-  "assertEq(hook.consecutiveBuys(), 0);",
-  "assertEq(hook.consecutiveBuys(), 12345);",
+  "assertEq(hook.consecutiveBuys(marketPoolId()), 0);",
+  "assertEq(hook.consecutiveBuys(marketPoolId()), 12345);",
 );
 
 const UNCOMPILABLE_TESTS = GOOD_TESTS.replace(
-  "assertEq(hook.consecutiveBuys(), 0);",
+  "assertEq(hook.consecutiveBuys(marketPoolId()), 0);",
   "uint256 impossible = ;",
 );
 
@@ -360,8 +440,8 @@ const UNCOMPILABLE_TESTS = GOOD_TESTS.replace(
  * that. A real PULSE build shipped this shape to the review screen.
  */
 const UNDEPLOYABLE_HOOK = GOOD_HOOK.replace(
-  "    uint256 public consecutiveBuys;",
-  `    uint256 public consecutiveBuys;
+  "    mapping(PoolId => uint256) public consecutiveBuys;",
+  `    mapping(PoolId => uint256) public consecutiveBuys;
     bytes32 public immutable designatedPoolId;`,
 ).replace(
   "    constructor(IPoolManager manager_) AgenBaseHook(manager_) {}",
@@ -379,12 +459,12 @@ const UNDEPLOYABLE_HOOK = GOOD_HOOK.replace(
  */
 function withInitialize(declarations: string): string {
   return GOOD_HOOK.replace("            afterInitialize: false,", "            afterInitialize: true,").replace(
-    "    function _beforeSwap(address, PoolKey calldata, SwapParams calldata params, bytes calldata)",
+    "    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)",
     `    error InvalidPool();
 
 ${declarations}
 
-    function _beforeSwap(address, PoolKey calldata, SwapParams calldata params, bytes calldata)`,
+    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)`,
   );
 }
 
@@ -753,7 +833,7 @@ describe("the test repair loop", () => {
   });
 
   it("never accepts a contract rewrite for a generated-test compile error", async () => {
-    const changedHook = GOOD_HOOK.replace("consecutiveBuys += 1;", "consecutiveBuys += 99;");
+    const changedHook = GOOD_HOOK.replace("consecutiveBuys[pool] += 1;", "consecutiveBuys[pool] += 99;");
     const { options } = pipeline([
       ...interpretationAnswers(),
       matchAnswer(),
@@ -845,7 +925,7 @@ describe("the test repair loop", () => {
    * not been tested, so nothing can be concluded from it while a version that did compile exists.
    */
   it("puts back the contracts that compiled rather than losing the market to a repair", async () => {
-    const brokenHook = GOOD_HOOK.replace("consecutiveBuys += 1;", "consecutiveBuys += 1");
+    const brokenHook = GOOD_HOOK.replace("consecutiveBuys[pool] += 1;", "consecutiveBuys[pool] += 1");
 
     const { options } = pipeline([
       ...interpretationAnswers(),
@@ -1013,11 +1093,11 @@ describe("the test repair loop", () => {
    */
   it("does not spend the behaviour budget on a suite that never compiled", async () => {
     const otherwiseUncompilable = GOOD_TESTS.replace(
-      "assertEq(hook.consecutiveBuys(), 0);",
+      "assertEq(hook.consecutiveBuys(marketPoolId()), 0);",
       "assertEq(hook.noSuchAccessor(), 0);",
     );
     const failingDifferently = GOOD_TESTS.replace(
-      "assertEq(hook.consecutiveBuys(), 0);",
+      "assertEq(hook.consecutiveBuys(marketPoolId()), 0);",
       'assertEq(uint256(1), uint256(2), "the second wrong answer");',
     );
 
@@ -1173,16 +1253,35 @@ describe("failing closed", () => {
     expect(job.failure?.detail).toContain("declared maximum fee");
   });
 
+  it("refuses a count that changed before any contract is written", async () => {
+    const wrong = specificationAnswer();
+    const { options } = pipeline([
+      ...interpretationAnswers({
+        ...wrong,
+        rules: wrong.rules.map((rule) => ({
+          ...rule,
+          conditions: rule.conditions.map((condition) => ({
+            ...condition,
+            parameters: [{ key: "value", value: 9 }],
+          })),
+        })),
+      }),
+    ]);
+
+    const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
+
+    expect(job.failure?.code).toBe(FailureCode.Unsupported);
+    expect(job.failure?.stage).toBe(Stage.Interpreting);
+    expect(job.failure?.detail).toContain("after 10");
+    expect(job.sources).toEqual([]);
+  });
+
   /**
-   * A size threshold the creator named is not a suggestion, and a default must not
-   * take its place.
-   *
-   * The prompt says "over 2% of the token's immutable total supply". Interpretation
-   * coming back with one percent is the failure that launched a market nobody asked
-   * for: every artefact downstream then agreed with each other about the wrong
-   * number. The build stops here, before any Solidity is written.
+   * A size threshold the creator named is written back into the spec, not left as X
+   * and not refused. THLD dropped the 2% gate entirely; PUSH replaced it with 1%.
+   * Both are the same repair: put the creator's number on the large-sell rule.
    */
-  it("refuses a stated supply threshold that interpretation replaced with a smaller default", async () => {
+  it("restores a stated supply threshold that interpretation dropped", async () => {
     const prompt =
       "Charge 2% on every buy and every sell. On any sell larger than 2% of the token's " +
       "immutable total supply, charge 5% instead.";
@@ -1213,20 +1312,9 @@ describe("failing closed", () => {
           },
           {
             id: "large-sell",
-            title: "LARGE SELL",
-            when: { kind: "sell", description: "Somebody sells", parameters: null },
-            conditions: [
-              {
-                kind: "tradeSizeVsSupply",
-                description: "The sell is large",
-                parameters: [
-                  { key: "operator", value: ">" },
-                  { key: "percent", value: 1 },
-                  { key: "basis", value: "totalSupply" },
-                ],
-                combinator: null,
-              },
-            ],
+            title: "5% LARGE SELL FEE",
+            when: { kind: "sell", description: "On every sell", parameters: null },
+            conditions: [],
             then: [
               {
                 kind: "setFee",
@@ -1247,12 +1335,86 @@ describe("failing closed", () => {
       }),
     ]);
 
-    const job = await runBuild({ prompt, name: "Push", symbol: "PUSH" }, options);
+    const job = await runBuild({ prompt, name: "Threshold", symbol: "THLD" }, options);
+
+    const large = job.specification?.rules.find((rule) => rule.id === "large-sell");
+    expect(large?.conditions).toEqual([
+      expect.objectContaining({
+        kind: "tradeSizeVsSupply",
+        parameters: expect.objectContaining({
+          operator: ">",
+          percent: 2,
+          basis: "totalSupply",
+        }),
+      }),
+    ]);
+    expect(job.failure?.stage).not.toBe(Stage.Interpreting);
+    expect(job.failure?.detail ?? "").not.toMatch(/missing threshold|threshold X|does not measure/i);
+  });
+
+  /**
+   * Repair needs a sell or swap rule to hang the number on. A buy-only reading of a
+   * prompt that gates a sell cannot be completed by inventing that rule.
+   */
+  it("refuses a stated supply threshold when no sell rule can carry it", async () => {
+    const prompt =
+      "Charge 2% on every buy and every sell. On any sell larger than 2% of the token's " +
+      "immutable total supply, charge 5% instead.";
+
+    const { options } = pipeline([
+      ...interpretationAnswers({
+        summary: "Two percent on buys, five on large buys",
+        baseFeePpm: 20_000,
+        maxFeePpm: 50_000,
+        phases: [],
+        state: [],
+        rules: [
+          {
+            id: "buy-fee",
+            title: "BUY FEE",
+            when: { kind: "buy", description: "Somebody buys", parameters: null },
+            conditions: [],
+            then: [
+              {
+                kind: "setFee",
+                description: "Charge 2%",
+                parameters: [{ key: "feePpm", value: 20_000 }],
+                writes: [],
+              },
+            ],
+            activeInPhases: [],
+            onceOnly: false,
+          },
+          {
+            id: "buy-surcharge",
+            title: "LARGE BUY",
+            when: { kind: "buy", description: "A large buy", parameters: null },
+            conditions: [],
+            then: [
+              {
+                kind: "setFee",
+                description: "Charge 5%",
+                parameters: [{ key: "feePpm", value: 50_000 }],
+                writes: [],
+              },
+            ],
+            activeInPhases: [],
+            onceOnly: false,
+          },
+        ],
+        invariants: [{ id: "fee-ceiling", statement: "The hook fee never exceeds 5%", expression: null }],
+        externalDependencies: [],
+        assumptions: [],
+        ambiguities: [],
+        unsupported: [],
+      }),
+    ]);
+
+    const job = await runBuild({ prompt, name: "Threshold", symbol: "THLD" }, options);
 
     expect(job.failure?.code).toBe(FailureCode.Unsupported);
     expect(job.failure?.stage).toBe(Stage.Interpreting);
-    expect(job.failure?.detail).toContain("2%");
-    expect(job.failure?.detail).toMatch(/1%|one percent|different figure|more than 1%/i);
+    expect(job.failure?.detail).toMatch(/does not measure|2%/i);
     expect(job.stage).toBe(Stage.Failed);
   });
 
@@ -1841,11 +2003,28 @@ describe("a market with more behaviours than one answer holds", () => {
     // the market actually has.
     const behaviours = ["buy-streak", "two", "three", "four", "five", "six", "seven"];
 
-    const ruleFor = (id: string) => ({
-      ...specificationAnswer().rules[0]!,
-      id,
-      title: id.toUpperCase(),
-    });
+    /*
+     * The first is the market's fee rule; the rest record things. Seven copies of one
+     * fee waiver would be seven gates on the generated fee policy, and a market whose
+     * rate takes seven booleans to state is one Agen declines to write a policy for —
+     * which would make this a test about that limit rather than about batching.
+     */
+    const ruleFor = (id: string) =>
+      id === "buy-streak"
+        ? { ...specificationAnswer().rules[0]!, id, title: id.toUpperCase() }
+        : {
+            ...specificationAnswer().rules[0]!,
+            id,
+            title: id.toUpperCase(),
+            then: [
+              {
+                kind: "setFlag",
+                description: `Records that ${id} happened`,
+                parameters: null,
+                writes: ["consecutiveBuys"],
+              },
+            ],
+          };
 
     const { summary, rules: _rules, ...frame } = specificationAnswer();
 
@@ -1859,7 +2038,7 @@ describe("a market with more behaviours than one answer holds", () => {
       matchAnswer(),
       planAnswer(),
       sources(GOOD_HOOK),
-      tests(GOOD_TESTS),
+      tests(BATCH_TESTS),
     ]);
 
     const job = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
@@ -2077,7 +2256,7 @@ describe("asking the creator instead of guessing", () => {
       { ...second, store },
     );
 
-    expect(built.stage).toBe(Stage.DeploymentReady);
+    expect(built.stage, built.failure?.detail).toBe(Stage.DeploymentReady);
 
     // The conversation is not the source of truth. The answer is in the specification,
     // in the same shape as every other resolved decision.
@@ -2280,14 +2459,14 @@ describe("asking the creator instead of guessing", () => {
     ]);
 
     const built = await runBuild({ prompt: PROMPT, name: "Canopy", symbol: "CNPY" }, options);
-    expect(built.stage).toBe(Stage.DeploymentReady);
+    expect(built.stage, built.failure?.detail).toBe(Stage.DeploymentReady);
 
     const { options: edited } = pipeline([
-      revisionAnswer("Charge 1% on sells"),
+      sellFeeRevisionAnswer(),
       matchAnswer(),
       planAnswer(),
-      sources(GOOD_HOOK),
-      tests(GOOD_TESTS),
+      sources(EDITED_HOOK),
+      tests(EDITED_TESTS),
     ]);
 
     const after = await decideBuild(
@@ -2296,8 +2475,13 @@ describe("asking the creator instead of guessing", () => {
       { ...edited, store },
     );
 
-    expect(after.stage).toBe(Stage.DeploymentReady);
-    expect(after.specification?.rules[0]?.then.at(-1)?.description).toContain("1% on sells");
+    expect(
+      after.stage,
+      `${after.failure?.detail ?? ""}\n${JSON.stringify(after.specification?.rules, null, 2)}`,
+    ).toBe(Stage.DeploymentReady);
+    expect(after.specification?.rules.find((rule) => rule.id === "sell-fee")?.then[0]?.description).toContain(
+      "1% on sells",
+    );
 
     // What they asked for is on the specification in their own words, which is what the
     // review screen shows them when they ask what they changed.
@@ -2306,9 +2490,8 @@ describe("asking the creator instead of guessing", () => {
 
     // And it is the same market, not a second one.
     expect(after.id).toBe(built.id);
-    expect(after.specification?.rules.map((rule) => rule.id)).toEqual(
-      built.specification?.rules.map((rule) => rule.id),
-    );
+    expect(after.specification?.rules.some((rule) => rule.id === "buy-streak")).toBe(true);
+    expect(after.specification?.rules.some((rule) => rule.id === "sell-fee")).toBe(true);
   }, 240_000);
 
   it("does not pay for a revision when nothing was decided", async () => {

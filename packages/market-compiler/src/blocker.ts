@@ -145,14 +145,11 @@ export function blockerFor(failure: Failure): Blocker {
 
     case FailureCode.HarnessInfrastructure:
       return {
-        headline: "Agen's test environment failed.",
+        headline: "Agen hit an internal testing problem.",
         explanation:
-          "The market's behavior tests never ran because Agen could not reproduce its own " +
-          "launch environment. This is an Agen infrastructure failure, not evidence that " +
-          "the market logic is wrong.",
-        nextStep:
-          creatorSafe(failure.detail) ??
-          "Agen needs its canonical test deployment corrected before this build can be retried.",
+          "Your market was not rejected. Agen could not finish checking it because of a " +
+          "problem in Agen's own test setup, not because the rules you described are wrong.",
+        nextStep: "Start a new build of the same idea. The next run should get through this step.",
         ask: null,
         retryable: true,
       };
@@ -206,6 +203,25 @@ export function blockerFor(failure: Failure): Blocker {
         explanation:
           "One of the steps returned an answer in the wrong shape and Agen would not " +
           "guess at what it meant. Nothing was deployed and nothing was charged for.",
+        nextStep: "Build again. This one is nearly always transient.",
+        ask: null,
+        retryable: true,
+      };
+
+    case FailureCode.InterpretationError:
+      /*
+       * Deliberately worded as Agen's fault rather than the market's, because that is what it
+       * is. `UNSUPPORTED` above tells a creator their market cannot be built, which is a real
+       * answer about their market. This one means nothing about their market was ever
+       * established — the reading came back malformed — so saying anything about whether it
+       * is possible would be inventing a judgement nobody made.
+       */
+      return {
+        headline: "Agen could not read its own reading of this market.",
+        explanation:
+          "The interpretation came back in a shape Agen would not accept, so it stopped " +
+          "rather than guess at what was meant. This says nothing about whether your market " +
+          "can be built. Nothing was deployed and nothing was charged for.",
         nextStep: "Build again. This one is nearly always transient.",
         ask: null,
         retryable: true,

@@ -35,9 +35,10 @@
 
 import "server-only";
 
-import type { GenerationJob } from "@verdant/market-compiler";
+import type { Decision, GenerationJob } from "@verdant/market-compiler";
 import {
   answerBuild,
+  decideBuild,
   isTerminal,
   newJob,
   restartJob,
@@ -45,14 +46,41 @@ import {
   Stage,
 } from "@verdant/market-compiler";
 
+import { runEngineBuild } from "@verdant/market-compiler";
 import type {
   AgenDeploymentAddresses,
   ClarificationAnswer,
+  EngineAddresses,
   ModelProvider,
 } from "@verdant/market-compiler";
+import { AGEN_LAUNCH } from "@verdant/config";
+import type { MarketBinding } from "@verdant/market-engine";
+import { keccak256, stringToHex, type Address, type Hex } from "viem";
 
 import { escalationProviderOrNull, GENERATED_ROOT, jobStore, VENDOR_ROOT } from "./builds";
-import { AGEN_ADDRESSES, AGEN_ROUTER, EXTERNAL } from "./chain";
+import { AGEN_ADDRESSES, AGEN_ROUTER, CHAIN_ID, EXTERNAL } from "./chain";
+import { launchProver, SIMULATED_CREATOR } from "./engine-prove";
+import { absoluteUrl } from "./instant";
+import {
+  ENGINE_NOT_DEPLOYED,
+  ENGINE_V1_ENABLED,
+  engineAddressesOrNull,
+  engineTokenSalt,
+} from "./programmable";
+
+/** Native Robinhood Chain ETH. Not WETH — see `engineOptions`. */
+const NATIVE_QUOTE = "0x0000000000000000000000000000000000000000" as Address;
+
+const AGEN_SUPPLY_BASE_UNITS = AGEN_LAUNCH.supplyTokens * 10n ** 18n;
+
+/** What the launch parameters an engine build supplies look like, minus the per-market ones. */
+interface EngineLaunchParameters {
+  readonly metadataURI: string;
+  readonly metadataMutable: boolean;
+  readonly initialTick: number;
+  readonly feeReceiver: Address;
+  readonly tokenSalt: Hex;
+}
 
 /**
  * The addresses a build assembles its trial manifest against.
@@ -72,6 +100,76 @@ function probeDeployment(): AgenDeploymentAddresses | undefined {
     factory: AGEN_ADDRESSES.addresses.factory,
     deployer: AGEN_ADDRESSES.addresses.deployer,
     ...(AGEN_ROUTER === null ? {} : { router: AGEN_ROUTER }),
+  };
+}
+
+/**
+ * Which pipeline a build submitted now will use.
+ *
+ * Engine v1 where it is switched on *and* deployed. Both, because the flag says what an
+ * operator wants and the addresses say what the chain can actually do — a build routed to a
+ * factory with no code at it would spend a model call to fail at preparation, and the
+ * generated-contract path still works. The reverse never happens: nothing here can route an
+ * engine-v1 build into generated Solidity once it has started, and nothing downstream falls
+ * back to it either.
+ */
+function engineVersionForNewBuilds(): 0 | 1 {
+  if (!ENGINE_V1_ENABLED) return 0;
+
+  if (engineAddressesOrNull() === null) {
+    console.warn(`[agen] ${ENGINE_NOT_DEPLOYED}`);
+    return 0;
+  }
+
+  return 1;
+}
+
+/**
+ * Everything an engine-v1 build needs that is not the prompt.
+ *
+ * Returns null only where the engine is not deployed, which `engineVersionForNewBuilds` has
+ * already ruled out for any job that reaches here — so a null is a job stamped under an engine
+ * that has since been undeployed, which `execute` reports rather than silently downgrading.
+ *
+ * The launch parameters are the same ones engine 0 uses, read from the same places, because a
+ * programmable market's non-economic side — its metadata, its opening tick, where liquidity
+ * fees go — is not what changed between the two pipelines.
+ */
+function engineOptions(job: GenerationJob):
+  | {
+      readonly addresses: EngineAddresses;
+      readonly parameters: EngineLaunchParameters;
+      readonly binding: MarketBinding;
+    }
+  | null {
+  const engine = engineAddressesOrNull();
+  if (engine === null) return null;
+
+  return {
+    addresses: { chainId: CHAIN_ID, ...engine },
+    parameters: {
+      // Falls back to the relative path where no site URL is configured, which is a
+      // development machine. A launch route that needs an absolute one already refuses.
+      metadataURI: absoluteUrl(`/api/metadata/${job.id}.json`) ?? `/api/metadata/${job.id}.json`,
+      metadataMutable: false,
+      initialTick: AGEN_LAUNCH.initialTick,
+      // A stand-in until a wallet signs, shared with the prover so the proof is of the same
+      // transaction the build prepared. See `SIMULATED_CREATOR`.
+      feeReceiver: SIMULATED_CREATOR,
+      tokenSalt: engineTokenSalt(job.id),
+    },
+    binding: {
+      referenceSupply: AGEN_SUPPLY_BASE_UNITS,
+      /*
+       * Native Robinhood Chain ETH, as the zero address.
+       *
+       * Not WETH, and the distinction is the whole point: every Agen market is quoted in the
+       * chain's own ether, and a build that said WETH would prepare a pool key for a token
+       * that is not the one traders hold.
+       */
+      quoteAsset: { address: NATIVE_QUOTE, symbol: "ETH", decimals: 18 },
+      launchedTokenSymbol: job.symbol,
+    },
   };
 }
 
@@ -125,6 +223,8 @@ interface Pending {
    * have no limit at all on the days people are actually using it.
    */
   readonly answers?: readonly ClarificationAnswer[];
+  /** Present when the creator edits a completed specification in their own words. */
+  readonly decisions?: readonly Decision[];
 }
 
 interface State {
@@ -188,12 +288,16 @@ export async function submit(
   request: { readonly prompt: string; readonly name: string; readonly symbol: string },
   provider: ModelProvider,
 ): Promise<GenerationJob> {
+  // Stamped at submission and never revisited. A build carries the engine it was started
+  // under for its whole life, so flipping the flag mid-build cannot reinterpret a job that is
+  // already running under the other pipeline.
   const job = newJob({
     id: crypto.randomUUID(),
     prompt: request.prompt,
     name: request.name,
     symbol: request.symbol,
     now: Math.floor(Date.now() / 1000),
+    engineVersion: engineVersionForNewBuilds(),
   });
 
   await jobStore().create(job);
@@ -237,6 +341,32 @@ export async function answer(
   return job;
 }
 
+/** Queue an edit to the canonical specification, invalidating every downstream proof. */
+export async function edit(
+  jobId: string,
+  instruction: string,
+  provider: ModelProvider,
+): Promise<GenerationJob | null> {
+  const job = await jobStore().read(jobId);
+  if (job === null) return null;
+  if (job.specification === null || instruction.trim() === "") return job;
+
+  const current = state();
+  if (current.running.has(jobId) || current.waiting.some((entry) => entry.job.id === jobId)) {
+    return job;
+  }
+
+  const queued = restartJob(job, Math.floor(Date.now() / 1000));
+  await jobStore().write(queued);
+  current.waiting.push({
+    job: queued,
+    provider,
+    decisions: [{ kind: "edit", instruction: instruction.trim() }],
+  });
+  pump();
+  return queued;
+}
+
 /**
  * Start whatever the free slots allow.
  *
@@ -269,7 +399,7 @@ function pump(): void {
  * rejection — that would take the process down and every other build with it, which is
  * precisely the "one failed build affects another" property this file exists to remove.
  */
-async function execute({ job, provider, answers }: Pending): Promise<void> {
+async function execute({ job, provider, answers, decisions }: Pending): Promise<void> {
   const deployment = probeDeployment();
 
   // Read here rather than carried on the queue entry: which vendor answers a stuck repair
@@ -290,13 +420,32 @@ async function execute({ job, provider, answers }: Pending): Promise<void> {
   };
 
   try {
-    if (answers === undefined) {
-      await runBuild(
-        { prompt: job.prompt, name: job.name, symbol: job.symbol },
-        { ...options, resume: job },
+    const finished =
+      job.engineVersion === 1
+        ? await runEngineJob({ job, provider, ...(answers === undefined ? {} : { answers }) })
+        : decisions !== undefined
+          ? await decideBuild(job.id, decisions, options)
+          : answers === undefined
+            ? await runBuild(
+                { prompt: job.prompt, name: job.name, symbol: job.symbol },
+                { ...options, resume: job },
+              )
+            : await answerBuild(job.id, answers, options);
+
+    /*
+     * Say why, where anybody can read it.
+     *
+     * The pipeline records a failure on the job, which the creator's screen shows and
+     * nothing else does — so a build that died on the server was diagnosable only by
+     * asking the person watching it what their screen said. That is a fine way to lose an
+     * evening, and it did. One line per failed build, with the stage and the reason the
+     * pipeline already worked out.
+     */
+    if (finished.failure !== null) {
+      console.error(
+        `[agen] build ${finished.id} failed at ${finished.failure.stage} ` +
+          `(${finished.failure.code}): ${finished.failure.detail}`,
       );
-    } else {
-      await answerBuild(job.id, answers, options);
     }
   } catch (error) {
     console.error(`[agen] build ${job.id} threw outside the pipeline:`, error);
@@ -320,6 +469,74 @@ async function execute({ job, provider, answers }: Pending): Promise<void> {
     state().running.delete(job.id);
     pump();
   }
+}
+
+/**
+ * Run one engine-v1 build, whether it is starting or resuming from an answered question.
+ *
+ * One entry point for both, because the deterministic pipeline has no separate resumption
+ * path and does not need one: answers are an input to interpretation rather than a
+ * continuation of it, so a resumed build is the same build with more information. That is
+ * simpler than engine 0's `answerBuild`, and it is simpler because there is no generated
+ * artefact from the first attempt that has to be kept or thrown away.
+ *
+ * `runEngineBuild` rather than `runEngineBuildForTest`: the type requires a prover here, so
+ * this call site cannot reach `deployment_ready` on calldata nothing has executed.
+ */
+async function runEngineJob({
+  job,
+  provider,
+  answers,
+}: {
+  readonly job: GenerationJob;
+  readonly provider: ModelProvider;
+  readonly answers?: readonly ClarificationAnswer[];
+}): Promise<GenerationJob> {
+  const engine = engineOptions(job);
+
+  if (engine === null) {
+    // Stamped engine-v1 and the addresses have since gone. Reported rather than quietly run
+    // through the generated-Solidity path, which would build a market the creator was never
+    // shown and is exactly the automatic fallback this architecture forbids.
+    return await jobStore().write({
+      ...job,
+      stage: Stage.Failed,
+      updatedAt: Math.floor(Date.now() / 1000),
+      failure: {
+        code: "TOOLCHAIN_ERROR",
+        stage: job.stage,
+        detail: ENGINE_NOT_DEPLOYED,
+      },
+    });
+  }
+
+  // Answers with no text mean "take Agen's default", which the interpreter reads as an absent
+  // answer for that question. Dropping them here keeps that meaning in one place.
+  const stated = (answers ?? []).flatMap((answer) =>
+    answer.answer === undefined || answer.answer.trim() === ""
+      ? []
+      : [{ id: answer.id, answer: answer.answer }],
+  );
+
+  const { job: finished } = await runEngineBuild(
+    {
+      prompt: job.prompt,
+      name: job.name,
+      symbol: job.symbol,
+      binding: engine.binding,
+      ...(stated.length === 0 ? {} : { answers: stated }),
+    },
+    {
+      provider,
+      store: jobStore(),
+      addresses: engine.addresses,
+      parameters: engine.parameters,
+      proveLaunchable: launchProver(),
+      resume: job,
+    },
+  );
+
+  return finished;
 }
 
 /**

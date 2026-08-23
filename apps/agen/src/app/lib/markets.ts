@@ -29,6 +29,7 @@ import type {
   TestOutcome,
 } from "@verdant/market-compiler";
 import { mechanicSummary } from "@verdant/market-compiler";
+import type { EngineSummary, Review as EngineReview } from "@verdant/market-engine";
 
 import type { Address } from "viem";
 
@@ -196,7 +197,15 @@ interface Tradable {
   readonly sqrtPriceX96?: string;
 }
 
-export interface ProgrammableDetail extends ProgrammableSummary, Tradable {
+/**
+ * A market built by writing Solidity for it.
+ *
+ * Everything below the trading figures is an artefact of that: a specification the model
+ * produced, the sources compiled from it, the tests run against them, the components deployed.
+ * None of it exists for an engine market, and none of it is optional here.
+ */
+export interface GeneratedDetail extends ProgrammableSummary, Tradable {
+  readonly engineVersion: 0;
   readonly specification: MarketSpecification;
   readonly sources: readonly { readonly path: string; readonly content: string }[];
   readonly testOutcomes: readonly TestOutcome[];
@@ -208,6 +217,45 @@ export interface ProgrammableDetail extends ProgrammableSummary, Tradable {
     readonly address: string | null;
   }[];
 }
+
+/**
+ * A market that is a configuration Agen's engine executes.
+ *
+ * The fields are the canonical artefacts and nothing else. There is no specification because
+ * the configuration is one, no sources because nothing was written, no components because the
+ * engine was already deployed, and no test outcomes because the tests are the engine's rather
+ * than this market's.
+ *
+ * `review` is what a page renders. It is typed as the engine's own `Review` rather than
+ * restated here, so a page cannot show a field the engine does not derive.
+ */
+export interface EngineDetail extends ProgrammableSummary, Tradable {
+  readonly engineVersion: 1;
+  readonly review: EngineReview;
+  /**
+   * The opening rate, in parts per million, derived by the engine.
+   *
+   * Here rather than left for the page to find, because a page that can find it can find it
+   * wrongly. See `EngineSummary.openingBuyPpm`.
+   */
+  readonly openingBuyPpm: number;
+  readonly openingSellPpm: number;
+  /** The commitment the creator signed and the chain can be checked against. */
+  readonly configHash: string;
+  readonly implementationHash: string;
+}
+
+/**
+ * A programmable market, of either engine.
+ *
+ * A union for exactly the reason the wider `MarketDetail` union below is one, and it was added
+ * for exactly the reason that comment predicts: an engine market has no specification, and the
+ * first thing a page does with a programmable market is read one. Discriminating on
+ * `engineVersion` means `market.specification` stops compiling until the page says which engine
+ * it is talking about — so an engine market cannot be rendered through engine-0's concepts, and
+ * the compiler enforces that rather than a reviewer.
+ */
+export type ProgrammableDetail = GeneratedDetail | EngineDetail;
 
 export interface InstantDetail extends InstantSummary, Tradable {
   /** The creator's own accounts, from the token's metadata document. */
@@ -308,6 +356,55 @@ export interface MarketSource {
 }
 
 /**
+ * How a market describes itself, from whichever document it actually has.
+ *
+ * Null means the build carries no description at all, which is the same refusal the old
+ * `specification === null` guard made and for the same reason: a listing showing a market it
+ * cannot describe is showing a name and an empty promise.
+ *
+ * The engine branch fills `stateCount`, `hasExternalDependencies` and `noveltyScore` with
+ * values that are true rather than estimated. An engine market has no state variables beyond
+ * the two accumulators the hook keeps for every market, reads nothing off-chain by
+ * construction, and is not novel in the sense the shelf means — that ordering exists to
+ * surface unusual *machines*, and every engine market runs the same one. Scoring them against
+ * generated markets would be comparing two different things on one axis.
+ */
+function mechanicsOf(job: ReturnType<typeof publicView>): MechanicSummary | null {
+  if (job.engineVersion === 1) {
+    // Cast at the seam, as `engine-review.tsx` does. The engine artefacts are persisted as
+    // JSON and typed `unknown` on the record so that the store never has to know the engine's
+    // shapes; the shape itself is the engine's, imported rather than restated.
+    const summary = (job.engine?.summary ?? null) as EngineSummary | null;
+    if (summary === null) return null;
+
+    return {
+      headline: summary.headline,
+      ruleCount: summary.ruleCount,
+      stateCount: 0,
+      hasPhases: summary.hasPhases,
+      hasExternalDependencies: false,
+      noveltyScore: 0,
+    };
+  }
+
+  return job.specification === null ? null : mechanicSummary(job.specification);
+}
+
+/** The supply, from whichever of the two launch documents the build has. */
+function supplyOf(job: ReturnType<typeof publicView>): number {
+  if (job.engineVersion === 1) {
+    const prepared = (job.engine?.preparation ?? null) as { readonly supply?: string } | null;
+    const supply = prepared?.supply ?? null;
+    // Whole tokens, from base units. The engine's supplies are round numbers of tokens, so the
+    // division is exact; a market with a fractional supply would round down here and show one
+    // token short, which is a display concern rather than a launched one.
+    return supply === null ? 0 : Number(BigInt(supply) / 10n ** 18n);
+  }
+
+  return job.launch === null ? 0 : Number(job.launch.supplyTokens);
+}
+
+/**
  * A build, plus whatever the chain says about it.
  *
  * The build is the source of everything a market *is* — its rules, its contracts, its
@@ -323,10 +420,24 @@ function summaryFrom(
 ): ProgrammableSummary | null {
   // A market is a build that was cleared. Anything else is somebody's abandoned
   // attempt, and a discovery page listing those would be listing failures as products.
-  if (job.stage !== "deployment_ready" || job.specification === null) return null;
+  if (job.stage !== "deployment_ready") return null;
 
-  const supply = job.launch === null ? 0 : Number(job.launch.supplyTokens);
-  const mechanics = mechanicSummary(job.specification);
+  /*
+   * The two engines describe themselves from different documents.
+   *
+   * Engine 0 has a compiled specification and `mechanicSummary` reads it. Engine 1 has no
+   * specification at all — its canonical configuration *is* the specification — so it is
+   * summarised from that, by the engine, in `engineSummary`. Branching here rather than
+   * teaching one function about both keeps each description derived from the artefact that was
+   * actually deployed, which is the whole property this refactor exists to hold.
+   *
+   * The guard used to be `job.specification === null`, which silently dropped every engine-v1
+   * market from every listing: launched, tradable, and invisible in the product that made it.
+   */
+  const mechanics = mechanicsOf(job);
+  if (mechanics === null) return null;
+
+  const supply = supplyOf(job);
 
   return {
     id: job.id,
@@ -346,7 +457,9 @@ function summaryFrom(
     headline: mechanics.headline,
     // The programmable flow never asks for one; the card draws the token's machine.
     image: null,
-    contractCount: job.plan?.components.length ?? job.sources.length,
+    // Zero for an engine market, and correctly so: no contract was written for it. The card
+    // reads this as "how much bespoke code is behind this", and the honest answer is none.
+    contractCount: job.engineVersion === 1 ? 0 : (job.plan?.components.length ?? job.sources.length),
     supplyTokens: supply,
     ...(live === null
       ? {}
@@ -440,10 +553,46 @@ export function buildStoreSource(): MarketSource {
       const view = publicView(job);
       const { launch, live, stats } = await chainStateFor(id);
       const summary = summaryFrom(view, launch, live, stats);
-      if (summary === null || view.specification === null) return null;
+      if (summary === null) return null;
+
+      const trading =
+        live === null
+          ? {}
+          : { poolId: live.poolId, lpFee: live.lpFee, sqrtPriceX96: live.sqrtPriceX96.toString() };
+
+      if (view.engineVersion === 1) {
+        const engine = view.engine;
+        const review = (engine?.review ?? null) as EngineReview | null;
+        const engineSummary = (engine?.summary ?? null) as EngineSummary | null;
+
+        // A build with no review is one that never reached the review stage. `summaryFrom`
+        // already refuses those, so this narrows a type rather than deciding anything.
+        if (
+          review === null ||
+          engineSummary === null ||
+          engine?.configHash == null ||
+          engine.implementationHash == null
+        ) {
+          return null;
+        }
+
+        return {
+          ...summary,
+          engineVersion: 1,
+          review,
+          openingBuyPpm: engineSummary.openingBuyPpm,
+          openingSellPpm: engineSummary.openingSellPpm,
+          configHash: engine.configHash,
+          implementationHash: engine.implementationHash,
+          ...trading,
+        };
+      }
+
+      if (view.specification === null) return null;
 
       return {
         ...summary,
+        engineVersion: 0,
         specification: view.specification,
         sources: view.sources,
         testOutcomes: view.testOutcomes,
@@ -454,9 +603,7 @@ export function buildStoreSource(): MarketSource {
           purpose: component.purpose,
           address: null,
         })),
-        ...(live === null
-          ? {}
-          : { poolId: live.poolId, lpFee: live.lpFee, sqrtPriceX96: live.sqrtPriceX96.toString() }),
+        ...trading,
       };
     },
 

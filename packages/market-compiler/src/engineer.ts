@@ -58,6 +58,7 @@ import {
 } from "./deployment-spec.js";
 import type { GateFinding } from "./gates.js";
 import { invariantCoverage } from "./gates.js";
+import type { CreatorIntent } from "./intent.js";
 import type { JsonSchema, ModelProvider, ModelRole, StructuredResponse } from "./model.js";
 import { array, bounded, object, optional, text } from "./model.js";
 import { PRELUDE_CONTRACTS, preludeActivations, preludeSources } from "./prelude.js";
@@ -65,9 +66,12 @@ import { Tactic } from "./recovery.js";
 import type { MarketComponent, MarketImplementationPlan } from "./plan.js";
 import type { PlannedDependency } from "./plan.js";
 import { validatePlan } from "./plan.js";
+import { claimCoverage } from "./semantic-coverage.js";
+import { renameReservedIdentifiers } from "./mechanical-repair.js";
 import type { MarketSpecification } from "./spec.js";
 import type { CatalogueEntry } from "./catalogue.js";
 import { camel, clamp, kebab, uniqueNames } from "./normalise.js";
+import { feeGates, feePolicySource } from "./fee-policy.js";
 import { thresholdIn, thresholdSolidity } from "./threshold.js";
 import { CATALOGUE, catalogueEntry, catalogueForModel } from "./catalogue.js";
 import type { OutstandingDecisions, Suggestion } from "./spec.js";
@@ -1228,6 +1232,22 @@ const testSuiteSchema: JsonSchema = object({
       ),
     }),
   ),
+  ruleCoverage: array(
+    object({
+      ruleId: text("the id of a rule from the specification"),
+      testName: text(
+        "the name of the test in your files or Agen's core suite that proves it, without parentheses or arguments",
+      ),
+    }),
+  ),
+  intentCoverage: array(
+    object({
+      intentId: text("the id of an objective prompt clause from the intent checklist"),
+      testName: text(
+        "the name of the test in your files or Agen's core suite that proves it, without parentheses or arguments",
+      ),
+    }),
+  ),
   notes: array(text("anything a reviewer should know about this suite")),
 });
 
@@ -1563,15 +1583,18 @@ export async function interpret(
   const behaviours = await ask<{ readonly behaviours: readonly string[] }>(provider, {
     stage: "interpreting",
     instructions:
-      "List what this market does, as the creator would list it if asked out loud. One " +
-      "line each, plain language, no Solidity and no implementation steps. A market " +
-      "described in four sentences has about four behaviours; if your list is much " +
-      "longer than the description, you are transcribing it rather than reading it.\n\n" +
-      "A behaviour is something that happens while people trade. Issuing the token is " +
-      "not one: every market has a token and Agen writes it. Neither is the bookkeeping " +
-      "under a behaviour you have already named — a market where every hundredth trade " +
-      "wins the pot does one thing, not four, and collecting the fees, holding them, " +
-      "paying them out and clearing the pot are that one thing described in stages.",
+      "List what this market does, in the creator's own terms. One line each, plain " +
+      "language, no Solidity and no implementation steps. The list is a reading of " +
+      "their description, not a redesign of it.\n\n" +
+      "Every fee they named, which side pays it, every size threshold, and whether a " +
+      "higher rate replaces the lower one or adds to it, must appear. 'Buys pay " +
+      "nothing' is a behaviour. '4% instead' is not the same as 'an additional 4%'. " +
+      "Do not drop a side they mentioned. Do not add a pool fee, a default rate or a " +
+      "mechanic they did not write.\n\n" +
+      "A market described in four sentences has about four behaviours; if your list is " +
+      "much longer than the description, you are transcribing it rather than reading " +
+      "it. Issuing the token is not a behaviour: every market has a token and Agen " +
+      "writes it. Neither is the bookkeeping under a behaviour you have already named.",
     input: fence("creator prompt", prompt),
     schemaName: "market_behaviours",
     schema: behavioursSchema,
@@ -1680,11 +1703,13 @@ async function askForRules(
       "Split when the creator would call it a separate thing. Merge when they would not. " +
       "A market described in four sentences that arrives as nine rules has been " +
       "transcribed rather than understood, and every later stage pays for it.\n\n" +
-      "A number the creator wrote is that number. A size threshold they named — " +
-      "'over 2% of the total supply', 'more than 1% of liquidity' — is recorded as they " +
-      "wrote it: the figure, what it is a figure of, and whether the boundary is included. " +
-      "It is never replaced by a rounder or more familiar default. 'Over' and 'more than' " +
-      "exclude the boundary; 'at least' includes it.",
+      "The creator's words are the market. Formalise them; do not improve them. A number " +
+      "they wrote is that number. A size threshold they named — 'over 2% of the total " +
+      "supply', 'more than 1% of liquidity' — is recorded as they wrote it: the figure, " +
+      "what it is a figure of, and whether the boundary is included. 'Over' and 'more " +
+      "than' exclude the boundary; 'at least' includes it. A side they said pays nothing " +
+      "is recorded as zero, not as the other side's rate. 'Instead' replaces the fee; " +
+      "'additional' adds to it. Do not invent a pool LP fee they did not name.",
     input: [
       creator,
       "",
@@ -2250,9 +2275,32 @@ export async function revise(
   const raw = output.value;
   const stateNames = new Set(specification.state.map((variable) => variable.name));
   const ruleIds = uniqueNames(raw.rules.map((rule) => rule.id), kebab);
+  const revisedFeeCeiling = Math.max(
+    specification.maxFeePpm,
+    ...raw.rules.flatMap((rule) =>
+      rule.then.flatMap((effect) =>
+        (effect.parameters ?? []).flatMap((parameter) => {
+          if (typeof parameter.value !== "number") return [];
+          const key = parameter.key.toLowerCase();
+          const ppm = key.includes("ppm")
+            ? parameter.value
+            : key.includes("bps") || key.includes("basispoint")
+              ? parameter.value * 100
+              : key.includes("percent") || key.includes("pct")
+                ? parameter.value * 10_000
+                : null;
+          return ppm === null || !Number.isInteger(ppm) ? [] : [ppm];
+        }),
+      ),
+    ),
+  );
 
   const revised: MarketSpecification = derivedNow({
     ...specification,
+    // A creator raising a fee necessarily raises the disclosed ceiling to at least that
+    // rate. Holding the old ceiling here would reject the revision before the prompt-pinning
+    // pass gets a chance to apply the creator's exact number.
+    maxFeePpm: revisedFeeCeiling,
     // The summary describes the mechanic, so a changed mechanic gets the new one — but
     // an empty answer is a model economising rather than a market with no description.
     summary: raw.summary.trim() === "" ? specification.summary : clamp(raw.summary, SPEC_BOUNDS.maxSummaryLength),
@@ -2949,6 +2997,8 @@ interface RawSources {
 
 interface RawTestSuite extends RawSources {
   coverage?: { invariantId: string; testName: string }[];
+  ruleCoverage?: { ruleId: string; testName: string }[];
+  intentCoverage?: { intentId: string; testName: string }[];
 }
 
 /**
@@ -2998,6 +3048,62 @@ export function annotateCoverage(
               .filter((entry) => entry.testName === declared[2])
               .filter((entry) => !annotated.some((written) => written.includes(`Invariant: ${entry.invariantId}`)))
               .map((entry) => `${declared[1] ?? ""}/// Invariant: ${entry.invariantId}`);
+
+      annotated.push(...claims, line);
+    }
+
+    return { path: file.path, content: annotated.join("\n") };
+  });
+}
+
+/** Write a rule claim above the test that exercises it, using the same checked mapping. */
+export function annotateRuleCoverage(
+  tests: readonly GeneratedSource[],
+  coverage: readonly { readonly ruleId: string; readonly testName: string }[],
+): readonly GeneratedSource[] {
+  if (coverage.length === 0) return tests;
+
+  return tests.map((file) => {
+    const lines = file.content.split("\n");
+    const annotated: string[] = [];
+
+    for (const line of lines) {
+      const declared = /^(\s*)function\s+([A-Za-z0-9_$]+)\s*\(/.exec(line);
+      const claims =
+        declared === null
+          ? []
+          : coverage
+              .filter((entry) => entry.testName === declared[2])
+              .filter((entry) => !annotated.some((written) => written.includes(`Rule: ${entry.ruleId}`)))
+              .map((entry) => `${declared[1] ?? ""}/// Rule: ${entry.ruleId}`);
+
+      annotated.push(...claims, line);
+    }
+
+    return { path: file.path, content: annotated.join("\n") };
+  });
+}
+
+/** Write prompt-intent evidence above the test, so approval can trace words to execution. */
+export function annotateIntentCoverage(
+  tests: readonly GeneratedSource[],
+  coverage: readonly { readonly intentId: string; readonly testName: string }[],
+): readonly GeneratedSource[] {
+  if (coverage.length === 0) return tests;
+
+  return tests.map((file) => {
+    const lines = file.content.split("\n");
+    const annotated: string[] = [];
+
+    for (const line of lines) {
+      const declared = /^(\s*)function\s+([A-Za-z0-9_$]+)\s*\(/.exec(line);
+      const claims =
+        declared === null
+          ? []
+          : coverage
+              .filter((entry) => entry.testName === declared[2])
+              .filter((entry) => !annotated.some((written) => written.includes(`Intent: ${entry.intentId}`)))
+              .map((entry) => `${declared[1] ?? ""}/// Intent: ${entry.intentId}`);
 
       annotated.push(...claims, line);
     }
@@ -3273,6 +3379,47 @@ function thresholdBrief(specification: MarketSpecification): string {
 }
 
 /**
+ * The fee is not a suggestion the hook is free to restate.
+ *
+ * Cards, the specification and a generator note can all agree and the Solidity can still
+ * charge something else — FLOR took the named rate and then collected it again as an LP
+ * fee; THLD invented 0.3% underneath 2%. So Agen writes the comparison itself, and this
+ * is the instruction that says to call it rather than to describe it.
+ */
+function feePolicyBrief(specification: MarketSpecification): string {
+  if (feePolicySource(specification) === null) return "";
+
+  const gates = feeGates(specification);
+  const call =
+    gates.length === 0
+      ? "AgenFeePolicy.feePpm(buying, tokenAmount, totalSupply, poolLiquidity)"
+      : `AgenFeePolicy.feePpm(buying, tokenAmount, totalSupply, poolLiquidity, ${gates
+          .map((gate) => gate.name)
+          .join(", ")})`;
+
+  return [
+    "",
+    "Agen has already written contracts/AgenFeePolicy.sol from the locked specification. " +
+      "The rates and the size comparison in that file ARE this market. Import the library " +
+      `and call \`${call}\` for every trade that pays a fee. Do not declare your own fee ` +
+      "constants. Do not write a different comparison. Do not add an LP fee on top of the " +
+      "vault take. Your job is to take that rate into the vault and settle the delta.",
+    ...(gates.length === 0
+      ? []
+      : [
+          "",
+          "The trailing booleans are the gates Agen could not compute, because each turns " +
+            "on state only this hook keeps. Work out each one from your own storage before " +
+            "the call and pass it in. Do not decide the rate yourself once you know the " +
+            "answer — the policy already holds what each answer costs, including which " +
+            "gate wins when two are true at once:",
+          ...gates.map((gate) => `  - ${gate.name}: true exactly when ${gate.phrase}`),
+        ]),
+    "",
+  ].join("\n");
+}
+
+/**
  * What the component already has, so the generator adds to it rather than restating it.
  *
  * Without this the plan's `reuses` is a note nobody reads: the generator writes its own
@@ -3373,6 +3520,7 @@ export async function generateComponent(
       // luck — which is the failure this whole document exists to remove.
       `${deploymentBrief(deployed, deployment)}\n` +
       thresholdBrief(specification) +
+      (component.role === "hook" ? feePolicyBrief(specification) : "") +
       context.generation,
     input: [
       `The component to write:`,
@@ -3540,6 +3688,7 @@ export async function generateTests(
   provider: ModelProvider,
   {
     specification,
+    intent,
     sources,
     context,
     testEnvironment,
@@ -3551,6 +3700,7 @@ export async function generateTests(
     timeoutMs = STAGE_TIMEOUTS.generateTests,
   }: {
     readonly specification: MarketSpecification;
+    readonly intent?: CreatorIntent;
     readonly sources: readonly GeneratedSource[];
     readonly context: CuratedContext;
     readonly testEnvironment?: { readonly guidance: string };
@@ -3635,7 +3785,8 @@ export async function generateTests(
           "rename anything, and do not change the contracts: they are not in question here and " +
           "the market has already been reviewed against them. The coverage field must still " +
           "account for every invariant, including the ones proved by tests you are not " +
-          "returning.\n\n"
+          "returning. The ruleCoverage field must also continue to account for every rule, " +
+          "and intentCoverage for every objective prompt clause.\n\n"
         : rewriting
         ? "The test suite below is yours and it stays. It proves what this market claims, and " +
           "every file in it is accepted except the ones named here, which reach around the test " +
@@ -3650,7 +3801,8 @@ export async function generateTests(
           "yourself. Where a test proved something by calling a hook callback directly, prove " +
           "the same thing through a trade. Do not change the contracts: they are not in " +
           "question. The coverage field must still account for every invariant, including the " +
-          "ones proved by tests you are not returning.\n\n"
+          "ones proved by tests you are not returning. The ruleCoverage field must also " +
+          "continue to account for every rule, and intentCoverage for every objective prompt clause.\n\n"
         : validationProblems === undefined
         ? ""
         : "A previous test suite was rejected before compilation for these structural reasons:\n" +
@@ -3667,7 +3819,10 @@ export async function generateTests(
       "does NOT fire when they do not; every state transition, including the ones that must " +
       "be irreversible; that any accumulated value is conserved rather than created or lost; " +
       "and the boundary of every threshold — the trade one unit below it as well as one above. " +
-      "For every invariant in the specification write a fuzz or invariant test that stands " +
+      "For every rule, list at least one test that exercises both its firing and non-firing " +
+      "path in the ruleCoverage field. A rule without a passing cited test is unproved and " +
+      "blocks deployment. Every objective prompt clause below must likewise name the test " +
+      "that proves it in intentCoverage. For every invariant in the specification write a fuzz or invariant test that stands " +
       "behind it, and list which test proves which invariant in the coverage field. Give the " +
       "test's name exactly as you declared it. An invariant nothing in that list proves is " +
       "treated as unproven and blocks deployment; Agen writes the annotation into the file " +
@@ -3701,6 +3856,23 @@ export async function generateTests(
         "field naming that test:",
       specification.invariants.map((invariant) => `  ${invariant.id}: ${invariant.statement}`).join("\n"),
       "",
+      "Every one of these rules needs a passing test, and an entry in the ruleCoverage " +
+        "field naming that test:",
+      specification.rules
+        .map((rule) => `  ${rule.id}: ${rule.title} — ${rule.when.description}`)
+        .join("\n"),
+      "",
+      ...(intent === undefined
+        ? []
+        : [
+            "Every objective clause from the creator needs a passing test and an entry in " +
+              "intentCoverage:",
+            intent.atoms
+              .filter((atom) => atom.objective)
+              .map((atom) => `  ${atom.id}: ${atom.quote}`)
+              .join("\n"),
+            "",
+          ]),
       ...(core.length === 0
         ? []
         : [
@@ -3773,6 +3945,14 @@ export async function generateTests(
     ...entry,
     testName: (entry.testName.split(".").pop() ?? entry.testName).replace(/\s*\(.*$/, "").trim(),
   }));
+  const claimedRules = (output.value.ruleCoverage ?? []).map((entry) => ({
+    ...entry,
+    testName: (entry.testName.split(".").pop() ?? entry.testName).replace(/\s*\(.*$/, "").trim(),
+  }));
+  const claimedIntent = (output.value.intentCoverage ?? []).map((entry) => ({
+    ...entry,
+    testName: (entry.testName.split(".").pop() ?? entry.testName).replace(/\s*\(.*$/, "").trim(),
+  }));
 
   const declared = (files: readonly GeneratedSource[]): Set<string> =>
     new Set(
@@ -3791,8 +3971,20 @@ export async function generateTests(
   const placeable = claimed.filter(
     (entry) => declaredTests.has(entry.testName) || declaredCore.has(entry.testName),
   );
-  const annotated = annotateCoverage(returned, placeable);
-  const annotatedCore = annotateCoverage(core, placeable);
+  const placeableRules = claimedRules.filter(
+    (entry) => declaredTests.has(entry.testName) || declaredCore.has(entry.testName),
+  );
+  const placeableIntent = claimedIntent.filter(
+    (entry) => declaredTests.has(entry.testName) || declaredCore.has(entry.testName),
+  );
+  const annotated = annotateIntentCoverage(
+    annotateRuleCoverage(annotateCoverage(returned, placeable), placeableRules),
+    placeableIntent,
+  );
+  const annotatedCore = annotateIntentCoverage(
+    annotateRuleCoverage(annotateCoverage(core, placeable), placeableRules),
+    placeableIntent,
+  );
 
   /*
    * One unusable file is not a reason to lose the market.
@@ -3811,7 +4003,11 @@ export async function generateTests(
   const offenders = manualInfrastructureByFile(annotated);
   const survivors = annotated.filter((file) => !offenders.has(file.path));
   const proofSurvives =
-    survivors.length > 0 && uncovered(specification, [...annotatedCore, ...survivors]).length === 0;
+    survivors.length > 0 &&
+    uncovered(specification, [...annotatedCore, ...survivors]).length === 0 &&
+    uncoveredRules(specification, [...annotatedCore, ...survivors]).length === 0 &&
+    (intent === undefined ||
+      uncoveredIntent(intent, [...annotatedCore, ...survivors], [], specification).length === 0);
 
   const tests = proofSurvives ? survivors : annotated;
   const discarded = proofSurvives
@@ -3825,20 +4021,45 @@ export async function generateTests(
         `the coverage entry for "${entry.invariantId}" names a test called ${entry.testName}, ` +
         `which none of your files declare`,
     );
+  const inventedRules = claimedRules
+    .filter((entry) => !declaredTests.has(entry.testName) && !declaredCore.has(entry.testName))
+    .map(
+      (entry) =>
+        `the ruleCoverage entry for "${entry.ruleId}" names a test called ${entry.testName}, ` +
+        `which none of your files declare`,
+    );
+  const inventedIntent = claimedIntent
+    .filter((entry) => !declaredTests.has(entry.testName) && !declaredCore.has(entry.testName))
+    .map(
+      (entry) =>
+        `the intentCoverage entry for "${entry.intentId}" names a test called ${entry.testName}, ` +
+        `which none of your files declare`,
+    );
 
   // Checked here rather than at the deployment gate that will check it again. The gate
   // is the authority and stays where it is, but it runs after compilation, execution,
   // repair and deep validation, so a suite that never tested the mechanic costs a build
   // several minutes before anyone says so. Here it costs one call, and the complaint
   // names the invariants instead of arriving as a verdict.
-  const untested = uncovered(specification, [...annotatedCore, ...tests], annotatedCore);
+  const untested = [
+    ...uncovered(specification, [...annotatedCore, ...tests], annotatedCore),
+    ...uncoveredRules(specification, [...annotatedCore, ...tests], annotatedCore),
+    ...(intent === undefined
+      ? []
+      : uncoveredIntent(intent, [...annotatedCore, ...tests], annotatedCore, specification)),
+  ];
   const infrastructure =
     testEnvironment === undefined ? [] : manualTestInfrastructureProblems(tests);
-  const problems = [...invented, ...untested, ...infrastructure];
+  const problems = [...invented, ...inventedRules, ...inventedIntent, ...untested, ...infrastructure];
   if (problems.length > 0) {
     // Incomplete, rather than wrong: everything else about this suite was accepted, so the next
     // attempt can keep it and be asked only for what is missing. See `missingCoverage`.
-    const coverageOnly = untested.length > 0 && invented.length === 0 && infrastructure.length === 0;
+    const coverageOnly =
+      untested.length > 0 &&
+      invented.length === 0 &&
+      inventedRules.length === 0 &&
+      inventedIntent.length === 0 &&
+      infrastructure.length === 0;
 
     /*
      * Wrong in one file, rather than wrong throughout. See `manualInfrastructure`.
@@ -3847,7 +4068,11 @@ export async function generateTests(
      * two instructions contradict each other. A suite missing a test and misusing the fixture is
      * repaired here first, because the coverage check runs again on the corrected suite anyway.
      */
-    const fixableInfrastructure = infrastructure.length > 0 && invented.length === 0;
+    const fixableInfrastructure =
+      infrastructure.length > 0 &&
+      invented.length === 0 &&
+      inventedRules.length === 0 &&
+      inventedIntent.length === 0;
 
     throw new ArtefactError("test generation", problems, output.raw, tests, {
       ...(coverageOnly ? { missingCoverage: untested } : {}),
@@ -3899,6 +4124,98 @@ function uncovered(
         `one, exercising the contract that implements it rather than the one that is easiest ` +
         `to test, and add { invariantId: "${invariant.id}", testName: "<your test>" } to the ` +
         `coverage field.${alternative}`,
+    );
+}
+
+/** Rules that no generated or core test explicitly claims to exercise. */
+function uncoveredRules(
+  specification: MarketSpecification,
+  tests: readonly GeneratedSource[],
+  core: readonly GeneratedSource[] = [],
+): readonly string[] {
+  const coverage = claimCoverage(
+    "Rule",
+    specification.rules.map((rule) => rule.id),
+    tests,
+  );
+  const citable = [...core.flatMap((file) => [...file.content.matchAll(TEST_FUNCTION)])]
+    .map((match) => match[1] ?? "")
+    .filter((name) => name !== "");
+  const alternative =
+    citable.length === 0
+      ? ""
+      : ` If Agen's read-only core suite already exercises it, cite that test instead: ` +
+        `${citable.join(", ")}.`;
+
+  return specification.rules
+    .filter((rule) => (coverage.get(rule.id) ?? []).length === 0)
+    .map(
+      (rule) =>
+        `no test stands behind the rule "${rule.id}" (${rule.title}). Exercise both the ` +
+        `firing and non-firing path, then add { ruleId: "${rule.id}", testName: "<your test>" } ` +
+        `to ruleCoverage.${alternative}`,
+    );
+}
+
+/**
+ * Objective clauses from the original prompt that nothing executable stands behind.
+ *
+ * A clause counts as covered two ways, and the second is the one that matters: cited
+ * directly in `intentCoverage`, or carried by the rules it was linked to when those rules
+ * have tests of their own. That is not a concession — it is what `semanticCoverage` does at
+ * the launch gate, and this function exists only to say the same thing earlier and more
+ * cheaply.
+ *
+ * They used to disagree, and the disagreement was expensive. A prompt states one behaviour
+ * several ways — "a sell of exactly 1% must pay 4%", "not 0.5%", "the fees must not be
+ * added together" are three clauses about one rule — and demanding a separately named test
+ * for each rejected suites the gate would have accepted. Three rejections is an
+ * `INVALID_ARTEFACT`, so Exact Flow died at test generation on a market whose rules were
+ * every one of them proved. A pre-check stricter than the authority it precedes does not
+ * catch anything the authority would not; it only fails builds the authority would pass.
+ */
+function uncoveredIntent(
+  intent: CreatorIntent,
+  tests: readonly GeneratedSource[],
+  core: readonly GeneratedSource[] = [],
+  specification?: MarketSpecification,
+): readonly string[] {
+  const objective = intent.atoms.filter((atom) => atom.objective);
+  const coverage = claimCoverage(
+    "Intent",
+    objective.map((atom) => atom.id),
+    tests,
+  );
+
+  // Which rules have a test behind them, read the same way the rule check reads it.
+  const ruleCoverage =
+    specification === undefined
+      ? new Map<string, readonly string[]>()
+      : claimCoverage(
+          "Rule",
+          specification.rules.map((rule) => rule.id),
+          tests,
+        );
+
+  const provenByItsRules = (atom: CreatorIntent["atoms"][number]): boolean =>
+    atom.ruleIds.length > 0 &&
+    atom.ruleIds.every((id) => (ruleCoverage.get(id) ?? []).length > 0);
+
+  const citable = [...core.flatMap((file) => [...file.content.matchAll(TEST_FUNCTION)])]
+    .map((match) => match[1] ?? "")
+    .filter((name) => name !== "");
+  const alternative =
+    citable.length === 0
+      ? ""
+      : ` A read-only core test may be cited instead where it proves the clause: ${citable.join(", ")}.`;
+
+  return objective
+    .filter((atom) => (coverage.get(atom.id) ?? []).length === 0 && !provenByItsRules(atom))
+    .map(
+      (atom) =>
+        `no test stands behind the creator's clause "${atom.quote}", and no rule it belongs ` +
+        `to has one either. Add { intentId: "${atom.id}", testName: "<your test>" } to ` +
+        `intentCoverage.${alternative}`,
     );
 }
 
@@ -4020,7 +4337,10 @@ interface RawRepair {
  * not a repair decision about market behavior.
  */
 export function normalisePinnedV4Api(source: GeneratedSource): GeneratedSource {
-  const withImports = { ...source, content: normaliseVendoredImports(source.content) };
+  const withImports = {
+    ...source,
+    content: normaliseVendoredImports(renameReservedIdentifiers(source.content)),
+  };
 
   const wrong = "BeforeSwapDeltaLibrary.toBeforeSwapDelta";
   if (!withImports.content.includes(wrong)) return withImports;

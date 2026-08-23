@@ -528,6 +528,14 @@ ${wiring.join("\n")}
         });
     }
 
+    /// @notice The id of the pool this market was launched in.
+    /// @dev State a hook keeps has to be keyed by pool, because a hook's callbacks run for
+    /// any pool that names it. So a suite asserting on that state needs the market's own
+    /// key, and getting it from here means a test never constructs a PoolKey of its own.
+    function marketPoolId() internal view returns (PoolId) {
+        return key.toId();
+    }
+
     function buy(uint128 amountIn) internal returns (uint256 amountOut) {
         return buyAsWith(TRADER, amountIn, 0, "");
     }
@@ -639,6 +647,29 @@ ${wiring.join("\n")}
         );
 
         return target;
+    }
+
+    /**
+     * Sell whatever it takes to receive exactly this much of the quote asset.
+     *
+     * Not routed through AgenRouter, because AgenRouter only ever swaps an exact amount
+     * in — so this is both the exact-output case and the case of a trade arriving from a
+     * route this market did not choose. Both are things anybody can do to a live pool and
+     * neither used to be reachable from a generated suite.
+     *
+     * Public so a suite can wrap it in try/catch. A market that refuses the trade is
+     * answering honestly, and a caller should treat the revert as an answer rather than
+     * as a failure.
+     *
+     * @return tokensSpent What the sale actually cost, which the pool decided.
+     */
+    function sellForExactQuote(uint128 quoteOut) public returns (uint256 tokensSpent) {
+        if (tokenBalance(address(this)) == 0) buyAsWith(address(this), MIN_TRADE * 8, 0, "");
+        IERC20(launchedMarket.token).approve(address(swapRouter), type(uint256).max);
+
+        uint256 held = tokenBalance(address(this));
+        swapExactOut(key, false, quoteOut);
+        tokensSpent = held - tokenBalance(address(this));
     }
 
     function tokenBalance(address account) internal view returns (uint256) {

@@ -339,9 +339,17 @@ contract FlowAccounting is AgenWired {
 const CAST_GOOD = "        feeVault = FeeVault(payable(feeVault_));";
 const CAST_BAD = "        feeVault = FeeVault(feeVault_);";
 
-/** The correct call, and the two ways a guess gets it wrong. */
-const RECORD_GOOD =
-  "        feeAccounting.recordSellFee(currency, swapAmount(params) * SELL_FEE_PPM / 1_000_000);";
+/**
+ * The correct call, and the two ways a guess gets it wrong.
+ *
+ * The size comes from `tokenAmount` rather than `swapAmount` because this market's fee
+ * turns on how big the sell is, and only one of those two is an amount of the token. An
+ * exact-output sell has no answer before the swap runs, and this fixture takes the honest
+ * short way out of that — it refuses the trade rather than charging against the quote leg.
+ */
+const RECORD_GOOD = `        (uint256 sold, bool known) = tokenAmount(params);
+        if (!known) revert ExactOutputSellNotSupported();
+        feeAccounting.recordSellFee(currency, sold * SELL_FEE_PPM / 1_000_000);`;
 const RECORD_MISSING_MEMBER =
   "        feeAccounting.recordFee(currency, swapAmount(params) / 2, swapAmount(params) / 2);";
 const RECORD_WRONG_ARITY =
@@ -375,11 +383,14 @@ import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeS
 import {SwapParams} from "v4-core/src/types/PoolOperation.sol";
 import {Currency} from "v4-core/src/types/Currency.sol";
 import {AgenBaseHook} from "./AgenBaseHook.sol";
+import {AgenFeePolicy} from "./AgenFeePolicy.sol";
 import {FeeVault} from "./FeeVault.sol";
 import {FlowAccounting} from "./FlowAccounting.sol";
 
 contract FlowHook is AgenBaseHook {
     uint24 public constant SELL_FEE_PPM = 10_000;
+
+    error ExactOutputSellNotSupported();
 
     FeeVault public immutable feeVault;
     FlowAccounting public immutable feeAccounting;
@@ -401,14 +412,18 @@ ${permissions.map((name) => `        permissions.${name} = true;`).join("\n")}
         returns (BeforeSwapDelta, uint24)
     {
         if (isBuy(params)) return (BeforeSwapDeltaLibrary.ZERO_DELTA, ${
-          overrideFee ? "LPFeeLibrary.OVERRIDE_FEE_FLAG" : "0"
+          overrideFee
+            ? "AgenFeePolicy.feePpm(true, 0, 0, 0) | LPFeeLibrary.OVERRIDE_FEE_FLAG"
+            : "0"
         });
 
         address currency = Currency.unwrap(inputCurrency(key, params));
 ${record}
 
         return (BeforeSwapDeltaLibrary.ZERO_DELTA, ${
-          overrideFee ? "SELL_FEE_PPM | LPFeeLibrary.OVERRIDE_FEE_FLAG" : "0"
+          overrideFee
+            ? "AgenFeePolicy.feePpm(false, 0, 0, 0) | LPFeeLibrary.OVERRIDE_FEE_FLAG"
+            : "0"
         });
     }
 }
@@ -421,6 +436,8 @@ pragma solidity 0.8.26;
 import {MarketTestBase} from "./MarketTestBase.sol";
 
 contract FlowBehaviorTest is MarketTestBase {
+    /// Intent: intent-1
+    /// Rule: sell-fee
     function test_the_market_launches_and_trades() public {
         assertTrue(address(hook).code.length > 0);
         assertGt(buy(0.01 ether), 0);

@@ -27,7 +27,7 @@ import {
 import { SURCHARGE } from "./fixtures.js";
 import { Stage } from "./job.js";
 import { scriptedProvider } from "./model.js";
-import { runBuild } from "./pipeline.js";
+import { DEFAULT_BUDGET, runBuild } from "./pipeline.js";
 import { memoryJobStore } from "./store.js";
 import { createJobWorkspace, LAYOUT } from "./workspace.js";
 
@@ -155,13 +155,17 @@ pragma solidity 0.8.26;
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
+import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
 import {SwapParams} from "v4-core/src/types/PoolOperation.sol";
 import {AgenBaseHook} from "./AgenBaseHook.sol";
+import {AgenFeePolicy} from "./AgenFeePolicy.sol";
 
 contract StreakHook is AgenBaseHook {
-    uint256 public consecutiveBuys;
+    using PoolIdLibrary for PoolKey;
+
+    mapping(PoolId => uint256) public consecutiveBuys;
 
     constructor(IPoolManager manager_) AgenBaseHook(manager_) {}
 
@@ -169,17 +173,26 @@ contract StreakHook is AgenBaseHook {
         permissions.beforeSwap = true;
     }
 
-    function _beforeSwap(address, PoolKey calldata, SwapParams calldata params, bytes calldata)
+    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)
         internal
         override
         returns (BeforeSwapDelta, uint24)
     {
+        PoolId pool = key.toId();
+        bool streakComplete;
+
         if (!isBuy(params)) {
-            consecutiveBuys = 0;
+            consecutiveBuys[pool] = 0;
         } else {
-            consecutiveBuys += 1;
+            consecutiveBuys[pool] += 1;
+            if (consecutiveBuys[pool] >= 10) {
+                consecutiveBuys[pool] = 0;
+                streakComplete = true;
+            }
         }
-        uint24 fee = consecutiveBuys >= 10 ? 0 : 5_000;
+
+        uint24 fee = AgenFeePolicy.feePpm(isBuy(params), 0, 0, 0, streakComplete);
+
         return (BeforeSwapDeltaLibrary.ZERO_DELTA, fee | LPFeeLibrary.OVERRIDE_FEE_FLAG);
     }
 }
@@ -191,9 +204,12 @@ pragma solidity 0.8.26;
 import {MarketTestBase} from "./MarketTestBase.sol";
 
 contract StreakHookTest is MarketTestBase {
+    /// Rule: streak
     function test_feeCeiling_holds() public {
-        assertGt(buy(0.000001 ether), 0);
-        assertEq(hook.consecutiveBuys(), 1);
+        for (uint256 index = 0; index < 10; index++) {
+            assertGt(buy(0.000001 ether), 0);
+        }
+        assertEq(hook.consecutiveBuys(marketPoolId()), 0);
     }
 }
 `;
@@ -212,7 +228,14 @@ contract StreakHookTest is MarketTestBase {
                 id: "streak",
                 title: "STREAK",
                 when: { kind: "buy", description: "a buy", parameters: null },
-                conditions: [],
+                conditions: [
+                  {
+                    kind: "consecutiveCount",
+                    description: "the tenth consecutive buy",
+                    parameters: [{ key: "value", value: 10 }],
+                    combinator: null,
+                  },
+                ],
                 then: [
                   { kind: "waiveFee", description: "free", parameters: null, writes: ["consecutiveBuys"] },
                 ],
@@ -306,10 +329,22 @@ contract StreakHookTest is MarketTestBase {
         vendorRoot: VENDOR,
         generatedRoot,
         newId: () => "job-cleared",
+        budget: { ...DEFAULT_BUDGET, testRepairs: 0 },
       },
     );
 
-    expect(job.stage).toBe(Stage.DeploymentReady);
+    expect(
+      job.stage,
+      [
+        job.failure?.detail,
+        ...(job.failure?.failingTests ?? []).map(
+          (outcome) => `${outcome.name}: ${outcome.reason ?? "failed"}`,
+        ),
+        ...job.stages
+          .filter((stage) => stage.detail !== null)
+          .map((stage) => `${stage.stage}: ${stage.detail}`),
+      ].join("\n"),
+    ).toBe(Stage.DeploymentReady);
 
     const artifacts = JSON.parse(
       await readFile(join(generatedRoot, "job-cleared", LAYOUT.artifacts, "build.json"), "utf8"),
@@ -321,8 +356,11 @@ contract StreakHookTest is MarketTestBase {
       tests: { passed: number; failed: number };
     };
 
-    // Both components: the hook the model wrote and the token Agen wrote itself.
+    // Every contract this market is made of: the hook the model wrote, the token Agen
+    // wrote itself, and the fee policy it wrote from the specification — which is part of
+    // the market rather than a note about it, so it is in the record like the rest.
     expect(artifacts.contracts.map((entry) => entry.contractName).sort()).toEqual([
+      "AgenFeePolicy",
       "StreakHook",
       "StreakToken",
     ]);

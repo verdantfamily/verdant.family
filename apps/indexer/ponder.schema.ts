@@ -784,7 +784,15 @@ export const agenMarket = onchainTable(
     /** The registry's index, which is also creation order. */
     marketIndex: t.integer().notNull(),
     token: t.hex().notNull(),
-    /** The generated hook. Unique per market, unlike Verdant's one shared hook. */
+    /**
+     * The hook. Unique per market at engine 0, shared by every market at engine 1.
+     *
+     * Which means this column stopped being an identifier the moment the engine existed.
+     * `AgenMarketRegistry.marketByHook` is last-write-wins for a shared hook and would return
+     * whichever engine market launched most recently, so nothing may resolve a market through
+     * it: read `engineVersion` first, and address engine markets by pool id or token. The
+     * index below survives because "every market on this hook" is still a real question.
+     */
     hook: t.hex().notNull(),
     creator: t.hex().notNull(),
     /** `currency0`. The zero address is ether, which is what every launch opens against. */
@@ -806,6 +814,59 @@ export const agenMarket = onchainTable(
     specificationHash: t.hex().notNull(),
     implementationHash: t.hex().notNull(),
     metadataURI: t.text().notNull(),
+
+    // --- which engine built it, and what it was told -------------------------
+    //
+    // The discriminator, and the four columns that only mean anything when it is 1.
+    //
+    // One table rather than two, which is the opposite of the choice made between `market` and
+    // `agen_market` above — and for a reason that does not apply here. Those two share only a
+    // pool: different shape, different provenance, different feed. An engine market is an Agen
+    // market in every respect a consumer cares about — same registry, same locker, same three
+    // locked bands, same swap stream, same price — and differs in how its economics are stored:
+    // as a configuration a shared hook reads, rather than as a contract of its own. Four
+    // nullable columns is the honest size of that difference.
+    //
+    // Nothing may infer the engine from whether these are set. A build that failed before
+    // configuration has none of them and is not therefore engine 0.
+
+    /** 0 for a generated market, 1 for a configuration the shared engine executes. */
+    engineVersion: t.integer().notNull(),
+
+    /**
+     * The canonical configuration's hash, from the hook's own derivation. Engine 1 only.
+     *
+     * The hook computes this from the configuration it stored, rather than accepting it as an
+     * argument, so it is a fact about what will execute rather than a claim about it.
+     */
+    configHash: t.hex(),
+
+    /**
+     * The canonical configuration itself, as the bytes the commitment is taken over.
+     *
+     * This is the column that makes an engine market readable without its prompt. Decoding it
+     * with `@verdant/market-engine` yields every rate, threshold, recipient and protection the
+     * market will ever apply — so a consumer needs neither the creator's description nor the
+     * model that read it, which is the whole point of a deterministic engine.
+     *
+     * Null where the launch transaction could not be decoded, or where the bytes recovered from
+     * it did not hash to `configHash`. Null rather than approximate: a configuration that does
+     * not match its commitment is not this market's configuration, and storing it would be
+     * publishing economics no chain agreed to.
+     */
+    encodedConfig: t.hex(),
+
+    /** The market's own fee vault. One per market even though the hook is shared. */
+    vault: t.hex(),
+
+    /**
+     * Which asset programmable fees are taken in — the quote asset, or the launched token.
+     *
+     * Derived at launch rather than chosen: a market with size tiers must charge in the
+     * launched token, because that is what its thresholds are measured in. See ADR-018. Stored
+     * as the address so a consumer does not have to know the enum.
+     */
+    feeCurrency: t.hex(),
 
     // --- the token's own account of itself -----------------------------------
     name: t.text().notNull(),
@@ -843,6 +904,9 @@ export const agenMarket = onchainTable(
     creatorIdx: index().on(table.creator),
     tokenIdx: index().on(table.token),
     hookIdx: index().on(table.hook),
+    // "Every engine-1 market" is a question the API answers, and at engine 1 the hook index
+    // cannot answer it — one hook, many pools, and the shared hook is not a market key.
+    engineVersionIdx: index().on(table.engineVersion),
   }),
 );
 
@@ -873,8 +937,30 @@ export const agenSwap = onchainTable(
     sqrtPriceX96: t.bigint().notNull(),
     liquidity: t.bigint().notNull(),
     tick: t.integer().notNull(),
-    /** Hundredths of a basis point, as charged. 10 000 is 1%. */
+    /**
+     * Hundredths of a basis point, as charged. 10 000 is 1%.
+     *
+     * For a generated market this is the pool's reported fee, which is the hook's per-swap
+     * override and therefore the rate the trade actually paid.
+     *
+     * For an engine market it is **zero**, and that is not the rate. The engine hook sets the
+     * pool's LP fee to zero and takes its fee as a swap delta instead, so the Swap event has
+     * nothing to report. The real rate is in `feeAmount` and `programmableFeePpm` below,
+     * written from the hook's own `FeeTaken` event. A consumer wanting "what did this trade
+     * pay" should read those and fall back to this one only for engine-0 markets.
+     */
     feePpm: t.integer().notNull(),
+
+    /**
+     * The rate the engine charged, from the hook's `FeeTaken` event. Null on engine-0 swaps.
+     *
+     * Separate from `feePpm` rather than overwriting it because they are different
+     * measurements — one is what the pool charged, the other what Agen charged — and a market
+     * where both are meaningful should not have to choose which one to lose.
+     */
+    programmableFeePpm: t.integer(),
+    /** The fee taken, in the market's fee currency's base units. Null on engine-0 swaps. */
+    feeAmount: t.bigint(),
 
     timestamp: t.integer().notNull(),
     blockNumber: t.bigint().notNull(),

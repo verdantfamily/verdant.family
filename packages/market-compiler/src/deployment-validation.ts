@@ -36,8 +36,10 @@ import type { ContractArtifact } from "./artifacts.js";
 import type { DeployedComponent, DeploymentSpecification, SymbolicRef } from "./deployment-spec.js";
 import { parseRef } from "./deployment-spec.js";
 import { deploymentParityProblems } from "./deployment.js";
+import { feeDependsOnTradeSize } from "./fee-policy.js";
 import type { FeeRequirement } from "./feemode.js";
 import { preludeActivations } from "./prelude.js";
+import type { MarketSpecification } from "./spec.js";
 
 /** The modifier that means "the launch calls this". See `AgenWired`. */
 const INSTALLER_GUARD = "onlyInstaller";
@@ -53,6 +55,14 @@ export interface DeploymentValidationInput extends AnalysisInput {
    * day they do.
    */
   readonly fee: FeeRequirement;
+  /**
+   * The locked specification, where the caller has one.
+   *
+   * Only the checks that need to know what the market charges read it, and they stay
+   * silent without it rather than guessing — which keeps every existing caller, and
+   * every test that builds one of these by hand, working unchanged.
+   */
+  readonly specification?: MarketSpecification;
 }
 
 export interface DeploymentInconsistency {
@@ -96,8 +106,322 @@ export async function deploymentInconsistencies(
   found.push(...poolDisagreements(input));
   found.push(...permissionDisagreements({ sources, deployment: input.deployment }));
   found.push(...undeclaredDeltaReturns({ sources, deployment: input.deployment }));
+  found.push(...doubleCollectedFees({ sources, deployment: input.deployment }));
+  found.push(...hookIgnoresFeePolicy({ sources, deployment: input.deployment }));
+  found.push(...stateSharedAcrossPools({ sources, deployment: input.deployment }));
+  found.push(
+    ...sizeReadFromTheSpecifiedAmount({
+      sources,
+      deployment: input.deployment,
+      specification: input.specification,
+    }),
+  );
 
   return found;
+}
+
+/** The hook callbacks a pool that is not this market's can reach. */
+const CALLBACKS = [
+  "_beforeInitialize",
+  "_afterInitialize",
+  "_beforeAddLiquidity",
+  "_beforeSwap",
+  "_afterSwap",
+] as const;
+
+/**
+ * A hook keeping one counter for every pool that ever names it.
+ *
+ * Nothing stops a stranger calling `poolManager.initialize` with a `PoolKey` that names
+ * a deployed hook and two currencies of their own choosing. The pool is real, its swaps
+ * are real, and they run this hook's callbacks — so a streak counter held in a plain
+ * `uint256` is a counter anybody can drive, in a pool of worthless tokens, for the price
+ * of the gas. Ten dust buys over there and the free buy is waiting over here.
+ *
+ * Verdant's hand-written hook has always refused this: `InstantHook.beforeInitialize`
+ * rejects a pool the factory never registered. The generated ones inherit no such
+ * refusal, because `AgenBaseHook._beforeInitialize` is an empty virtual — so the
+ * requirement is stated here instead, against the only two shapes that actually hold:
+ * key the state by pool, or turn away every pool but this market's.
+ */
+export function stateSharedAcrossPools({
+  sources,
+  deployment,
+}: {
+  readonly sources: readonly { readonly ast: AstNode; readonly text: string }[];
+  readonly deployment: DeploymentSpecification;
+}): readonly DeploymentInconsistency[] {
+  const hook = deployment.components.find((component) => component.role === "hook");
+  if (hook === undefined) return [];
+
+  const contract = definitionOf(sources, hook.contractName);
+  if (contract === null) return [];
+
+  const source = sources.find((entry) =>
+    new RegExp(`contract\\s+${hook.contractName}\\b`).test(entry.text),
+  );
+  if (source !== undefined && pinsPool(source.text)) return [];
+
+  const shared = new Map<number, string>();
+  for (const node of (contract["nodes"] as AstNode[] | undefined) ?? []) {
+    if (node.nodeType !== "VariableDeclaration" || node["stateVariable"] !== true) continue;
+    // A constant cannot drift and an immutable is fixed at deployment, so neither can
+    // carry one pool's history into another.
+    if (node["mutability"] === "constant" || node["mutability"] === "immutable") continue;
+    if (keyedByPool(node)) continue;
+
+    const id = node["id"] as number | undefined;
+    const name = node.name as string | undefined;
+    if (typeof id === "number" && typeof name === "string") shared.set(id, name);
+  }
+
+  if (shared.size === 0) return [];
+
+  const written = [
+    ...new Set(
+      CALLBACKS.flatMap((callback) => {
+        const fn = (contract["nodes"] as AstNode[] | undefined)?.find(
+          (node) => node.nodeType === "FunctionDefinition" && node.name === callback,
+        );
+        return fn === undefined ? [] : assignedIn(fn, shared);
+      }),
+    ),
+  ];
+
+  if (written.length === 0) return [];
+
+  return [
+    {
+      contractName: hook.contractName,
+      detail:
+        `${hook.contractName} writes ${written.join(", ")} from a pool callback, and holds ` +
+        `${written.length === 1 ? "it" : "them"} for every pool at once. Anybody may open a ` +
+        `second pool naming this hook and two currencies of their own, and its swaps reach ` +
+        `these same callbacks — so that state can be driven for the cost of gas in a pool ` +
+        `nobody is trading, and the market's own rules turn on it. Fix it one of two ways: ` +
+        `key the state by pool (mapping(PoolId => ...)), or store this market's PoolId and ` +
+        `revert in every callback whose key.toId() is not it.`,
+    },
+  ];
+}
+
+/** Whether a state variable is a mapping the pool's own id indexes. */
+function keyedByPool(declaration: AstNode): boolean {
+  const type = declaration["typeName"] as AstNode | undefined;
+  if (type?.nodeType !== "Mapping") return false;
+
+  const key = type["keyType"] as AstNode | undefined;
+  const named = (key?.["typeDescriptions"] as { readonly typeString?: string } | undefined)
+    ?.typeString;
+
+  return named !== undefined && /\bPoolId\b|\bbytes32\b/.test(named);
+}
+
+/** The names among `candidates` that this function assigns to. */
+function assignedIn(fn: AstNode, candidates: ReadonlyMap<number, string>): readonly string[] {
+  const touched = new Set<string>();
+
+  const record = (target: AstNode | undefined): void => {
+    if (target === undefined || target === null) return;
+
+    // `counter = x`, `counter += x` and `map[k] = x` all arrive with the identifier
+    // somewhere under the left-hand side rather than as the left-hand side itself.
+    walk(target, (node) => {
+      if (node.nodeType !== "Identifier") return;
+      const referenced = node["referencedDeclaration"] as number | undefined;
+      const name = referenced === undefined ? undefined : candidates.get(referenced);
+      if (name !== undefined) touched.add(name);
+    });
+  };
+
+  walk(fn, (node) => {
+    if (node.nodeType === "Assignment") record(node["leftHandSide"] as AstNode | undefined);
+    if (node.nodeType === "UnaryOperation" && /^(?:\+\+|--)$/.test(String(node["operator"]))) {
+      record(node["subExpression"] as AstNode | undefined);
+    }
+  });
+
+  return [...touched];
+}
+
+/** Whether the hook compares a pool's id against anything, which is how a pin reads. */
+function pinsPool(text: string): boolean {
+  return /toId\(\)[^;\n]{0,160}(?:!=|==)/.test(text) || /(?:!=|==)[^;\n]{0,160}toId\(\)/.test(text);
+}
+
+/**
+ * A size-gated hook that believes `amountSpecified` is the amount of the token.
+ *
+ * On an exact-input sell it is: the specified currency is what the trader is spending,
+ * which is the launched token. On an exact-output sell — `amountSpecified > 0`, "give me
+ * exactly this much quote" — the specified currency is the *quote*, and the token going
+ * in is not known until the swap has run. A hook that measures the trade with
+ * `abs(amountSpecified)` therefore compares a quote amount against the token's total
+ * supply, and a threshold measured in the wrong currency is not a threshold.
+ *
+ * `context.ts` has told the generator this for a while. Nothing checked it, and nothing
+ * could have: `MarketTestBase` only ever swapped exact-input, so the one trade that
+ * exercises the bug never happened. Which makes it a free route around the surcharge for
+ * anybody who reads the contract — route exact-output and pay the base rate.
+ *
+ * Only raised where the fee actually turns on a size, and only where the hook shows no
+ * sign of having considered the case: a comparison of `amountSpecified` against zero, an
+ * `_afterSwap` that resolves it from the real delta, or a read of the unspecified side
+ * all count as having considered it.
+ */
+export function sizeReadFromTheSpecifiedAmount({
+  sources,
+  deployment,
+  specification,
+}: {
+  readonly sources: readonly { readonly text: string }[];
+  readonly deployment: DeploymentSpecification;
+  readonly specification: MarketSpecification | undefined;
+}): readonly DeploymentInconsistency[] {
+  if (specification === undefined) return [];
+  if (!feeDependsOnTradeSize(specification)) return [];
+
+  const hook = deployment.components.find((component) => component.role === "hook");
+  if (hook === undefined) return [];
+
+  const source = sources.find((entry) =>
+    new RegExp(`contract\\s+${hook.contractName}\\b`).test(entry.text),
+  );
+  if (source === undefined) return [];
+
+  /*
+   * The magnitude of the specified amount, taken without regard to which currency it is
+   * an amount of. Either written out as the ternary, or borrowed from the base hook's
+   * `swapAmount`, whose whole job is that ternary — the helper is the likelier of the
+   * two, because the generation prompt asks for it by name.
+   */
+  const magnitude =
+    /\bswapAmount\s*\(/.test(source.text) ||
+    /amountSpecified\s*<\s*0\s*\?/.test(source.text) ||
+    /amountSpecified\s*>\s*0\s*\?/.test(source.text);
+
+  if (!magnitude) return [];
+
+  /*
+   * Signs that the case was thought about. `tokenAmount` returns whether it knows, so a
+   * hook calling it has been handed the question; an `_afterSwap` is where the answer
+   * comes from when the swap has to run first; a read of the unspecified delta is the
+   * same answer taken earlier. A plain comparison against zero is deliberately NOT on
+   * this list — that is what the absolute-value ternary itself does.
+   */
+  const considered =
+    /\btokenAmount\s*\(/.test(source.text) ||
+    /\bfunction\s+_afterSwap\b/.test(source.text) ||
+    /\bgetUnspecifiedDelta\b/.test(source.text);
+
+  if (considered) return [];
+
+  return [
+    {
+      contractName: hook.contractName,
+      detail:
+        `${hook.contractName} decides a size-gated fee from the magnitude of ` +
+        `params.amountSpecified, which is an amount of whichever currency the swap named. ` +
+        `This market's threshold is measured in the launched token, and on an exact-output ` +
+        `sell the named currency is the quote asset — so the comparison is made in the wrong ` +
+        `currency, and the surcharge is avoided by asking for an exact amount out. Use ` +
+        `AgenBaseHook.tokenAmount(params), which returns (amount, known), and when known is ` +
+        `false either resolve the trade in _afterSwap from the token leg of the BalanceDelta ` +
+        `or refuse it. swapAmount is the size of the swap, not an amount of the token.`,
+    },
+  ];
+}
+
+/** True when the source both takes a fee and ORs a non-zero rate onto the LP override. */
+export function hookTakesAndOverrides(source: string): boolean {
+  const takes = /\b(?:takeInto|poolManager\.take)\s*\(/.test(source);
+  const alsoLp =
+    /(?:[1-9][\d_]*|[A-Za-z_]\w*)\s*\|\s*(?:LPFeeLibrary\.)?OVERRIDE_FEE_FLAG/.test(source);
+  return takes && alsoLp;
+}
+
+/**
+ * A hook that takes the fee into a vault *and* returns the same rate as an LP override.
+ *
+ * Those are two charges. Instant and THLD take into the vault and return a zero LP fee
+ * (`OVERRIDE_FEE_FLAG` alone). FLOR did both, so a trader who asked for 0.5% would pay
+ * about 1%. The cards said "collected by this market"; the decision note said "Uniswap
+ * LP fees". The code was doing both.
+ */
+function doubleCollectedFees({
+  sources,
+  deployment,
+}: {
+  readonly sources: readonly { readonly text: string }[];
+  readonly deployment: DeploymentSpecification;
+}): readonly DeploymentInconsistency[] {
+  const hook = deployment.components.find((component) => component.role === "hook");
+  if (hook === undefined) return [];
+
+  const source = sources.find((entry) =>
+    new RegExp(`contract\\s+${hook.contractName}\\b`).test(entry.text),
+  );
+  if (source === undefined) return [];
+
+  if (!hookTakesAndOverrides(source.text)) return [];
+
+  return [
+    {
+      contractName: hook.contractName,
+      detail:
+        `${hook.contractName} takes a fee into a vault and also returns that rate as a ` +
+        `Uniswap LP override. Those are two charges on the same swap. Return ` +
+        `LPFeeLibrary.OVERRIDE_FEE_FLAG alone (a zero pool fee) and let the vault take ` +
+        `be the only fee, or take nothing and let the LP override be the only fee.`,
+    },
+  ];
+}
+
+/**
+ * A hook that charges without calling the fee Agen already wrote.
+ *
+ * The policy library is the market: same rates, same boundary, same basis as the
+ * description. A hook that compiles its own constants can look finished and still be
+ * a different market — which is the failure the cards cannot catch.
+ */
+function hookIgnoresFeePolicy({
+  sources,
+  deployment,
+}: {
+  readonly sources: readonly { readonly text: string }[];
+  readonly deployment: DeploymentSpecification;
+}): readonly DeploymentInconsistency[] {
+  const policy = sources.find((entry) => /library\s+AgenFeePolicy\b/.test(entry.text));
+  if (policy === undefined) return [];
+
+  const hook = deployment.components.find((component) => component.role === "hook");
+  if (hook === undefined) return [];
+
+  const source = sources.find((entry) =>
+    new RegExp(`contract\\s+${hook.contractName}\\b`).test(entry.text),
+  );
+  if (source === undefined) return [];
+  const charges =
+    /\b(?:takeInto|poolManager\.take)\s*\(/.test(source.text) ||
+    /(?:[1-9][\d_]*|[A-Za-z_]\w*)\s*\|\s*(?:LPFeeLibrary\.)?OVERRIDE_FEE_FLAG/.test(
+      source.text,
+    ) ||
+    /\bupdateDynamicLPFee\s*\(/.test(source.text);
+  // A fixed-fee pool charges in Uniswap itself. Its hook has no fee decision to delegate
+  // to the policy library, so requiring a call here would manufacture a second fee path.
+  if (!charges) return [];
+  if (/AgenFeePolicy\s*\.\s*feePpm\s*\(/.test(source.text)) return [];
+
+  return [
+    {
+      contractName: hook.contractName,
+      detail:
+        `${hook.contractName} must call AgenFeePolicy.feePpm for the rate a trade pays. ` +
+        `Agen wrote that library from the description — the percentages, the size ` +
+        `threshold and which side of the boundary is included. A hook that invents its ` +
+        `own constants is a different market, even when the cards look right.`,
+    },
+  ];
 }
 
 /**

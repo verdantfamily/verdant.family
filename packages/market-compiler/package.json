@@ -23,10 +23,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "measure:precompile": "node scripts/precompile-recall.mjs",
+    "journey:emit": "tsc -p tsconfig.json && node --experimental-strip-types scripts/emit-journey.ts",
     "test:watch": "vitest"
   },
   "dependencies": {
     "@verdant/config": "workspace:*",
+    "@verdant/market-engine": "workspace:*",
     "undici": "^7.16.0",
     "viem": "^2.40.0"
   },

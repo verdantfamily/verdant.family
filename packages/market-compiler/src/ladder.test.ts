@@ -233,6 +233,20 @@ contract FeeHook {}`;
       already,
     );
   });
+
+  /**
+   * TESTC: a local variable named `after` costs a compile round that has not tested
+   * the market. The word is reserved in the pinned compiler.
+   */
+  it("renames a reserved identifier rather than leaving the file uncompilable", () => {
+    const corrected = normalisePinnedV4Api({
+      path: "test/FloorSellTest.t.sol",
+      content: "uint256 after = tokenBalance(TRADER);\n",
+    });
+
+    expect(corrected.content).toContain("uint256 after_ = tokenBalance(TRADER);");
+    expect(corrected.content).not.toContain("uint256 after =");
+  });
 });
 
 describe("what a compile repair is shown", () => {

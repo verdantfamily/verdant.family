@@ -74,8 +74,17 @@ import {
   invariantsWereProven,
 } from "./gates.js";
 import { coreTests, CORE_TEST_PATH } from "./core-tests.js";
+import { activeCreatorInstruction, creatorIntent } from "./intent.js";
 import { recogniseAll, remedyBrief } from "./playbook.js";
-import { lockedRates, unmetRates, unmetThresholds } from "./requirements.js";
+import {
+  applyStatedEconomics,
+  lockedRates,
+  unmetRates,
+  unmetSides,
+  unmetThresholds,
+} from "./requirements.js";
+import { FEE_POLICY_PATH, withFeePolicy } from "./fee-policy.js";
+import { claimCoverage, semanticCoverage } from "./semantic-coverage.js";
 import { thresholdEnglish } from "./threshold.js";
 import { classify, FailureCategory, tacticFor, Tactic } from "./recovery.js";
 import { Blame } from "./playbook.js";
@@ -630,7 +639,10 @@ export async function runBuild(
     // re-running it would hand the creator a different market from the one they were
     // looking at when the build died.
     if (resumed?.specification != null) {
-      specification = resumed.specification;
+      specification = applyStatedEconomics(
+        activeCreatorInstruction(request.prompt, resumed.specification),
+        resumed.specification,
+      );
       await carriedOver(Stage.Interpreting, "Kept the market Agen had already interpreted.");
     } else {
       job = await save(beginStage(job, Stage.Interpreting, now()));
@@ -648,7 +660,10 @@ export async function runBuild(
           keepRejections(Stage.Interpreting),
         );
 
-        specification = output.value;
+        specification = applyStatedEconomics(
+          activeCreatorInstruction(request.prompt, output.value),
+          output.value,
+        );
         for (const made of output.calls) {
           job = remember(job, Stage.Interpreting, made.output, null, made.label, retries);
         }
@@ -744,9 +759,14 @@ export async function runBuild(
      * Presence, not flatness, and read narrowly — see `requirements.ts` for why a share of a fee
      * and a percentage threshold must not count.
      */
-    const unmet = unmetRates(request.prompt, specification);
+    const requirementPrompt = activeCreatorInstruction(request.prompt, specification);
+    // A creator edit is recorded before its rules are re-derived. Judge the revised rules
+    // below, not the intentionally stale snapshot that exists only to tell `revise` what
+    // changed.
+    const pendingRevision = rulesAreStale(specification);
+    const unmet = unmetRates(requirementPrompt, specification);
 
-    if (unmet.length > 0) {
+    if (!pendingRevision && unmet.length > 0) {
       return await fail({
         code: FailureCode.Unsupported,
         stage: Stage.Interpreting,
@@ -779,9 +799,9 @@ export async function runBuild(
      * derived from the specification, and the specification was where the number had already
      * gone wrong. Agreement between things that share a source is not corroboration.
      */
-    const unmetThreshold = unmetThresholds(request.prompt, specification);
+    const unmetThreshold = unmetThresholds(requirementPrompt, specification);
 
-    if (unmetThreshold.length > 0) {
+    if (!pendingRevision && unmetThreshold.length > 0) {
       const said = unmetThreshold
         .map(({ stated, locked, fault }) => {
           const asked = thresholdEnglish(stated);
@@ -803,6 +823,31 @@ export async function runBuild(
           "threshold decides which trades pay the higher fee, so building this would mean " +
           "launching a market that treats a different set of trades as large. Say the " +
           "threshold once more, in one place, and try again.",
+      });
+    }
+
+    const chargedThoughFree = unmetSides(requirementPrompt, specification);
+    if (!pendingRevision && chargedThoughFree.length > 0) {
+      return await fail({
+        code: FailureCode.Unsupported,
+        stage: Stage.Interpreting,
+        detail:
+          `The description says ${chargedThoughFree.join(" and ")}s pay nothing, and this ` +
+          "market still charges them. That is a different market from the one that was " +
+          "asked for. Say which side pays, once, and try again.",
+      });
+    }
+
+    let intent = creatorIntent(request.prompt, specification);
+    job = { ...job, intent };
+    if (!pendingRevision && !intent.complete) {
+      return await fail({
+        code: FailureCode.Unsupported,
+        stage: Stage.Interpreting,
+        detail:
+          "Agen could not carry every objective part of the description into the market: " +
+          `${intent.problems.join("; ")}. The build stopped before writing contracts rather ` +
+          "than silently choosing different behavior.",
       });
     }
 
@@ -867,7 +912,11 @@ export async function runBuild(
           keepRejections(Stage.Interpreting),
         );
 
-        specification = output.value;
+        specification = applyStatedEconomics(
+          activeCreatorInstruction(request.prompt, output.value),
+          output.value,
+        );
+        intent = creatorIntent(request.prompt, specification);
         job = remember(job, Stage.Interpreting, output, null, "revision", retries);
       } catch (error) {
         job = rememberRejection(job, Stage.Interpreting, error);
@@ -879,6 +928,7 @@ export async function runBuild(
           {
             ...job,
             specification,
+            intent,
             specificationHistory: [...job.specificationHistory, specification],
           },
           { status: "succeeded", now: now() },
@@ -890,6 +940,16 @@ export async function runBuild(
       // unconditionally above: a stage reading a stale specification is the worst kind of
       // bug to find later.
       await workspace.writeJson(LAYOUT.specification, specification);
+
+      if (!intent.complete) {
+        return await fail({
+          code: FailureCode.Unsupported,
+          stage: Stage.Interpreting,
+          detail:
+            "Applying the creator's decisions left objective requirements out of the market: " +
+            `${intent.problems.join("; ")}. No contract was generated from that revision.`,
+        });
+      }
     }
 
     // --- plan ------------------------------------------------------------
@@ -953,7 +1013,7 @@ export async function runBuild(
     // tests run again below regardless — they are local, they cost seconds, and their
     // result depends on files this run has just laid down.
     if (resumed !== null && resumed.sources.length > 0) {
-      sources = resumed.sources;
+      sources = withFeePolicy(specification, resumed.sources, requirementPrompt);
       await carriedOver(
         Stage.CodeGeneration,
         `Kept the ${String(sources.length)} contract${
@@ -975,6 +1035,8 @@ export async function runBuild(
       //
       // A single component failing fails the stage, because a market missing a contract is
       // not a market, but the others are already done and are not asked for twice.
+      await workspace.write(withFeePolicy(specification, [], requirementPrompt));
+
       try {
         const written = await Promise.all(
           plan.components.map(async (component) => {
@@ -1047,7 +1109,11 @@ export async function runBuild(
           }),
         ).then((entries) => entries.filter((entry) => entry !== null));
 
-        sources = written.map((entry) => entry.source);
+        sources = withFeePolicy(
+          specification,
+          written.map((entry) => entry.source),
+          requirementPrompt,
+        );
         for (const entry of written) {
           if (entry.output !== null) {
             job = remember(job, Stage.CodeGeneration, entry.output, null, entry.component, entry.retries);
@@ -1064,6 +1130,7 @@ export async function runBuild(
     // --- compile, and repair until it does -------------------------------
 
     job = await save(beginStage(job, Stage.Compilation, now()));
+    sources = withFeePolicy(specification, sources, requirementPrompt);
     await workspace.write(sources);
 
     // "Stack too deep" is the one compiler error no rewrite is owed. It means the legacy
@@ -1289,9 +1356,17 @@ export async function runBuild(
 
       // The repair rewrites files in place, so the workspace keeps everything the
       // model did not touch. A round that returned one corrected file does not lose
-      // the other six.
-      sources = mergeSources(sources, repair.files);
-      await workspace.write(repair.files);
+      // the other six. The fee policy is Agen's: a repair that "fixes" the rates
+      // would be a different market, so it is written back from the specification.
+      sources = withFeePolicy(
+        specification,
+        mergeSources(sources, repair.files),
+        requirementPrompt,
+      );
+      await workspace.write([
+        ...repair.files.filter((file) => file.path !== FEE_POLICY_PATH),
+        ...sources.filter((file) => file.path === FEE_POLICY_PATH),
+      ]);
 
       job = await save(
         endStage({ ...job, sources }, { status: "succeeded", detail: repair.diagnosis, now: now() }),
@@ -1648,20 +1723,32 @@ export async function runBuild(
           deployment,
           artifacts: await marketArtifacts(),
           fee,
+          specification,
         });
 
         if (disagreements.length === 0) break;
 
-        // Which components can actually be written again. The token is Agen's own and its
-        // declaration is normalised to match it; a contract taken from the catalogue
-        // unchanged cannot be rewritten at all, so a disagreement naming one is a
-        // declaration that was wrong about a contract nobody is going to edit.
+        /*
+         * Which components can actually be written again: the ones this build wrote.
+         *
+         * The token is Agen's own and its declaration is normalised to match it, and a
+         * prelude contract is fixed and shared, so neither is editable. Everything else is
+         * decided by whether a generated source exists for it rather than by what the plan
+         * called its origin — which is the same question asked accurately.
+         *
+         * It used to read `origin !== "reuse"`, and that lost Exact Flow. Its planner marked
+         * the hook as reusing `base-hook`, which is true and says nothing about the file:
+         * `AgenBaseHook` is abstract, so a hook that reuses it is still a hook this build
+         * generated in full. The filter emptied, `rewritable.length === 0` stopped the loop
+         * on its first pass, and a market whose defect had a two-line fix and two repair
+         * rounds available was refused without either being spent.
+         */
         const rewritable = plan.components.filter(
           (component) =>
             disagreements.some((entry) => entry.contractName === component.contractName) &&
             component.role !== "token" &&
-            component.origin !== "reuse" &&
-            !PRELUDE_CONTRACTS.includes(component.contractName),
+            !PRELUDE_CONTRACTS.includes(component.contractName) &&
+            sources.some((file) => file.path === `${LAYOUT.contracts}/${component.contractName}.sol`),
         );
 
         const stop =
@@ -2110,6 +2197,9 @@ export async function runBuild(
       // the liquidity providers: there is no account of this market's for it to land in, and
       // an assertion that there is fails a market that is right. See `coreTests`.
       collectsItsOwnFee: deployment.pool.feeMode !== "dynamic",
+      // The same words the fee policy was written from, so the table and the library are
+      // two renderings of one reading rather than two readings.
+      prompt: requirementPrompt,
     });
 
     job = await save(beginStage(job, Stage.TestGeneration, now()));
@@ -2146,6 +2236,7 @@ export async function runBuild(
           try {
             return await generateTests(provider, {
               specification,
+              intent,
               sources,
               context,
               testEnvironment: generationEnvironment,
@@ -2395,14 +2486,30 @@ export async function runBuild(
       }));
     };
 
-    /** Whether a reduced suite still proves every invariant the specification declares. */
+    /** Whether a reduced suite still proves every prompt clause, rule and invariant. */
     const stillProves = (remaining: readonly GeneratedSource[]): boolean => {
+      const files = [core.source, ...remaining];
       const coverage = invariantCoverage({
         invariantIds: specification.invariants.map((invariant) => invariant.id),
-        sources: [core.source, ...remaining],
+        sources: files,
       });
+      const rules = claimCoverage(
+        "Rule",
+        specification.rules.map((rule) => rule.id),
+        files,
+      );
+      const objective = intent.atoms.filter((atom) => atom.objective);
+      const prompt = claimCoverage(
+        "Intent",
+        objective.map((atom) => atom.id),
+        files,
+      );
 
-      return [...coverage.values()].every((names) => names.length > 0);
+      return (
+        [...coverage.values()].every((names) => names.length > 0) &&
+        [...rules.values()].every((names) => names.length > 0) &&
+        [...prompt.values()].every((names) => names.length > 0)
+      );
     };
 
     /**
@@ -2478,6 +2585,7 @@ export async function runBuild(
           (problems) =>
             generateTests(provider, {
             specification,
+            intent,
             sources,
             context,
             testEnvironment: generationEnvironment,
@@ -3161,6 +3269,23 @@ export async function runBuild(
 
     job = await save(beginStage(job, Stage.FinalValidation, now()));
 
+    const coverage = semanticCoverage({
+      intent,
+      specification,
+      sources: [core.source, ...tests],
+      outcomes: [...tested.outcomes, ...deep.outcomes],
+    });
+    job = await save({ ...job, semanticCoverage: coverage });
+    if (!coverage.complete) {
+      return await fail({
+        code: FailureCode.GateBlocked,
+        stage: Stage.FinalValidation,
+        detail:
+          "This market cannot be deployed because its behavior is not fully proven: " +
+          coverage.unproven.join("; "),
+      });
+    }
+
     // The AST of the sources that actually passed. Reuses the build the early security
     // review already forced when no contract has changed since — see forcedBuild.
     const rebuilt = await forcedBuild();
@@ -3370,6 +3495,8 @@ export async function runBuild(
     let launchBuild = rebuilt;
     let launchable = await proveLaunchable(launchBuild);
     let lastSignature: string | null = null;
+    let finalProven = proven;
+    let finalSemanticOutcomes = [...tested.outcomes, ...deep.outcomes];
 
     while (!launchable.ok && deploymentAttempt < budget.deploymentRepairs) {
       const { problem } = launchable;
@@ -3470,6 +3597,28 @@ export async function runBuild(
         });
       }
 
+      const searchedAgain = await runSuite({ depth: "deep" });
+      diagnostics = withTestAttempt(
+        diagnostics,
+        testAttemptFrom(searchedAgain, testAttempt + deploymentAttempt + 2, now()),
+      );
+      await flushDiagnostics();
+      if (!searchedAgain.ok) {
+        return await fail({
+          code: FailureCode.TestsUnrepairable,
+          stage: Stage.DeploymentReady,
+          detail:
+            "A launchability repair passed ordinary tests but changed behavior under deep search.",
+          failingTests: searchedAgain.outcomes.filter((outcome) => !outcome.passed),
+          ...(searchedAgain.buildFailure === null
+            ? {}
+            : { diagnostics: searchedAgain.buildFailure }),
+        });
+      }
+      finalProven =
+        searchedAgain.outcomes.length > 0 ? searchedAgain.outcomes : reproven.outcomes;
+      finalSemanticOutcomes = [...reproven.outcomes, ...searchedAgain.outcomes];
+
       launchable = await proveLaunchable(launchBuild);
     }
 
@@ -3480,6 +3629,63 @@ export async function runBuild(
         detail:
           `This market compiled and passed its checks, but Agen cannot open a pool its own ` +
           `rules would accept. ${launchable.problem}`,
+      });
+    }
+
+    const finalCoverage = semanticCoverage({
+      intent,
+      specification,
+      sources: [core.source, ...tests],
+      outcomes: finalSemanticOutcomes,
+    });
+    job = await save({ ...job, semanticCoverage: finalCoverage });
+    if (!finalCoverage.complete) {
+      return await fail({
+        code: FailureCode.GateBlocked,
+        stage: Stage.DeploymentReady,
+        detail:
+          "The final launchable contracts no longer carry complete behavioral proof: " +
+          finalCoverage.unproven.join("; "),
+      });
+    }
+
+    const finalBaseVerdict = combine([
+      await analyseGenerated({
+        root: workspace.root,
+        buildOutput: launchBuild.output,
+        hookContractName: hookContract,
+      }),
+      invariantsWereProven({
+        invariantIds: specification.invariants.map((invariant) => invariant.id),
+        passingTests: finalProven.filter((outcome) => outcome.passed).map((outcome) => outcome.name),
+        coverage: invariantCoverage({
+          invariantIds: specification.invariants.map((invariant) => invariant.id),
+          sources: [core.source, ...tests],
+        }),
+      }),
+    ]);
+    const finalVerdict = combine([
+      finalBaseVerdict,
+      elevatedRiskIsCovered({
+        findings: finalBaseVerdict.findings,
+        fuzzedTests: finalProven
+          .filter(
+            (outcome) =>
+              outcome.passed && (outcome.runs ?? 0) > 1 && !isCoreOutcome(outcome),
+          )
+          .map((outcome) => outcome.name),
+      }),
+    ]);
+    job = { ...job, gateFindings: finalVerdict.findings };
+    if (!finalVerdict.passed) {
+      const blocker = finalVerdict.findings.find((finding) => finding.severity === "blocker");
+      return await fail({
+        code: FailureCode.GateBlocked,
+        stage: Stage.DeploymentReady,
+        detail:
+          "The final launchable contracts did not retain their safety proof. " +
+          `${blocker?.title ?? "A final gate failed"}: ${blocker?.detail ?? ""}`,
+        gateFindings: finalVerdict.findings,
       });
     }
 
@@ -3624,7 +3830,21 @@ export async function decideBuild(
       updated.version === specification.version
         ? existing.specificationHistory
         : [...existing.specificationHistory, updated],
-    ...(changed ? { plan: null, sources: [], tests: [] } : {}),
+    intent: null,
+    semanticCoverage: null,
+    approval: null,
+    ...(changed
+      ? {
+          plan: null,
+          deployment: null,
+          sources: [],
+          tests: [],
+          testOutcomes: [],
+          gateFindings: [],
+          simulation: null,
+          manifest: null,
+        }
+      : {}),
   };
 
   await options.store.write(decided);
@@ -3738,6 +3958,7 @@ function isModelTest(path: string): boolean {
 function isModelContract(path: string): boolean {
   return (
     path.startsWith(`${LAYOUT.contracts}/`) &&
+    path !== FEE_POLICY_PATH &&
     !PRELUDE_CONTRACTS.some((name) => path === `${LAYOUT.contracts}/${name}.sol`)
   );
 }

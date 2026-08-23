@@ -59,6 +59,32 @@ describe("the fee cards", () => {
     expect(cards[1]!.value).toBe("3%");
   });
 
+  /**
+   * PLN: a flat chargeFee on buyOrSell is already the two fee cards. Repeating it
+   * as "0.5% BUY AND SELL FEE" is the same leftover that sat under Floor.
+   */
+  it("does not repeat a flat chargeFee as a third card", () => {
+    const cards = behaviourCards(
+      specification({
+        baseFeePpm: 5_000,
+        maxFeePpm: 5_000,
+        rules: [
+          {
+            id: "trade-fee",
+            title: "0.5% BUY AND SELL FEE",
+            when: { kind: "buyOrSell", description: "On every buy or sell" },
+            conditions: [],
+            then: [{ kind: "chargeFee", description: "charge a 0.5% fee on the trade", parameters: { feePercent: 0.5 } }],
+          },
+        ],
+      } as Partial<MarketSpecification>),
+    );
+
+    expect(cards.map((card) => card.label)).toEqual(["BUY FEE", "SELL FEE"]);
+    expect(cards[0]!.value).toBe("0.5%");
+    expect(cards[1]!.value).toBe("0.5%");
+  });
+
   it("adds a surcharge to the base rather than showing the base", () => {
     const cards = behaviourCards(SELL_SURCHARGE);
     const sell = cards.find((card) => card.label === "SELL FEE")!;
@@ -260,6 +286,53 @@ describe("the card for a fee with a size threshold", () => {
     const buy = behaviourCards(PUSH).find((card) => card.label === "BUY FEE")!;
 
     expect(buy.value).toBe("2%");
+  });
+
+  /**
+   * FLOR on the review screen: two leftover cards restated the fees under their
+   * rule titles, and the sell card stayed flat at 0.5% because the 4% lived in
+   * a custom effect kind.
+   */
+  it("does not repeat Floor's fees as leftover cards, and shows the sell ladder", () => {
+    const flor = specification({
+      baseFeePpm: 5_000,
+      maxFeePpm: 40_000,
+      rules: [
+        {
+          id: "standard",
+          title: "0.5% BUY AND SELL FEE",
+          when: { kind: "buyOrSell", description: "any buy or sell" },
+          conditions: [],
+          then: [
+            { kind: "applyStandardFee", description: "charge a 0.5% fee on the buy or sell" },
+          ],
+        },
+        {
+          id: "large",
+          title: "4% LARGE-SELL FEE INSTEAD",
+          when: { kind: "sell", description: "on every sell" },
+          conditions: [
+            {
+              kind: "sellSizeVsTotalSupply",
+              description: "at least 1% of the total supply",
+              parameters: { operator: ">=", percent: 1, basis: "totalSupply" },
+            },
+          ],
+          then: [
+            { kind: "applyLargeSellFee", description: "charge a 4% fee instead of the standard 0.5% fee" },
+          ],
+        },
+      ],
+    } as Partial<MarketSpecification>);
+
+    const cards = behaviourCards(flor, { collection: "market" });
+
+    expect(cards.map((card) => card.label)).toEqual(["BUY FEE", "SELL FEE"]);
+    expect(cards.find((card) => card.label === "BUY FEE")!.value).toBe("0.5%");
+    expect(cards.find((card) => card.label === "SELL FEE")!.value).toBe("0.5% → 4%");
+    expect(cards.find((card) => card.label === "SELL FEE")!.note).toContain(
+      "at least 1% of the total supply",
+    );
   });
 });
 

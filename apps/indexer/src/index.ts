@@ -476,3 +476,13 @@ ponder.on("VerdantToken:MetadataURIUpdated", async ({ event, context }) => {
  * ordinary market, and the agent is a row that points at it.
  */
 import "./agents";
+
+/**
+ * Agen's deterministic engine, likewise for its side effects.
+ *
+ * Separate from `./agen` rather than folded into it, because the two are different launch paths
+ * with different factories and different events, and the one thing that must never happen is a
+ * market from one being read as a market from the other. The swap handler above needs no
+ * counterpart: engine markets land in `agen_market`, so `indexAgenSwap` already finds them.
+ */
+import "./agen-engine";

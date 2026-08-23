@@ -1,4 +1,5 @@
 import type { MechanicSection, StateDescriptor } from "@verdant/market-compiler/browser";
+import type { Review as EngineReview } from "@verdant/market-engine";
 
 import type { StateReading } from "../../lib/markets";
 import { DASH, feeRate } from "../../lib/format";
@@ -58,6 +59,71 @@ function renderValue(descriptor: StateDescriptor, reading: StateReading | undefi
     default:
       return String(value);
   }
+}
+
+/**
+ * HOW THIS TOKEN WORKS, for a market that is a configuration rather than a contract.
+ *
+ * The same section, the same styles, a different source — and the difference in source is the
+ * whole point. `Mechanics` above renders sentences `howThisMarketWorks` derived from a compiled
+ * specification. This renders the review cards the *engine* derived from the canonical
+ * configuration: the identical cards the creator read before signing, and the identical cards
+ * that configuration produces for anyone who decodes it off the chain.
+ *
+ * So there is nothing here to keep in step with anything. No second description of a market's
+ * economics exists to drift from the first.
+ *
+ * ## No live state
+ *
+ * An engine market declares no variables. The hook keeps two accumulators — elapsed time and
+ * cumulative quote volume — and both are already visible as the thresholds in the cards that
+ * use them. A "current state" panel would be a heading over the same numbers, or worse, over a
+ * zero for a market that simply has no state to show.
+ *
+ * ## Why the fee currency is named
+ *
+ * Because it is the one thing about an engine market a trader cannot infer. A market with size
+ * tiers collects its fee in the launched token rather than the quote asset (ADR-018), and
+ * somebody reading "4% on large sells" is entitled to know 4% of what, arriving as what.
+ */
+export function EngineMechanics({ review }: { readonly review: EngineReview }) {
+  return (
+    <section className="ax-tk-below" id="how-it-works">
+      <p className="ax-tk-label">How this token works</p>
+
+      <div className="ax-tk-rules">
+        <div className="ax-tk-rule">
+          <span>maximum fee</span>
+          <b>{review.maximumFee}</b>
+          <em>the most any single trade can pay</em>
+        </div>
+
+        <div className="ax-tk-rule">
+          <span>fees paid in</span>
+          <b>{review.feeCurrencySymbol}</b>
+          <em>{review.feeCurrencyReason}</em>
+        </div>
+
+        {review.cards.map((card) => (
+          <div className="ax-tk-rule" key={card.heading}>
+            <span>{card.heading.toLowerCase()}</span>
+            <ul>
+              {card.rows.map((row) => (
+                <li key={`${row.when}${row.then}`}>
+                  {row.when} — {row.then}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+
+      <p className="ax-tk-note">
+        These rules were fixed when the market launched. The engine that runs them has no owner
+        and no setter that could change them.
+      </p>
+    </section>
+  );
 }
 
 export function Mechanics({

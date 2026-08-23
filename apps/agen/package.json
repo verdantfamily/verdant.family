@@ -22,6 +22,7 @@
     "@verdant/agen-runtime": "workspace:*",
     "@verdant/config": "workspace:*",
     "@verdant/market-compiler": "workspace:*",
+    "@verdant/market-engine": "workspace:*",
     "@verdant/sdk": "workspace:*",
     "@wagmi/connectors": "8.0.26",
     "lightweight-charts": "^5.2.0",

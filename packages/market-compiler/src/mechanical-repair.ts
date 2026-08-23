@@ -31,6 +31,102 @@ import type { ContractApi } from "./contract-api.js";
 import type { Diagnostic } from "./foundry.js";
 import type { GeneratedSource } from "./workspace.js";
 
+/**
+ * Words Solidity 0.8.26 will not accept as identifiers.
+ *
+ * A local variable named `after` is the one that has ended real builds: the parser
+ * says "Expected ';' but got reserved keyword `after`", which does not read as
+ * "rename this variable", and a compile round spent on it has not tested the market.
+ * TESTC lost two of four rounds that way.
+ */
+const RESERVED_IDENTIFIERS = new Set([
+  "after",
+  "alias",
+  "apply",
+  "auto",
+  "byte",
+  "copyof",
+  "default",
+  "implements",
+  "inline",
+  "leave",
+  "let",
+  "macro",
+  "match",
+  "mutable",
+  "null",
+  "of",
+  "partial",
+  "promise",
+  "reference",
+  "relocatable",
+  "sealed",
+  "sizeof",
+  "static",
+  "supports",
+  "switch",
+  "typedef",
+  "typeof",
+  "var",
+]);
+
+/**
+ * Rename identifiers the pinned compiler will reject, leaving comments and strings alone.
+ *
+ * `afterSwap` is one identifier and is left alone. `after` is not, and becomes `after_`.
+ * Every use is renamed together, so a declaration and its reads stay the same name.
+ */
+export function renameReservedIdentifiers(content: string): string {
+  let out = "";
+  let at = 0;
+
+  while (at < content.length) {
+    if (content.startsWith("//", at)) {
+      const end = content.indexOf("\n", at);
+      const stop = end === -1 ? content.length : end + 1;
+      out += content.slice(at, stop);
+      at = stop;
+      continue;
+    }
+
+    if (content.startsWith("/*", at)) {
+      const end = content.indexOf("*/", at + 2);
+      const stop = end === -1 ? content.length : end + 2;
+      out += content.slice(at, stop);
+      at = stop;
+      continue;
+    }
+
+    const quote = content[at];
+    if (quote === '"' || quote === "'") {
+      let look = at + 1;
+      while (look < content.length && content[look] !== quote) {
+        if (content[look] === "\\") look += 1;
+        look += 1;
+      }
+      const stop = Math.min(look + 1, content.length);
+      out += content.slice(at, stop);
+      at = stop;
+      continue;
+    }
+
+    const start = content[at]!;
+    if (/[A-Za-z_]/.test(start)) {
+      let look = at + 1;
+      while (look < content.length && /[A-Za-z0-9_]/.test(content[look]!)) look += 1;
+      const ident = content.slice(at, look);
+      out += RESERVED_IDENTIFIERS.has(ident) ? `${ident}_` : ident;
+      at = look;
+      continue;
+    }
+
+    out += start;
+    at += 1;
+  }
+
+  return out;
+}
+
 export interface MechanicalRepair {
   /** The rewritten files, empty where nothing could be fixed outright. */
   readonly files: readonly GeneratedSource[];

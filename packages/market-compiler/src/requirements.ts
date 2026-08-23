@@ -49,9 +49,10 @@
  * exactly the trade a creator will check by hand.
  */
 
-import type { MarketSpecification, Rule } from "./spec.js";
-import { basisIn, inclusivityIn, sameThreshold, thresholdIn } from "./threshold.js";
-import type { SizeThreshold } from "./threshold.js";
+import type { Condition, MarketSpecification, Rule } from "./spec.js";
+import { DEFAULT_BASE_FEE_PPM } from "./spec.js";
+import { basisIn, feeSchedule, inclusivityIn, sameThreshold, thresholdIn } from "./threshold.js";
+import type { Side, SizeThreshold } from "./threshold.js";
 
 /** A rate the creator wrote down, in parts per million, with the words it was written in. */
 export interface StatedRate {
@@ -84,11 +85,11 @@ const PERCENTAGE_OF = new RegExp(
   [
     // A share of a fee already taken. KING's "20% of all trading fees go into a reward pool" is a
     // division of the fee; read as a fee it demands a market taking a fifth of every trade.
-    String.raw`^\s*of (?:the |that |all |collected |those )?(?:trading |swap |hook )?fees?\b`,
+    String.raw`^\s*of (?:the |that |all |every |collected |every collected |those )?(?:trading |swap |hook )?fees?\b`,
     String.raw`^\s*of (?:the )?(?:revenue|proceeds|takings|rewards?)\b`,
     // A threshold measured in percent, which is what CNPY's 1% is.
     String.raw`^\s*of (?:the )?(?:current )?(?:liquidity|pool|reserves|market ?cap|volume)\b`,
-    String.raw`^\s*of (?:the )?(?:total |circulating )?supply\b`,
+    String.raw`^\s*of (?:the )?(?:(?:token'?s?|token['’]s)\s+)?(?:immutable\s+)?(?:total |circulating |max )?supply\b`,
     String.raw`^\s*of (?:the )?holders\b`,
     String.raw`^\s*of (?:the )?treasury\b`,
   ].join("|"),
@@ -183,11 +184,46 @@ export function statedRates(prompt: string): readonly StatedRate[] {
       // rather than the whole prompt: a prompt that mentions a fee somewhere does not make every
       // number in it a rate.
       const context = prompt.slice(Math.max(0, at - 90), at + match[0].length + 90);
+      const before = prompt.slice(Math.max(0, at - 60), at);
       // What the number itself is about, as opposed to what the sentence is about.
       const after = prompt.slice(at + match[0].length, at + match[0].length + 40);
+      const sentenceStart = Math.max(
+        prompt.lastIndexOf(".", at - 1),
+        prompt.lastIndexOf("!", at - 1),
+        prompt.lastIndexOf("?", at - 1),
+        prompt.lastIndexOf("\n", at - 1),
+      );
+      const followingStops = [
+        prompt.indexOf(".", at + match[0].length),
+        prompt.indexOf("!", at + match[0].length),
+        prompt.indexOf("?", at + match[0].length),
+        prompt.indexOf("\n", at + match[0].length),
+      ].filter((stop) => stop >= 0);
+      const sentenceEnd =
+        followingStops.length === 0 ? prompt.length : Math.min(...followingStops);
+      const sentence = prompt.slice(sentenceStart + 1, sentenceEnd);
 
       if (!FEE_WORDS.test(context)) continue;
       if (PERCENTAGE_OF.test(after)) continue;
+      // "A sell of exactly 1% must pay 4%" restates the boundary trade. The first
+      // percentage is still the size of the sell, not another fee.
+      if (
+        /\b(?:buy|sell|trade)\s+(?:of\s+)?(?:exactly|at least|more than|over|above|below|under)\s*$/i.test(
+          before,
+        )
+      ) {
+        continue;
+      }
+      // Every percentage in "send 80% of the collected fee to X and 20% to Y" divides
+      // value already taken. Neither share is a second charge on the trader.
+      if (
+        /\b(?:send|route|split|allocate|distribute|goes?)\b/i.test(sentence) &&
+        /^\s*(?:of\s+(?:every\s+)?(?:collected\s+)?fees?\b|(?:goes?\s+)?to\s+(?:the\s+)?(?:fee\s+)?(?:creator|vault|treasury|beneficiary|buyback|reward))/i.test(
+          after,
+        )
+      ) {
+        continue;
+      }
       if (NOT_A_FEE_AT_ALL.test(after) || NOT_A_FEE_AT_ALL.test(context)) continue;
 
       const value = read === undefined ? Number(match[1]!.replaceAll(/[_,]/g, "")) : read(match[1]!);
@@ -226,9 +262,6 @@ export function lockedRates(specification: MarketSpecification): ReadonlySet<num
     for (const effect of rule.then) {
       for (const ppm of ratesIn(effect.parameters)) add(ppm);
     }
-    for (const condition of rule.conditions) {
-      for (const ppm of ratesIn(condition.parameters)) add(ppm);
-    }
   }
 
   return rates;
@@ -242,6 +275,7 @@ function ratesIn(parameters: Rule["then"][number]["parameters"]): readonly numbe
     if (typeof value !== "number") continue;
 
     const name = key.toLowerCase();
+    if (/share|split|portion|allocation|payout/.test(name)) continue;
     const ppm = name.includes("ppm")
       ? value
       : name.includes("bps") || name.includes("basispoint")
@@ -462,4 +496,484 @@ export function unmetThresholds(
 
     return [];
   });
+}
+
+/**
+ * Put the numbers the creator wrote back onto the market Agen read.
+ *
+ * `unmetRates` and `unmetThresholds` refuse a build that still disagrees. That is the
+ * right last line, and it is the wrong only line: a model that drops a named gate or
+ * swaps 2% for the familiar 1% has not made a judgement — it has lost a fact — and
+ * asking the creator to "say the threshold once more" is charging them for a copy
+ * error. The cards can be patched at display time. The hook cannot. So the
+ * specification is repaired here, before a line of Solidity is written, from the same
+ * reading the guards already trust.
+ *
+ * Narrow on purpose. A rate or a threshold this file cannot see is left alone; inventing
+ * one would be the same crime the model committed.
+ */
+export function applyStatedEconomics(
+  prompt: string,
+  specification: MarketSpecification,
+): MarketSpecification {
+  return pinSellGates(
+    prompt,
+    applyStatedThresholds(
+      prompt,
+      applyStatedSides(
+        prompt,
+        stripInventedFeeAssumptions(prompt, applyStatedRates(prompt, specification)),
+      ),
+    ),
+  );
+}
+
+export function applyStatedThresholds(
+  prompt: string,
+  specification: MarketSpecification,
+): MarketSpecification {
+  const unmet = unmetThresholds(prompt, specification);
+  if (unmet.length === 0) return specification;
+
+  let rules = specification.rules;
+
+  for (const { stated, locked, fault } of unmet) {
+    if (fault === "moved" || fault === "boundary") {
+      rules = rules.map((rule) => rewriteRuleThreshold(rule, stated, locked));
+      continue;
+    }
+
+    rules = attachThreshold(rules, stated, prompt);
+  }
+
+  return rules === specification.rules ? specification : { ...specification, rules };
+}
+
+/**
+ * A planning note that pretends a named rate or threshold was never given.
+ *
+ * Those notes are how a correct market still looks "built differently" on the review
+ * screen. The description already settled the number; the note is a leftover of the
+ * model not seeing it.
+ */
+export function keepAdaptation(
+  adaptation: { readonly requested: string; readonly implemented: string; readonly reason: string },
+  prompt: string,
+): boolean {
+  const text = `${adaptation.requested} ${adaptation.implemented} ${adaptation.reason}`;
+  const pretendsUnset =
+    /missing threshold|unspecified|defines neither|without specifying|did(?:n't| not) specify|no distinct|left open|stated (?:hard )?ceiling|maximum cap|qualification predicate|choosing either omitted|invent(?:ed|ing)? (?:market economics|a (?:rate|fee))/i.test(
+      text,
+    );
+
+  if (!pretendsUnset) return true;
+  return statedThresholds(prompt).length === 0 && statedRates(prompt).length === 0;
+}
+
+/**
+ * A side the creator said pays nothing, or both sides they said pay the same rate.
+ *
+ * Rates and thresholds can be present and the market still be wrong: "Sells pay half a
+ * percent. Buys pay nothing." launched as 0.5% both ways because the 0.5% was *somewhere*
+ * and that was all `unmetRates` asked. The side is part of what they wrote.
+ */
+export function statedFreeSides(prompt: string): readonly Side[] {
+  const found: Side[] = [];
+
+  for (const [side, word] of [
+    ["buy", "buys?"] as const,
+    ["sell", "sells?"] as const,
+  ]) {
+    const named = new RegExp(
+      String.raw`\b${word}\s+(?:pay(?:s)?\s+)?(?:nothing|no(?:\s+hook)?\s+fees?|zero|0(?:\.0+)?\s*%|free)\b` +
+        String.raw`|\bno(?:\s+hook)?\s+fees?\s+on\s+${word}\b` +
+        String.raw`|\b${word}\s+(?:are|is|have|has)\s+(?:free|nothing|no(?:\s+hook)?\s+fees?)\b`,
+      "i",
+    );
+    if (named.test(prompt)) found.push(side);
+  }
+
+  return found;
+}
+
+function bothSidesPay(prompt: string): boolean {
+  return (
+    statedFreeSides(prompt).length === 0 &&
+    /\bon every buy and every sell\b|\bevery buy and every sell\b|\bboth buys? and sells?\b|\bbuys? and sells? pay\b/i.test(
+      prompt,
+    )
+  );
+}
+
+function applyStatedSides(
+  prompt: string,
+  specification: MarketSpecification,
+): MarketSpecification {
+  let next = applyFreeSides(prompt, specification);
+  next = applyBothSides(prompt, next);
+  return applyInstead(prompt, next);
+}
+
+function applyFreeSides(
+  prompt: string,
+  specification: MarketSpecification,
+): MarketSpecification {
+  const free = statedFreeSides(prompt);
+  if (free.length === 0) return specification;
+
+  let rules = specification.rules;
+
+  for (const side of free) {
+    const other: Side = side === "buy" ? "sell" : "buy";
+    rules = rules.map((rule) => {
+      if (rule.when.kind !== "swap" && rule.when.kind !== "buyOrSell" && rule.when.kind !== "trade") {
+        return rule;
+      }
+      return { ...rule, when: { ...rule.when, kind: other } };
+    });
+
+    const schedule = feeSchedule({ ...specification, rules }, side);
+    if (schedule !== null && schedule.basePpm === 0 && schedule.tier === null) continue;
+    rules = ensureSideFee(rules, side, 0);
+  }
+
+  return rules === specification.rules ? specification : { ...specification, rules };
+}
+
+function applyBothSides(
+  prompt: string,
+  specification: MarketSpecification,
+): MarketSpecification {
+  if (!bothSidesPay(prompt)) return specification;
+
+  const ordinary = Math.min(...statedRates(prompt).map((rate) => rate.ppm));
+  if (!Number.isFinite(ordinary)) return specification;
+
+  const buy = feeSchedule(specification, "buy");
+  if (buy !== null && buy.basePpm === ordinary) return specification;
+
+  const host = specification.rules.find(
+    (rule) =>
+      (rule.when.kind === "sell" || rule.when.kind === "buy") &&
+      rule.conditions.every((condition) => thresholdIn(condition) === null) &&
+      ruleHasRate(rule, ordinary),
+  );
+
+  if (host !== undefined) {
+    return {
+      ...specification,
+      rules: specification.rules.map((rule) =>
+        rule.id === host.id ? { ...rule, when: { ...rule.when, kind: "swap" } } : rule,
+      ),
+    };
+  }
+
+  return { ...specification, rules: ensureSideFee(specification.rules, "buy", ordinary) };
+}
+
+function applyInstead(
+  prompt: string,
+  specification: MarketSpecification,
+): MarketSpecification {
+  if (!/\binstead\b/i.test(prompt)) return specification;
+
+  const rules = specification.rules.map((rule) => {
+    if (!rule.conditions.some((condition) => thresholdIn(condition) !== null)) return rule;
+    if (!rule.then.some((effect) => effect.kind === "extraFee")) return rule;
+    return {
+      ...rule,
+      then: rule.then.map((effect) => (effect.kind === "extraFee" ? { ...effect, kind: "setFee" } : effect)),
+    };
+  });
+
+  return rules.every((rule, at) => rule === specification.rules[at])
+    ? specification
+    : { ...specification, rules };
+}
+
+function ensureSideFee(rules: readonly Rule[], side: Side, ppm: number): readonly Rule[] {
+  const existing = rules.find(
+    (rule) =>
+      rule.when.kind === side &&
+      rule.conditions.every((condition) => thresholdIn(condition) === null) &&
+      rule.then.some((effect) => /fee|tax|charge|skim|toll|cut/i.test(effect.kind)),
+  );
+
+  if (existing !== undefined) {
+    return rules.map((rule) =>
+      rule.id === existing.id
+        ? {
+            ...rule,
+            then: rule.then.map((effect) =>
+              /fee|tax|charge|skim|toll|cut/i.test(effect.kind)
+                ? { ...effect, parameters: { ...(effect.parameters ?? {}), feePpm: ppm } }
+                : effect,
+            ),
+          }
+        : rule,
+    );
+  }
+
+  return [
+    ...rules,
+    {
+      id: `${side}-fee`,
+      title: ppm === 0 ? `${side.toUpperCase()}S PAY NOTHING` : `${side.toUpperCase()} FEE`,
+      when: { kind: side, description: ppm === 0 ? `${side}s pay no hook fee` : `a ${side}` },
+      conditions: [],
+      then: [
+        {
+          kind: "setFee",
+          description: ppm === 0 ? "no fee" : `charge ${(ppm / 10_000).toFixed(ppm % 10_000 === 0 ? 0 : 1)}%`,
+          parameters: { feePpm: ppm },
+        },
+      ],
+    },
+  ];
+}
+
+/** Sides the creator said are free that this market still charges. */
+export function unmetSides(prompt: string, specification: MarketSpecification): readonly Side[] {
+  return statedFreeSides(prompt).filter((side) => {
+    const schedule = feeSchedule(specification, side);
+    return schedule !== null && (schedule.basePpm > 0 || (schedule.tier !== null && schedule.tier.ppm > 0));
+  });
+}
+
+function applyStatedRates(
+  prompt: string,
+  specification: MarketSpecification,
+): MarketSpecification {
+  const stated = statedRates(prompt);
+  if (stated.length === 0) return specification;
+
+  const ordinary = Math.min(...stated.map((rate) => rate.ppm));
+  const ceiling = Math.max(...stated.map((rate) => rate.ppm));
+  let next = specification;
+
+  // The catalogue default is 0.3%. It is a convenience for a prompt that named no rate,
+  // and a different market when the creator named one.
+  if (next.baseFeePpm === DEFAULT_BASE_FEE_PPM && !stated.some((rate) => rate.ppm === DEFAULT_BASE_FEE_PPM)) {
+    next = { ...next, baseFeePpm: ordinary };
+  }
+
+  if (next.maxFeePpm < ceiling) {
+    next = { ...next, maxFeePpm: ceiling };
+  }
+
+  const locked = lockedRates(next);
+  const missing = stated.filter((rate) => !locked.has(rate.ppm));
+  if (missing.length === 0) return next;
+
+  // A fee effect that invents a rate nobody asked for is rewritten to the unmatched
+  // stated rate when there is exactly one of each — the usual "0.3% instead of 0.5%"
+  // substitution, not a puzzle with several answers.
+  if (missing.length === 1) {
+    const invented = [...locked].filter((ppm) => !stated.some((rate) => rate.ppm === ppm));
+    if (invented.length === 1) {
+      next = {
+        ...next,
+        rules: next.rules.map((rule) => ({
+          ...rule,
+          then: rule.then.map((effect) =>
+            rewriteRate(effect, invented[0]!, missing[0]!.ppm),
+          ),
+        })),
+        ...(next.baseFeePpm === invented[0] ? { baseFeePpm: missing[0]!.ppm } : {}),
+      };
+    }
+  }
+
+  return next;
+}
+
+function rewriteRate(
+  effect: Rule["then"][number],
+  from: number,
+  to: number,
+): Rule["then"][number] {
+  const parameters = effect.parameters;
+  if (parameters === undefined) return effect;
+
+  const next: Record<string, (typeof parameters)[string]> = { ...parameters };
+  let changed = false;
+
+  for (const [key, value] of Object.entries(parameters)) {
+    if (typeof value !== "number") continue;
+    const name = key.toLowerCase();
+    if (name.includes("ppm") && value === from) {
+      next[key] = to;
+      changed = true;
+    }
+    if ((name.includes("percent") || name.includes("pct")) && Math.round(value * 10_000) === from) {
+      next[key] = to / 10_000;
+      changed = true;
+    }
+  }
+
+  return changed ? { ...effect, parameters: next } : effect;
+}
+
+function rewriteRuleThreshold(
+  rule: Rule,
+  stated: SizeThreshold,
+  locked: SizeThreshold | null,
+): Rule {
+  const matches = (threshold: SizeThreshold | null): boolean => {
+    if (threshold === null) return false;
+    if (locked !== null) return sameThreshold(threshold, locked) || threshold.basis === stated.basis;
+    return threshold.basis === stated.basis;
+  };
+
+  return {
+    ...rule,
+    when: matches(thresholdIn(asCondition(rule.when)))
+      ? { ...rule.when, description: stated.phrase, parameters: thresholdParameters(stated) }
+      : rule.when,
+    conditions: rule.conditions.map((condition) =>
+      matches(thresholdIn(condition)) ? withThreshold(condition, stated) : condition,
+    ),
+  };
+}
+
+function attachThreshold(
+  rules: readonly Rule[],
+  stated: SizeThreshold,
+  prompt: string,
+): readonly Rule[] {
+  const side = sideForThreshold(prompt, stated);
+  const elevated = Math.max(0, ...statedRates(prompt).map((rate) => rate.ppm));
+  const carriers = rules.filter((rule) => canCarryThreshold(rule, side));
+  const host =
+    carriers.find((rule) => ruleHasRate(rule, elevated) && elevated > 0) ??
+    carriers.find((rule) => rule.conditions.some((condition) => thresholdIn(condition) !== null)) ??
+    carriers.find((rule) => thresholdIn(asCondition(rule.when)) !== null);
+
+  // A buy-only market is not a host for a sell gate. Inventing a sell rule here
+  // would be a different market, and the guard after this function still stops
+  // the build.
+  if (host === undefined) return rules;
+
+  const gated = host.conditions.some((condition) => thresholdIn(condition) !== null);
+  return rules.map((rule) => {
+    if (rule.id !== host.id) return rule;
+    return {
+      ...rule,
+      when:
+        side !== "swap" && (rule.when.kind === "swap" || rule.when.kind === "buyOrSell")
+          ? { ...rule.when, kind: side }
+          : rule.when,
+      conditions: gated
+        ? rule.conditions.map((condition) =>
+            thresholdIn(condition) === null ? condition : withThreshold(condition, stated),
+          )
+        : [...rule.conditions, sizeCondition(stated)],
+    };
+  });
+}
+
+function canCarryThreshold(rule: Rule, side: "buy" | "sell" | "swap"): boolean {
+  if (side === "buy") return rule.when.kind === "buy" || BOTH.has(rule.when.kind);
+  if (side === "sell") return rule.when.kind === "sell" || BOTH.has(rule.when.kind);
+  return rule.when.kind === "buy" || rule.when.kind === "sell" || BOTH.has(rule.when.kind);
+}
+
+const BOTH = new Set(["swap", "trade", "buyOrSell", "buyAndSell"]);
+
+function ruleHasRate(rule: Rule, ppm: number): boolean {
+  return rule.then.some((effect) => {
+    for (const [key, value] of Object.entries(effect.parameters ?? {})) {
+      if (typeof value !== "number") continue;
+      const name = key.toLowerCase();
+      if (name.includes("ppm") && value === ppm) return true;
+      if ((name.includes("percent") || name.includes("pct")) && Math.round(value * 10_000) === ppm) {
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
+function pinSellGates(prompt: string, specification: MarketSpecification): MarketSpecification {
+  const stated = statedThresholds(prompt);
+  if (stated.length === 0) return specification;
+  if (!stated.every((threshold) => sideForThreshold(prompt, threshold) === "sell")) {
+    return specification;
+  }
+
+  const elevated = Math.max(0, ...statedRates(prompt).map((rate) => rate.ppm));
+  const rules = specification.rules.map((rule) => {
+    if (rule.when.kind !== "buy" && rule.when.kind !== "buyOrSell") return rule;
+    if (elevated > 0 && ruleHasRate(rule, elevated)) return rule;
+    const without = rule.conditions.filter((condition) => thresholdIn(condition) === null);
+    return without.length === rule.conditions.length ? rule : { ...rule, conditions: without };
+  });
+
+  return rules.every((rule, at) => rule === specification.rules[at])
+    ? specification
+    : { ...specification, rules };
+}
+
+function stripInventedFeeAssumptions(
+  prompt: string,
+  specification: MarketSpecification,
+): MarketSpecification {
+  if (statedRates(prompt).length === 0) return specification;
+  const assumptions = specification.assumptions.filter(
+    (assumption) =>
+      !/default.{0,40}(?:3,?000|0\.3\s*%|3000\s*ppm)|0\.3\s*%.{0,40}(?:LP|pool)|pool fee/i.test(
+        `${assumption.interpretation} ${assumption.why}`,
+      ),
+  );
+  return assumptions.length === specification.assumptions.length
+    ? specification
+    : { ...specification, assumptions };
+}
+
+function sideForThreshold(prompt: string, stated: SizeThreshold): "buy" | "sell" | "swap" {
+  const at = prompt.indexOf(stated.phrase);
+  // The clause the number sits in, not the sentence before it. FLOR says
+  // "every buy and every sell" and then "on any sell of at least 1%" — a
+  // window wide enough to see both words would call a sell gate a swap gate.
+  const from = at >= 0 ? Math.max(0, at - 36) : 0;
+  const clause = (at >= 0 ? prompt.slice(from, at + stated.phrase.length) : prompt)
+    .split(/[.!?]/)
+    .at(-1) ?? "";
+  const buys = /\bbuys?\b/i.test(clause);
+  const sells = /\bsells?\b/i.test(clause);
+  if (buys && !sells) return "buy";
+  if (sells && !buys) return "sell";
+  return "swap";
+}
+
+function asCondition(trigger: Rule["when"]): Condition {
+  return {
+    kind: trigger.kind,
+    description: trigger.description,
+    ...(trigger.parameters === undefined ? {} : { parameters: trigger.parameters }),
+  };
+}
+
+function withThreshold(condition: Condition, stated: SizeThreshold): Condition {
+  return {
+    ...condition,
+    description: stated.phrase,
+    parameters: { ...(condition.parameters ?? {}), ...thresholdParameters(stated) },
+  };
+}
+
+function sizeCondition(stated: SizeThreshold): Condition {
+  return {
+    kind: stated.basis === "liquidity" ? "tradeSizeVsLiquidity" : "tradeSizeVsSupply",
+    description: stated.phrase,
+    parameters: thresholdParameters(stated),
+  };
+}
+
+function thresholdParameters(stated: SizeThreshold): Record<string, string | number> {
+  return {
+    operator: stated.inclusive === true ? ">=" : ">",
+    percent: stated.percent,
+    basis: stated.basis === "supply" ? "totalSupply" : stated.basis === "liquidity" ? "poolLiquidity" : stated.basis,
+  };
 }

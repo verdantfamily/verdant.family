@@ -164,14 +164,73 @@ factory requires the token's address to sort above the quote asset. Therefore:
   params.zeroForOne == false  spends the token to receive the quote asset: a SELL.
 
 params.amountSpecified is negative for an exact-input swap and positive for exact-output.
-Take its absolute value before comparing it to anything.
+Its absolute value is an amount of whichever currency the swap *specified*, which is not
+whichever one your rule is about. On an exact-input sell the specified currency is the
+launched token; on an exact-output sell it is the quote asset.
 
-Returning a fee from beforeSwap requires the override flag:
-    return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA,
-            feePpm | LPFeeLibrary.OVERRIDE_FEE_FLAG);
-Without OVERRIDE_FEE_FLAG the pool keeps its stored fee and the rule silently does nothing.
+So a size measured in the token — "a sell of at least 1% of the supply" — cannot be
+settled from |amountSpecified| alone. Exact input hands it to you. Exact output does not
+know it until the swap has run, so resolve that case in _afterSwap from the token leg of
+the BalanceDelta. A hook that skips this compares a quote amount against a token supply
+and charges the base rate on every sell routed exact-output, which is a way around the
+surcharge that anybody reading the contract can take.
+
+A hook charges a trade in exactly one of two ways, never both:
+
+  - Vault take (the usual programmable market). poolManager.take / takeInto the fee
+    into a vault, return a matching BeforeSwapDelta, and return a *zero* LP fee:
+        return (selector, toBeforeSwapDelta(...), LPFeeLibrary.OVERRIDE_FEE_FLAG);
+    OVERRIDE_FEE_FLAG alone is a zero pool fee with the flag set so v4 does not
+    keep a stored fee. Do not OR the market's rate onto it. The vault take *is*
+    the fee. Doing both charges the trader twice — FLOR asked for 0.5% and would
+    have paid ~1%.
+
+  - Pool LP fee only (no vault). Return the rate with the flag and take nothing:
+        return (selector, BeforeSwapDeltaLibrary.ZERO_DELTA,
+                feePpm | LPFeeLibrary.OVERRIDE_FEE_FLAG);
+    Without OVERRIDE_FEE_FLAG the pool keeps its stored fee and the rule silently
+    does nothing.
 
 Fees are in hundredths of a basis point: 10_000 is 1%, 5_000 is 0.5%.
+`.trim();
+
+/**
+ * The pool a hook belongs to, and the pools it does not.
+ *
+ * A hook address is public and `poolManager.initialize` is permissionless, so a deployed
+ * hook is a contract anybody may attach to a pool of their own. That is fine for a market
+ * whose every answer comes out of the `PoolKey` it was handed. It is not fine for one that
+ * remembers anything: a streak, a cooldown, a running total and a phase are all state a
+ * stranger can drive in a pool of worthless tokens for the price of the gas, and then spend
+ * in the real one.
+ *
+ * Verdant's hand-written `InstantHook` has always refused this — its `beforeInitialize`
+ * rejects a pool the factory never registered. Generated hooks inherit no such refusal,
+ * which is why it is spelled out here and checked in `deployment-validation.ts`.
+ */
+export const POOL_IDENTITY = `
+Your hook's address is public and poolManager.initialize is open to anyone. Somebody can
+and will open a second pool naming your hook, with two currencies they chose, and swap in
+it. Those swaps run your callbacks with a PoolKey that is not this market's.
+
+That costs nothing if the hook is stateless — every answer comes out of the key it was
+handed. The moment it remembers something, the memory is shared: a plain
+\`uint256 consecutiveBuys\` is a counter a stranger drives with ten dust buys in a pool
+nobody is trading, and the free buy it earns is spent here.
+
+So state that survives a trade has to be per-pool. Either of these is correct, and one of
+them is required:
+
+  - Key it by pool.
+        mapping(PoolId => uint256) private _consecutiveBuys;
+        _consecutiveBuys[key.toId()]++;
+
+  - Or refuse every pool but this market's. Record the PoolId the first time the market's
+    own pool initialises and compare it in each callback:
+        if (PoolId.unwrap(key.toId()) != PoolId.unwrap(_pool)) revert WrongPool();
+
+Prefer the mapping. It needs no initialisation step, cannot be captured by whoever gets
+there first, and keeps the market's own accounting correct for the pool it belongs to.
 `.trim();
 
 /**
@@ -210,7 +269,10 @@ Which side carries the fee depends on how the swap was specified:
     The specified currency IS the input currency. Charge on deltaSpecified:
         fee = uint256(-params.amountSpecified) * feePpm / 1_000_000;
         poolManager.take(input, address(vault), fee);
-        return (selector, toBeforeSwapDelta(int128(int256(fee)), 0), lpFee | OVERRIDE_FEE_FLAG);
+        return (selector, toBeforeSwapDelta(int128(int256(fee)), 0), LPFeeLibrary.OVERRIDE_FEE_FLAG);
+
+    The third return is a zero LP fee. The take is the only charge. OR-ing feePpm onto
+    OVERRIDE_FEE_FLAG here would make Uniswap collect the same rate again for LPs.
 
     Note what this does to the trader, because the obvious reading is wrong: they pay
     exactly what they specified and NOT a penny more. The fee is carved out of it, and
@@ -223,6 +285,10 @@ Which side carries the fee depends on how the swap was specified:
 
     Handle this case. If only exact-input swaps pay, a trader avoiding the fee routes an
     exact-output swap and every mechanic funded by fees quietly stops being funded.
+
+    A size compared to the token's total supply must be the amount of the *launched
+    token*, not |amountSpecified|. On an exact-output sell the specified amount is quote.
+    Resolve that sell in afterSwap from the actual token input on the delta.
 
 The input currency is whichever side is being spent:
     Currency input = params.zeroForOne ? key.currency0 : key.currency1;
@@ -281,8 +347,8 @@ Tests define only behavior from an already-valid market:
     contract MyMarketBehaviorTest is MarketTestBase {
         function test_sellAppliesTheRule() public {
             buy(0.01 ether);
-            uint256 before = tokenBalance(TRADER);
-            sell(uint128(before / 2));
+            uint256 tokensBefore = tokenBalance(TRADER);
+            sell(uint128(tokensBefore / 2));
             // Assert the market-specific result.
         }
     }
@@ -290,6 +356,10 @@ Tests define only behavior from an already-valid market:
 Use the supplied buy/sell helpers so trades go through AgenRouter with real v4 settlement
 and the correct trader identity. To test a sell, acquire tokens with a buy first; production
 locks the whole launch supply into liquidity, so no arbitrary wallet starts with tokens.
+
+Do not name a local variable \`after\`, \`leave\`, or any other word this Solidity version
+reserves. The parser rejects those with "Expected ';' but got reserved keyword" before
+any test runs. Use tokensBefore / tokensAfter.
 `.trim();
 
 /**
@@ -669,8 +739,15 @@ check to the callbacks.
 
 ${V4_GOTCHAS}
 
-AgenBaseHook also provides isBuy(params), swapAmount(params), inputCurrency(key, params)
-and takeInto(currency, recipient, amount). Use them rather than rewriting them.
+AgenBaseHook also provides isBuy(params), swapAmount(params), tokenAmount(params),
+inputCurrency(key, params) and takeInto(currency, recipient, amount). Use them rather than
+rewriting them.
+
+swapAmount and tokenAmount are not interchangeable. swapAmount is the size of the swap in
+whichever currency it named; tokenAmount is an amount of the launched token, and returns
+(amount, known) because on two of the four swap kinds the token leg is not fixed until the
+swap has run. A rule about a share of the supply needs tokenAmount, and has to do something
+honest when known is false.
 
 Available imports, as remapped in this workspace:
 
@@ -683,6 +760,8 @@ ${HOOK_SIGNATURES}
 ${structs}
 
 ${SWAP_SEMANTICS}
+
+${POOL_IDENTITY}
 
 ${VALUE_TYPE_ACCESSORS}
 

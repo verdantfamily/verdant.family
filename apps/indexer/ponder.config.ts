@@ -25,6 +25,7 @@ import { getAbiItem } from "viem";
 
 import {
   AGEN,
+  AGEN_ENGINE,
   AGENTS,
   CHAIN_ID,
   FACTORY,
@@ -213,6 +214,42 @@ export default createConfig({
       chain: "robinhood",
       address: AGEN.factory,
       startBlock: AGEN.startBlock,
+    },
+
+    /*
+     * Agen's deterministic engine, which is a second launch path rather than a replacement.
+     *
+     * Only the factory is watched. The shared hook emits per-market events too, and following
+     * them would be following the same facts twice: `MarketConfigured` fires in the launch
+     * transaction with what `EngineMarketDeployed` already carries, and `FeeTaken` restates a
+     * fee the pool's own `Swap` already reports. The hook is read from instead, at the launch
+     * block, for the one thing only it knows — which currency the fee was derived to.
+     *
+     * Registered unconditionally, as above, and for the same codegen reason.
+     */
+    AgenEngineFactory: {
+      abi: abi.agenEngineFactoryAbi,
+      chain: "robinhood",
+      address: AGEN_ENGINE.factory,
+      startBlock: AGEN_ENGINE.startBlock,
+    },
+
+    /*
+     * The shared hook, watched for the fee it takes.
+     *
+     * One address for every engine market, which is fine here and would not be fine as a
+     * market key: `FeeTaken` carries its own `poolId`, so each event says which market it
+     * belongs to rather than relying on the address it came from.
+     *
+     * Worth indexing because the fee an engine market charges is invisible in the Swap event.
+     * The hook zeroes the pool's LP fee and takes its own as a delta, so a feed reading only
+     * Uniswap would report every engine trade as free.
+     */
+    AgenEngineHook: {
+      abi: abi.agenEngineHookAbi,
+      chain: "robinhood",
+      address: AGEN_ENGINE.hook,
+      startBlock: AGEN_ENGINE.startBlock,
     },
 
     VerdantToken: {

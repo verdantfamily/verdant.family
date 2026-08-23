@@ -219,6 +219,62 @@ describe("the fee a market charges at a size", () => {
    * A market this cannot read completely says so, rather than answering about a simpler
    * market than the one it was given. A second gated fee rule is a schedule with steps.
    */
+  /**
+   * FLOR wrote the ladder as two gated rules: 0.5% when the sell is *not* at least 1%
+   * of supply, 4% when it is. That is one schedule, not two unreadable gates.
+   */
+  it("reads a buyOrSell default plus an inclusive large-sell as one ladder", () => {
+    const flor = specification({
+      baseFeePpm: 5_000,
+      maxFeePpm: 40_000,
+      rules: [
+        {
+          id: "default-trade-fee",
+          title: "CHARGE 0.5% DEFAULT BUY/SELL FEE",
+          when: { kind: "buyOrSell", description: "On every buy or sell" },
+          conditions: [
+            {
+              kind: "noLargeSellOverride",
+              description: "not a large sell",
+              parameters: {
+                thresholdPercent: 1,
+                thresholdBasis: "immutableTotalSupply",
+                operator: ">=",
+              },
+              combinator: "not",
+            },
+          ],
+          then: [{ kind: "chargeFee", description: "Charge 0.5%", parameters: { feePercent: 0.5 } }],
+        },
+        {
+          id: "large-sell-fee",
+          title: "CHARGE 4% LARGE-SELL FEE INSTEAD",
+          when: { kind: "sell", description: "On a sell" },
+          conditions: [
+            {
+              kind: "sellSizeVsTotalSupply",
+              description: "at least 1% of immutable total supply",
+              parameters: { percent: 1, basis: "immutableTotalSupply", operator: ">=" },
+            },
+          ],
+          then: [{ kind: "chargeFee", description: "Charge 4%", parameters: { feePercent: 4 } }],
+        },
+      ],
+    } as Partial<MarketSpecification>);
+
+    const sell = feeSchedule(flor, "sell")!;
+    const buy = feeSchedule(flor, "buy")!;
+
+    expect(sell.basePpm).toBe(5_000);
+    expect(sell.tier?.ppm).toBe(40_000);
+    expect(sell.tier?.threshold.percent).toBe(1);
+    expect(sell.tier?.threshold.inclusive).toBe(true);
+    expect(feeAt(sell, { amount: share(1), basisAmount: SUPPLY })).toBe(40_000);
+    expect(feeAt(sell, { amount: share(1) - 1n, basisAmount: SUPPLY })).toBe(5_000);
+    expect(buy.basePpm).toBe(5_000);
+    expect(buy.tier).toBe(null);
+  });
+
   it("refuses to summarise a market whose fee turns on more than one size", () => {
     const stepped = specification({
       rules: [
@@ -254,10 +310,27 @@ describe("the same threshold in the two languages that have to agree", () => {
   });
 
   it("writes the comparison a hook has to make", () => {
-    expect(thresholdSolidity(threshold, "sellAmount")).toBe("sellAmount > totalSupply * 2 / 100");
-    expect(thresholdSolidity({ ...threshold, inclusive: true }, "sellAmount")).toBe(
-      "sellAmount >= totalSupply * 2 / 100",
+    expect(thresholdSolidity(threshold, "sellAmount")).toBe(
+      "totalSupply != 0 && sellAmount * 1_000_000 > totalSupply * 20_000",
     );
+    expect(thresholdSolidity({ ...threshold, inclusive: true }, "sellAmount")).toBe(
+      "totalSupply != 0 && sellAmount * 1_000_000 >= totalSupply * 20_000",
+    );
+  });
+
+  /**
+   * A basis of nothing is not a threshold every trade clears.
+   *
+   * `overThreshold` has always said so and the Solidity did not, which mattered because a
+   * hook passes zero for whichever basis its market does not use. A liquidity-gated market
+   * therefore charged its surcharge on every trade, and a table of vectors found it on the
+   * first market it was pointed at.
+   */
+  it("agrees with the reading that a zero basis is not exceeded", () => {
+    expect(thresholdSolidity({ ...threshold, basis: "liquidity" }, "sellAmount")).toContain(
+      "poolLiquidity != 0 &&",
+    );
+    expect(overThreshold(threshold, { amount: 1n, basisAmount: 0n })).toBe(false);
   });
 
   /**
@@ -266,8 +339,30 @@ describe("the same threshold in the two languages that have to agree", () => {
    */
   it("does not round a fractional threshold into whole percent", () => {
     expect(thresholdSolidity({ ...threshold, percent: 2.5 }, "sellAmount")).toBe(
-      "sellAmount * 1_000_000 > totalSupply * 25_000",
+      "totalSupply != 0 && sellAmount * 1_000_000 > totalSupply * 25_000",
     );
+  });
+
+  /**
+   * The whole reason both percentages get the same form.
+   *
+   * `basis * 2 / 100` divides first, and integer division truncates: against a basis of
+   * 101 the boundary lands at 2 rather than 2.02, so a trade of exactly 2 is over the line
+   * in the contract and under it in `overThreshold`, on the cards, and in the creator's
+   * head. A supply is round and never showed it. The pool's liquidity is whatever the last
+   * trade left behind, and always would have.
+   */
+  it("does not truncate a whole percentage against an awkward basis", () => {
+    const gate = { ...threshold, basis: "liquidity" as const, inclusive: true };
+
+    expect(thresholdSolidity(gate, "sellAmount")).toBe(
+      "poolLiquidity != 0 && sellAmount * 1_000_000 >= poolLiquidity * 20_000",
+    );
+
+    // What the contract now computes, and what the reading says, at the trade that used
+    // to separate them.
+    expect(2n * 1_000_000n >= 101n * 20_000n).toBe(false);
+    expect(overThreshold(gate, { amount: 2n, basisAmount: 101n })).toBe(false);
   });
 
   it("names the basis the contract holds it under", () => {

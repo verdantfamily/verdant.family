@@ -1,0 +1,104 @@
+{
+  "name": "tiered",
+  "prompt": "Launch Exact Flow, ticker EXCT. Charge 0.5% on every buy and every sell. When a sell is at least 1% of total supply, charge 4% instead. Send 80% of every fee to me and 20% to the Agen treasury.",
+  "envelope": {
+    "outcome": "SUPPORTED",
+    "spec": {
+      "engineVersion": 1,
+      "baseRate": {
+        "buy": "0.5",
+        "sell": "0.5"
+      },
+      "ladder": null,
+      "sizeTiers": [
+        {
+          "side": "SELL",
+          "measure": {
+            "kind": "PERCENT_REFERENCE_SUPPLY",
+            "percent": "1",
+            "operator": "GTE"
+          },
+          "rate": "4"
+        }
+      ],
+      "distribution": [
+        {
+          "recipient": {
+            "kind": "CREATOR"
+          },
+          "share": "80"
+        },
+        {
+          "recipient": {
+            "kind": "TREASURY"
+          },
+          "share": "20"
+        }
+      ],
+      "protections": []
+    },
+    "assumptions": [],
+    "unsupported": [],
+    "clarifications": []
+  },
+  "binding": {
+    "referenceSupply": "1000000000000000000000000000",
+    "quoteAsset": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "symbol": "NVDA",
+      "decimals": 18
+    },
+    "launchedTokenSymbol": "EXCT"
+  },
+  "encodedConfig": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000033b2e3c9fd0803ce8000000000000000000000000000000111111111111111111111111111111111111111100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000016000000000000000000000000000000000000000000000000000000000000001e00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000026000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001388000000000000000000000000000000000000000000000000000000000000138800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000084595161401484a0000000000000000000000000000000000000000000000000000000000000000009c4000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c3500000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000030d40",
+  "configHash": "0xcd6112df0a2e481f1e8c4f6966ebd0d311b0cd0ddcaa4afc7565bff7e9a3e1c0",
+  "implementationHash": "0x8b81544b4c5c36442bf9ec3cdf9228101c7499ff0ce9cd750e1ba54f425ce57a",
+  "approvalMessage": "Approve this Agen market\nBuild: journey-tiered\nEngine version: 1\nConfiguration hash: 0xcd6112df0a2e481f1e8c4f6966ebd0d311b0cd0ddcaa4afc7565bff7e9a3e1c0\nCommitment: 0x8b81544b4c5c36442bf9ec3cdf9228101c7499ff0ce9cd750e1ba54f425ce57a\nCreator: 0x00000000000000000000000000000000000c0001\n\nI reviewed these market rules and approve exactly this configuration. No contract was written for this market: Agen's audited engine executes the configuration above, and changing any rate, threshold, recipient or asset changes the commitment.",
+  "review": {
+    "maximumFee": "4%",
+    "feeCurrencySymbol": "EXCT"
+  },
+  "tradeCount": 5,
+  "trades": [
+    {
+      "what": "an ordinary buy",
+      "isBuy": true,
+      "grossTokenAmount": "1000000000000000000000",
+      "grossQuoteAmount": "1000000000000000000",
+      "expectedFeePpm": 5000,
+      "expectedFeeAmount": "5000000000000000000"
+    },
+    {
+      "what": "an ordinary sell",
+      "isBuy": false,
+      "grossTokenAmount": "1000000000000000000000",
+      "grossQuoteAmount": "1000000000000000000",
+      "expectedFeePpm": 5000,
+      "expectedFeeAmount": "5000000000000000000"
+    },
+    {
+      "what": "a sell one unit below the tier",
+      "isBuy": false,
+      "grossTokenAmount": "9999999999999999999999999",
+      "grossQuoteAmount": "1000000000000000000",
+      "expectedFeePpm": 5000,
+      "expectedFeeAmount": "49999999999999999999999"
+    },
+    {
+      "what": "a sell exactly at the tier",
+      "isBuy": false,
+      "grossTokenAmount": "10000000000000000000000000",
+      "grossQuoteAmount": "1000000000000000000",
+      "expectedFeePpm": 40000,
+      "expectedFeeAmount": "400000000000000000000000"
+    },
+    {
+      "what": "a sell one unit above the tier",
+      "isBuy": false,
+      "grossTokenAmount": "10000000000000000000000001",
+      "grossQuoteAmount": "1000000000000000000",
+      "expectedFeePpm": 40000,
+      "expectedFeeAmount": "400000000000000000000000"
+    }
+  ]
+}

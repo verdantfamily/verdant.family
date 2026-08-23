@@ -7206,3 +7206,235 @@ button:not(:disabled):active,
     animation: none;
   }
 }
+
+/* --- engine v1 review ----------------------------------------------------- */
+
+/*
+ * The deterministic engine's screens. Deliberately built out of the same tokens as the
+ * engine-0 review above — the same border, the same inset, the same faint label — because a
+ * creator on either path is reading the same kind of thing and a second visual language would
+ * imply a second product.
+ *
+ * What is new here is the rule list. A market's rules are pairs, "when this happens, this
+ * happens", and a definition list is what that is: the condition is the term and the outcome
+ * is the definition. It reads correctly aloud with no styling at all, which is the test.
+ */
+.engine-card {
+  margin-top: 0.7rem;
+  padding: 1.15rem 1.25rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--inset);
+}
+
+.engine-card-heading {
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.engine-card-summary {
+  margin-top: 0.4rem;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+/* A thing to read rather than a thing that went wrong, as with .notice-card. */
+.engine-card-caution {
+  margin-top: 0.8rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--text);
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+.engine-rules {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.9rem;
+}
+
+/*
+ * Condition and outcome side by side above 34rem and stacked below it, because a threshold
+ * ("a sell of 1% of supply or more") and a rate ("pays 4%") are both long enough to wrap on a
+ * phone, and a wrapped two-column row reads as four unrelated fragments.
+ */
+.engine-rule {
+  display: grid;
+  gap: 0.15rem 1rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--line);
+}
+
+@media (min-width: 34rem) {
+  .engine-rule {
+    grid-template-columns: 1fr auto;
+    align-items: baseline;
+  }
+}
+
+.engine-rule-when {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.engine-rule-then {
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+@media (min-width: 34rem) {
+  .engine-rule-then {
+    text-align: right;
+  }
+}
+
+.engine-list {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+/* --- simulation and commitment, both folded away -------------------------- */
+
+.engine-sim,
+.engine-commitment {
+  margin-top: clamp(2rem, 4vw, 2.8rem);
+  padding: 1rem 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.engine-sim-summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+}
+
+.engine-sim-table {
+  width: 100%;
+  margin-top: 1rem;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.engine-sim-table th {
+  padding: 0.4rem 0.6rem 0.5rem 0;
+  border-bottom: 1px solid var(--line);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+  font-size: 0.66rem;
+  color: var(--text-faint);
+}
+
+.engine-sim-table td {
+  padding: 0.45rem 0.6rem 0.45rem 0;
+  border-bottom: 1px solid var(--line);
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+/* The number the row exists for. */
+.engine-sim-table td:nth-child(2) {
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.engine-facts {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  font-size: 0.78rem;
+}
+
+.engine-facts > div {
+  display: grid;
+  gap: 0.1rem 1rem;
+}
+
+@media (min-width: 34rem) {
+  .engine-facts > div {
+    grid-template-columns: 9rem 1fr;
+  }
+}
+
+.engine-facts dt {
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 0.66rem;
+  color: var(--text-faint);
+}
+
+.engine-facts dd {
+  color: var(--text-dim);
+}
+
+/* Addresses and hashes wrap mid-string rather than widening the page on a phone. */
+.engine-facts code {
+  font-size: 0.74rem;
+  word-break: break-all;
+}
+
+/* --- clarification and refusal -------------------------------------------- */
+
+/* The creator's own words, quoted back, so a question reads as having listened. */
+.engine-quote {
+  font-size: 0.85rem;
+  font-style: italic;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.engine-question {
+  display: block;
+  margin-top: 0.75rem;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.engine-answer {
+  width: 100%;
+  margin-top: 0.6rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.engine-answer:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
+.engine-submit {
+  margin-top: 1.2rem;
+  padding: 0.7rem 1.4rem;
+  border: 1px solid var(--text);
+  border-radius: 999px;
+  background: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.88rem;
+  color: #ffffff;
+}
+
+.engine-submit:disabled {
+  border-color: var(--line);
+  background: var(--inset);
+  cursor: not-allowed;
+  color: var(--text-faint);
+}

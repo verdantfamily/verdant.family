@@ -240,13 +240,17 @@ pragma solidity 0.8.26;
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
+import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
 import {SwapParams} from "v4-core/src/types/PoolOperation.sol";
 import {AgenBaseHook} from "./AgenBaseHook.sol";
+import {AgenFeePolicy} from "./AgenFeePolicy.sol";
 ${imports}
 
 contract ${contractName} is AgenBaseHook {
+    using PoolIdLibrary for PoolKey;
+
     /// Every quantity this market needs, in the contract. A launch supplies addresses and
     /// the token's three values; a fee is the market's own and is written here.
     uint24 public constant SELL_FEE_PPM = 10_000;
@@ -296,8 +300,8 @@ ${extraMembers}}
 const DYNAMIC_BODY = `        sender;
         key;
         data;
-        if (isBuy(params)) return (BeforeSwapDeltaLibrary.ZERO_DELTA, LPFeeLibrary.OVERRIDE_FEE_FLAG);
-        return (BeforeSwapDeltaLibrary.ZERO_DELTA, SELL_FEE_PPM | LPFeeLibrary.OVERRIDE_FEE_FLAG);
+        uint24 fee = AgenFeePolicy.feePpm(isBuy(params), 0, 0, 0);
+        return (BeforeSwapDeltaLibrary.ZERO_DELTA, fee | LPFeeLibrary.OVERRIDE_FEE_FLAG);
 `;
 
 /** A hook that leaves the pool's own fee alone. */
@@ -351,6 +355,8 @@ contract BenchBehaviorTest is MarketTestBase {
     /// A raw uint128 straight into sell asks for more tokens than any market contains, which
     /// the fixture now refuses rather than selling a smaller amount and letting the market
     /// answer for the difference. See MarketTestBase._acquireForSale.
+    /// Intent: intent-1
+    /// Rule: sell-fee
     function testFuzz_sells_what_the_buy_produced(uint128 amountIn) public {
         uint256 bought = buy(_tradeSize(amountIn, MIN_TRADE, MAX_TRADE));
 
@@ -712,17 +718,17 @@ const TRADER_AWARE: Shape = {
   sources: [
     hookSource({
       contractName: "BenchHook",
-      extraState: "    address public immutable router;\n    address public lastTrader;\n\n",
+      extraState:
+        "    address public immutable router;\n    mapping(PoolId => address) public lastTrader;\n\n",
       extraConstructorArguments: ", address router_",
       extraConstructorBody:
         '        require(router_ != address(0), "router");\n        router = router_;\n',
       permissions: ["beforeSwap"],
       fee: null,
-      beforeSwapBody: `        key;
-        data;
-        if (sender == router) lastTrader = sender;
-        if (isBuy(params)) return (BeforeSwapDeltaLibrary.ZERO_DELTA, LPFeeLibrary.OVERRIDE_FEE_FLAG);
-        return (BeforeSwapDeltaLibrary.ZERO_DELTA, SELL_FEE_PPM | LPFeeLibrary.OVERRIDE_FEE_FLAG);
+      beforeSwapBody: `        data;
+        if (sender == router) lastTrader[key.toId()] = sender;
+        uint24 selectedFee = AgenFeePolicy.feePpm(isBuy(params), 0, 0, 0);
+        return (BeforeSwapDeltaLibrary.ZERO_DELTA, selectedFee | LPFeeLibrary.OVERRIDE_FEE_FLAG);
 `,
     }),
   ],
@@ -733,7 +739,7 @@ const TRADER_AWARE: Shape = {
         buy(0.01 ether);
 
         // Trades arrive through the canonical route, which is what the hook authenticates.
-        assertEq(hook.lastTrader(), address(agenRouter));
+        assertEq(hook.lastTrader(marketPoolId()), address(agenRouter));
     }
 `,
 };
@@ -784,26 +790,25 @@ const STATEFUL_COUNTER: Shape = {
   sources: [
     hookSource({
       contractName: "BenchHook",
-      extraState: "    uint256 public trades;\n\n",
+      extraState: "    mapping(PoolId => uint256) public trades;\n\n",
       permissions: ["beforeSwap"],
       fee: null,
       beforeSwapBody: `        sender;
-        key;
         data;
-        trades += 1;
-        if (isBuy(params)) return (BeforeSwapDeltaLibrary.ZERO_DELTA, LPFeeLibrary.OVERRIDE_FEE_FLAG);
-        return (BeforeSwapDeltaLibrary.ZERO_DELTA, SELL_FEE_PPM | LPFeeLibrary.OVERRIDE_FEE_FLAG);
+        trades[key.toId()] += 1;
+        uint24 selectedFee = AgenFeePolicy.feePpm(isBuy(params), 0, 0, 0);
+        return (BeforeSwapDeltaLibrary.ZERO_DELTA, selectedFee | LPFeeLibrary.OVERRIDE_FEE_FLAG);
 `,
     }),
   ],
   behaviour: `
     function test_the_counter_survives_the_launch_and_counts() public {
         // The launch itself opens liquidity without swapping, so the market starts at zero.
-        assertEq(hook.trades(), 0);
+        assertEq(hook.trades(marketPoolId()), 0);
 
         buy(0.01 ether);
 
-        assertEq(hook.trades(), 1);
+        assertEq(hook.trades(marketPoolId()), 1);
     }
 `,
 };

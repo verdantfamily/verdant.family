@@ -21,9 +21,20 @@
 
 /** What a market is, and whether a proposed one is coherent. */
 export * from "./spec.js";
+export * from "./approval.js";
 
 /** The same market, in English. Shared so the page and the pipeline cannot disagree. */
 export * from "./describe.js";
+
+/**
+ * Named rates and thresholds the creator already wrote, so a review card cannot
+ * pretend they were invented.
+ */
+export { applyStatedEconomics, keepAdaptation } from "./requirements.js";
+
+/** What the creator asked for and which parts have runtime evidence. */
+export * from "./intent.js";
+export type { SemanticClaim, SemanticCoverage } from "./semantic-coverage.js";
 
 /**
  * What a size threshold means, which a card has to say as exactly as a hook computes it.

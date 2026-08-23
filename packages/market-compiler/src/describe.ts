@@ -382,14 +382,30 @@ function feeFor(specification: MarketSpecification, side: "buy" | "sell"): SideF
 
   for (const rule of specification.rules) {
     // `swap` fires on both sides, so it counts towards each.
-    if (rule.when.kind !== side && rule.when.kind !== "swap") continue;
+    if (
+      rule.when.kind !== side &&
+      rule.when.kind !== "swap" &&
+      rule.when.kind !== "trade" &&
+      rule.when.kind !== "buyOrSell" &&
+      rule.when.kind !== "buyAndSell"
+    ) {
+      continue;
+    }
 
     for (const effect of rule.then) {
-      const stated = numberFrom(effect.parameters, "feePpm");
+      const stated = numberFrom(effect.parameters, "feePpm") ?? numberFrom(effect.parameters, "feePercent");
+      const asPpm =
+        stated === null
+          ? null
+          : effect.parameters !== undefined && "feePercent" in effect.parameters && !("feePpm" in effect.parameters)
+            ? stated * 10_000
+            : stated;
 
       if (effect.kind === "waiveFee") ppm = 0;
-      if (effect.kind === "setFee") ppm = stated;
-      if (effect.kind === "extraFee") ppm = stated === null || ppm === null ? null : ppm + stated;
+      if (effect.kind === "setFee" || effect.kind === "chargeFee" || effect.kind === "chargeInputFee") {
+        ppm = asPpm;
+      }
+      if (effect.kind === "extraFee") ppm = asPpm === null || ppm === null ? null : ppm + asPpm;
       if (effect.kind === "routeFee") routed = textFrom(effect.parameters, "destination");
     }
   }
@@ -497,7 +513,28 @@ const EFFECT_LABELS: Readonly<Record<string, string>> = {
   disableRulePermanently: "ONE TIME ONLY",
 };
 
-const FEE_EFFECTS = new Set(["setFee", "extraFee", "routeFee"]);
+const FEE_EFFECTS = new Set([
+  "setFee",
+  "extraFee",
+  "routeFee",
+  "chargeFee",
+  "chargeInputFee",
+  "collectFee",
+]);
+
+const FEE_WORDS = /fee|tax|charge|skim|toll|cut/i;
+const BOOKKEEPING = /^(?:increment|decrement|record|emit|log|track|tally)(?:[A-Z].*)?$/;
+
+function isFeeLike(effect: { readonly kind: string; readonly description: string }): boolean {
+  return FEE_EFFECTS.has(effect.kind) || FEE_WORDS.test(`${effect.kind} ${effect.description}`);
+}
+
+function leftoverMechanic(rule: Rule): Rule["then"][number] | undefined {
+  if (FEE_WORDS.test(rule.title) && rule.then.every((effect) => isFeeLike(effect) || BOOKKEEPING.test(effect.kind))) {
+    return undefined;
+  }
+  return rule.then.find((effect) => !isFeeLike(effect) && !BOOKKEEPING.test(effect.kind));
+}
 
 /**
  * The market as three or four cards.
@@ -564,7 +601,10 @@ export function behaviourCards(
   for (const rule of specification.rules) {
     if (cards.length >= 4) break;
 
-    const effect = rule.then.find((candidate) => !FEE_EFFECTS.has(candidate.kind));
+    // A fee already has two cards. Repeating it under the rule's title — "0.5% BUY
+    // AND SELL FEE", "4% LARGE-SELL FEE INSTEAD" — is the same market said twice,
+    // and it hides the ladder the sell card should have been.
+    const effect = leftoverMechanic(rule);
     if (effect === undefined) continue;
 
     // The rule's own title rather than its effect's `kind` when the effect is one this

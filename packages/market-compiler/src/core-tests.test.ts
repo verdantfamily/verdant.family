@@ -454,6 +454,36 @@ describe("the suite Agen writes for itself", () => {
   });
 
   /**
+   * The trade every other helper in the fixture cannot make.
+   *
+   * `AgenRouter` swaps an exact amount in, so a suite built on it never asks for an exact
+   * amount out — and that is the route on which a hook reading the size off
+   * `amountSpecified` measures the quote leg against a token threshold and charges the
+   * base rate. Refusing the trade is allowed; charging nothing for it is the finding.
+   */
+  it("checks that an exact-output sell is charged or refused, where a sell pays somebody", () => {
+    const suite = coreTests(market([SELL_FEE]), { collectsItsOwnFee: true });
+
+    expect(suite.source.content).toContain(
+      "function test_core_an_exact_output_sell_is_not_a_way_around_the_fee()",
+    );
+    expect(suite.source.content).toContain("this.sellForExactQuote(");
+    expect(suite.proves.some((claim) => claim.includes("exact-output"))).toBe(true);
+  });
+
+  /**
+   * And the case that must stay silent. A market charging through the pool's own LP fee
+   * pays its liquidity providers, not an account this file can read, so "the market was
+   * paid nothing" is the wrong question rather than a failing answer — the passive
+   * benchmark fixture is exactly that market and is right.
+   */
+  it("says nothing about an exact-output sell for a market it cannot see collect one", () => {
+    const suite = coreTests(market([SELL_FEE]), { collectsItsOwnFee: false });
+
+    expect(suite.source.content).not.toContain("sellForExactQuote");
+  });
+
+  /**
    * A market with a mechanic gets the universal assertions and nothing more about the side
    * the mechanic touches. Anything mechanic-specific is the generated suite's job, where a
    * wrong assertion can be dropped instead of ending the build.
@@ -540,16 +570,61 @@ describe("the suite Agen writes for itself", () => {
       "function test_core_size_gated_fees_match_the_specified_threshold()",
     );
     expect(suite.source.content).toContain("tokenSupply()");
-    // 0.5%, 1%, 1.99%, 2%, 2.01%, 5% of supply, as millionths.
-    expect(suite.source.content).toContain("(5000, 20000)");
-    expect(suite.source.content).toContain("(10000, 20000)");
-    expect(suite.source.content).toContain("(19900, 20000)");
-    expect(suite.source.content).toContain("(20000, 20000)");
-    expect(suite.source.content).toContain("(20100, 50000)");
-    expect(suite.source.content).toContain("(50000, 50000)");
+    // 0.5%, 1%, 1.99%, 2%, 2.01%, 5% of supply, as millionths — one call each,
+    // not a tuple array Solidity 0.8.26 cannot parse.
+    expect(suite.source.content).toContain("_assertSellFeeAtShare(supply, 5000, 20000)");
+    expect(suite.source.content).toContain("_assertSellFeeAtShare(supply, 10000, 20000)");
+    expect(suite.source.content).toContain("_assertSellFeeAtShare(supply, 19900, 20000)");
+    expect(suite.source.content).toContain("_assertSellFeeAtShare(supply, 20000, 20000)");
+    expect(suite.source.content).toContain("_assertSellFeeAtShare(supply, 20100, 50000)");
+    expect(suite.source.content).toContain("_assertSellFeeAtShare(supply, 50000, 50000)");
+    expect(suite.source.content).not.toContain("(uint256 sharePpm, uint256 feePpm)");
     // A 1% default would put the higher fee on the 1% row. It must not.
-    expect(suite.source.content).not.toContain("(10000, 50000)");
+    expect(suite.source.content).not.toContain("_assertSellFeeAtShare(supply, 10000, 50000)");
     expect(suite.proves.some((claim) => claim.includes("2% of supply"))).toBe(true);
+  });
+
+  it("writes the inclusive 1% ladder for a chargeFee / buyOrSell spec", () => {
+    const flor = market(
+      [
+        {
+          id: "default-trade-fee",
+          title: "DEFAULT",
+          when: { kind: "buyOrSell", description: "any trade" },
+          conditions: [
+            {
+              kind: "noLargeSellOverride",
+              description: "not large",
+              parameters: { thresholdPercent: 1, thresholdBasis: "immutableTotalSupply", operator: ">=" },
+              combinator: "not",
+            },
+          ],
+          then: [{ kind: "chargeFee", description: "0.5%", parameters: { feePercent: 0.5 } }],
+        },
+        {
+          id: "large-sell-fee",
+          title: "LARGE",
+          when: { kind: "sell", description: "a sell" },
+          conditions: [
+            {
+              kind: "sellSizeVsTotalSupply",
+              description: "at least 1%",
+              parameters: { percent: 1, basis: "immutableTotalSupply", operator: ">=" },
+            },
+          ],
+          then: [{ kind: "chargeFee", description: "4%", parameters: { feePercent: 4 } }],
+        },
+      ],
+      { baseFeePpm: 5_000, maxFeePpm: 40_000 },
+    );
+
+    const suite = coreTests(flor, { collectsItsOwnFee: true });
+
+    expect(suite.source.content).toContain(
+      "function test_core_size_gated_fees_match_the_specified_threshold()",
+    );
+    expect(suite.source.content).toContain("_assertSellFeeAtShare(supply, 10000, 40000)");
+    expect(suite.source.content).toContain("_assertSellFeeAtShare(supply, 9950, 5000)");
   });
 
   /** A share of the pool moves as the test trades, so this file will not claim one. */

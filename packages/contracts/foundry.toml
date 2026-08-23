@@ -32,6 +32,16 @@ extra_output = ["storageLayout"]
 # "preview equals reality" a tested property (§20.4).
 fs_permissions = [
   { access = "read", path = "../sdk/src/models/vectors" },
+  # The engine's vectors, holding AgenRuleLib.sol to the TypeScript evaluator the review
+  # screen and the creator's approval are computed from. Each vector carries its
+  # configuration ABI-encoded, so decoding them also proves `encode.ts` and `abi.encode`
+  # agree — which is what makes the commitment hash verifiable on chain.
+  { access = "read", path = "../market-engine/vectors" },
+  # The end-to-end journeys, which carry a market from a prompt to typed calldata so that
+  # `EngineJourney.t.sol` can execute the result. The vectors above prove the evaluator agrees
+  # across the boundary; these prove the whole path does — that the configuration a review
+  # screen described is the one a launched market runs.
+  { access = "read", path = "../market-engine/journey" },
   # The agent layer's own vectors, holding RevenueAllocationLib.sol and the SDK's
   # allocation.ts to one definition of how an agent's revenue divides.
   { access = "read", path = "../sdk/src/agents/vectors" },

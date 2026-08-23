@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "count": 17,
+  "chainId": 4663,
+  "engine": "0x000000000000000000000000000000000000c0de",
+  "engineVersion": 1,
+  "names": [
+    "flat 1% both ways",
+    "zero fee",
+    "asymmetric 1% buy 2% sell",
+    "at the fee ceiling",
+    "one sell tier at 1% of supply",
+    "exclusive sell tier",
+    "four sell tiers",
+    "tiers on both sides",
+    "descending tiers, a whale discount",
+    "two time stages",
+    "seven time stages",
+    "a volume ladder",
+    "a ladder with asymmetric stages",
+    "a ceiling on sells",
+    "four recipients",
+    "thirds, where rounding leaves a remainder",
+    "an equity-quoted market"
+  ]
+}

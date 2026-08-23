@@ -12,6 +12,8 @@
 import { NextResponse } from "next/server";
 import { parseEther } from "viem";
 
+import { isEngineBuild } from "../../../../lib/builds";
+import { EngineLaunchError, prepareEngineLaunch } from "../../../../lib/engine-launch";
 import { LaunchError, prepareLaunch } from "../../../../lib/launch";
 
 export const runtime = "nodejs";
@@ -59,6 +61,23 @@ export async function POST(
   try {
     const body = (await request.json().catch(() => ({}))) as Body;
 
+    /*
+     * Engine-v1 builds take the deterministic path, which produces one call and no bytecode.
+     *
+     * Branched on the job's own version rather than on which artefacts are present, as
+     * everywhere else: a build carries the pipeline that made it, and reading a market under
+     * the wrong engine is the one migration mistake with a live market at the end of it.
+     */
+    if (await isEngineBuild(id)) {
+      const engine = await prepareEngineLaunch({
+        jobId: id,
+        creator: typeof body.creator === "string" ? body.creator : "",
+        feeReceiver: typeof body.feeReceiver === "string" ? body.feeReceiver : "",
+      });
+
+      return NextResponse.json(engine, { headers: { "cache-control": "no-store" } });
+    }
+
     const prepared = await prepareLaunch({
       jobId: id,
       creator: typeof body.creator === "string" ? body.creator : "",
@@ -73,7 +92,7 @@ export async function POST(
 
     return NextResponse.json(prepared, { headers: { "cache-control": "no-store" } });
   } catch (error) {
-    if (error instanceof LaunchError) {
+    if (error instanceof LaunchError || error instanceof EngineLaunchError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
 

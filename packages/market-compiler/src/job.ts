@@ -30,8 +30,10 @@ import type { Hex } from "viem";
 import type { DeploymentSpecification } from "./deployment-spec.js";
 import type { Diagnostic, TestOutcome } from "./foundry.js";
 import type { GateFinding } from "./gates.js";
+import type { CreatorIntent } from "./intent.js";
 import type { LaunchManifest } from "./manifest.js";
 import type { MarketImplementationPlan } from "./plan.js";
+import type { SemanticCoverage } from "./semantic-coverage.js";
 import type { MarketSpecification } from "./spec.js";
 import type { GeneratedSource } from "./workspace.js";
 
@@ -106,9 +108,71 @@ export const Stage = {
   FinalValidation: "final_validation",
   DeploymentReady: "deployment_ready",
   Failed: "failed",
+
+  // --- engine v1 only ------------------------------------------------------
+  // Deliberately additive. Engine-0 jobs keep the stages above, unchanged, because a
+  // historical build's record is a statement about what happened to it and rewriting one
+  // to fit a newer vocabulary would make the record a lie.
+  //
+  // The engine's stages are also deliberately *not* the old ones renamed. There is no
+  // architecture to plan, nothing to compile, and nothing to repair, so a stage list that
+  // said otherwise would be theatre — and the whole reason the old list was nineteen
+  // entries long is that most of them were recovering from work that no longer happens.
+
+  /** The strict schema and the semantic validator, on the model's answer. */
+  Validating: "validating",
+  /** Ordering, unit resolution and the canonical form. Pure, and never a model call. */
+  Canonicalizing: "canonicalizing",
+  /** Every threshold's boundary triple, evaluated against the canonical configuration. */
+  Simulating: "simulating",
+  /** Reviewed and understood; waiting for the creator's signature over the commitment. */
+  ApprovalReady: "approval_ready",
+  /** Turning the approved configuration into typed calldata. No bytecode, ever. */
+  DeploymentPreparing: "deployment_preparing",
 } as const;
 
 export type Stage = (typeof Stage)[keyof typeof Stage];
+
+/**
+ * Which pipeline a job belongs to.
+ *
+ * `0` is the generated-Solidity pipeline: a model writes contracts, they are compiled,
+ * repaired, tested and repaired again. `1` is the deterministic engine: a model produces a
+ * configuration and nothing is generated at all.
+ *
+ * Absent means 0. Every job persisted before the engine existed has no such field, and the
+ * only safe reading of one is the pipeline it was actually built by — a market is never
+ * reinterpreted under semantics written after it.
+ */
+export type EngineVersion = 0 | 1;
+
+export function engineVersionOf(job: { readonly engineVersion?: EngineVersion }): EngineVersion {
+  return job.engineVersion ?? 0;
+}
+
+/**
+ * The engine-v1 happy path, in order.
+ *
+ * Ten stages against engine 0's nineteen, and the difference is not compression — it is
+ * that nine of the old ones existed to recover from generating code.
+ */
+export const ENGINE_STAGE_SEQUENCE: readonly Stage[] = [
+  Stage.PromptReceived,
+  Stage.Interpreting,
+  Stage.SpecificationCreated,
+  Stage.Validating,
+  Stage.Canonicalizing,
+  Stage.Simulating,
+  Stage.ReviewReady,
+  Stage.ApprovalReady,
+  Stage.DeploymentPreparing,
+  Stage.DeploymentReady,
+];
+
+/** The stage list a job's own engine version puts it on. */
+export function stageSequenceFor(version: EngineVersion): readonly Stage[] {
+  return version === 1 ? ENGINE_STAGE_SEQUENCE : STAGE_SEQUENCE;
+}
 
 /** The happy path, in order. Repair stages are detours off it, not steps along it. */
 export const STAGE_SEQUENCE: readonly Stage[] = [
@@ -203,6 +267,17 @@ export const FailureCode = {
   ModelUnavailable: "MODEL_UNAVAILABLE",
   /** The model's output did not satisfy the schema or the validator. */
   InvalidArtefact: "INVALID_ARTEFACT",
+  /**
+   * The model's answer was not a specification at all. Engine v1 only.
+   *
+   * Distinct from `INVALID_ARTEFACT`, and the distinction is operational rather than
+   * cosmetic. `UNSUPPORTED` is a judgement about the market: it was understood and engine v1
+   * cannot express it, which is a final and correct answer to give a creator. This is a
+   * judgement about the *answer*: an unknown field, an unknown discriminant, a claim with
+   * nothing behind it. Nothing about the market was ever established, so showing a creator
+   * "your market is impossible" would be telling them something nobody determined.
+   */
+  InterpretationError: "INTERPRETATION_ERROR",
   /** The request asks for something this pipeline will not build. */
   Unsupported: "UNSUPPORTED",
   CompilationUnrepairable: "COMPILATION_UNREPAIRABLE",
@@ -266,6 +341,22 @@ export interface SimulationSummary {
   readonly notes?: readonly string[];
 }
 
+/**
+ * The creator's approval of one exact specification and compiled implementation.
+ *
+ * Any edit or repair that changes either hash makes this unusable. The launch route checks both
+ * again rather than trusting the presence of this record.
+ */
+export interface CreatorApproval {
+  readonly specificationVersion: number;
+  readonly specificationHash: Hex;
+  readonly implementationHash: Hex;
+  readonly intentHash: Hex;
+  readonly approvedAt: number;
+  readonly approvedBy: string;
+  readonly signature: Hex;
+}
+
 export interface GenerationJob {
   readonly id: string;
   readonly createdAt: number;
@@ -284,6 +375,8 @@ export interface GenerationJob {
   readonly specification: MarketSpecification | null;
   /** Every specification version, so an edit can be reviewed against its predecessor. */
   readonly specificationHistory: readonly MarketSpecification[];
+  /** Prompt clauses and objective facts held against the specification. */
+  readonly intent: CreatorIntent | null;
   readonly plan: MarketImplementationPlan | null;
   /**
    * How this market is deployed, decided with the plan and before any Solidity exists.
@@ -298,6 +391,8 @@ export interface GenerationJob {
   readonly tests: readonly GeneratedSource[];
   readonly testOutcomes: readonly TestOutcome[];
   readonly gateFindings: readonly GateFinding[];
+  /** Rule-by-rule runtime evidence. Null until final validation has run. */
+  readonly semanticCoverage: SemanticCoverage | null;
   readonly simulation: SimulationSummary | null;
   /**
    * Present exactly when the build reached `deployment_ready`.
@@ -306,13 +401,82 @@ export interface GenerationJob {
    * not become deployable with a missing manifest, it fails. See `runBuild`.
    */
   readonly manifest: LaunchManifest | null;
+  /** Creator signature over the exact hashes above. Required by the launch route. */
+  readonly approval: CreatorApproval | null;
 
   /** How many repair rounds each loop has used. */
   readonly compilationAttempts: number;
   readonly harnessAttempts: number;
   readonly testAttempts: number;
 
+  /**
+   * Which pipeline built this job. Absent means 0 — see `EngineVersion`.
+   *
+   * Optional rather than defaulted in the type, so a job persisted before the engine
+   * existed reads back exactly as it was written and nothing has to migrate on load.
+   */
+  readonly engineVersion?: EngineVersion;
+
+  /**
+   * Everything the deterministic engine produced. `null` on every engine-0 job.
+   *
+   * A single field rather than eight, because these artefacts are only ever meaningful
+   * together: a review derived from one configuration and a commitment derived from another
+   * is the exact failure the canonical form exists to prevent, and keeping them in one
+   * object makes that harder to write by accident.
+   */
+  readonly engine: EngineArtefacts | null;
+
   readonly failure: Failure | null;
+}
+
+/**
+ * The engine-v1 artefacts, all derived from one canonical configuration.
+ *
+ * Stored as the JSON-safe shapes the store can round-trip: `CanonicalConfig` holds
+ * `bigint` values that `JSON.stringify` refuses, so the canonical form travels as its
+ * encoding and is decoded on read. That is deliberate rather than incidental — the
+ * encoding is the thing the commitment is taken over, so persisting it is persisting the
+ * authoritative artefact rather than a projection of it.
+ */
+export interface EngineArtefacts {
+  /** What the model claimed, before the engine judged it. Kept for incident review. */
+  readonly outcome: "SUPPORTED" | "NEEDS_CLARIFICATION" | "UNSUPPORTED" | "INTERPRETATION_ERROR";
+  /** Readings the model took that the creator did not state, shown on the review screen. */
+  readonly assumptions: readonly string[];
+  /** What could not be expressed, in the creator's words and with a reason. */
+  readonly unsupported: readonly { readonly request: string; readonly why: string }[];
+  /** What has to be asked before this market can be built. */
+  readonly clarifications: readonly {
+    readonly id: string;
+    readonly question: string;
+    readonly because: string;
+  }[];
+  /** Why the engine refused, where it did. */
+  readonly problems: readonly { readonly code: string; readonly path: string; readonly detail: string }[];
+
+  /** ABI-encoded canonical configuration. The authoritative artefact. */
+  readonly encodedConfig: Hex | null;
+  readonly configHash: Hex | null;
+  readonly implementationHash: Hex | null;
+
+  /** The review representation, derived from the canonical configuration. */
+  readonly review: unknown | null;
+  /**
+   * The same market in one line, for a listing that has no room for the review.
+   *
+   * Stored rather than derived on read for the reason the rest of this record is: a shelf
+   * would otherwise have to decode the configuration to draw a card, and the moment a
+   * consumer can produce its own description of a market it can produce a wrong one. Written
+   * once, by the engine, from the configuration the commitment covers.
+   */
+  readonly summary: unknown | null;
+  /** Every boundary case, with the rate each one pays. */
+  readonly simulation: unknown | null;
+  /** The renderable decision graph. */
+  readonly graph: unknown | null;
+  /** Typed launch arguments. Never bytecode. */
+  readonly preparation: unknown | null;
 }
 
 export interface JobStore {
@@ -336,18 +500,29 @@ export function newJob({
   name,
   symbol,
   now,
+  engineVersion,
 }: {
   readonly id: string;
   readonly prompt: string;
   readonly name: string;
   readonly symbol: string;
   readonly now: number;
+  /**
+   * Which pipeline this job is for. Omitted means 0.
+   *
+   * Set at creation and never changed. A job does not migrate between pipelines: the two
+   * produce different artefacts from different work, and a job that started as one and
+   * finished as the other would have a record that describes neither.
+   */
+  readonly engineVersion?: EngineVersion;
 }): GenerationJob {
   return {
     id,
     createdAt: now,
     updatedAt: now,
     stage: Stage.PromptReceived,
+    ...(engineVersion === undefined ? {} : { engineVersion }),
+    engine: null,
     prompt,
     name,
     symbol,
@@ -357,14 +532,17 @@ export function newJob({
     exchanges: [],
     specification: null,
     specificationHistory: [],
+    intent: null,
     plan: null,
     deployment: null,
     sources: [],
     tests: [],
     testOutcomes: [],
     gateFindings: [],
+    semanticCoverage: null,
     simulation: null,
     manifest: null,
+    approval: null,
     compilationAttempts: 0,
     harnessAttempts: 0,
     testAttempts: 0,
@@ -392,6 +570,8 @@ export function restartJob(job: GenerationJob, now: number): GenerationJob {
     stage: Stage.PromptReceived,
     updatedAt: now,
     failure: null,
+    approval: null,
+    semanticCoverage: null,
     // A stage left running when the process died is closed as failed rather than left
     // open, so the timeline reads as what happened rather than as a stage still going.
     stages: job.stages.map((record) =>

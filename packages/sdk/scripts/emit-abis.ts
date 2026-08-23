@@ -90,6 +90,17 @@ const OWN: readonly { readonly contract: string; readonly binding: string }[] = 
   { contract: "AgenMarketRegistry", binding: "agenMarketRegistryAbi" },
   { contract: "AgenPositionLocker", binding: "agenPositionLockerAbi" },
 
+  // Agen's deterministic engine, which launches configurations rather than contracts. The
+  // factory for the same reason as Agen's — a wallet encodes `deployMarket` against it, and
+  // the manifest it takes nests the whole canonical configuration, which is the last place a
+  // hand-written ABI should be trusted. The hook because it is where a market's economics can
+  // be read back from chain: it is shared by every engine market, so `MarketConfigured` keyed
+  // by pool id is the only per-market record of what was configured. The vault because a
+  // creator's earnings are claimed from it directly, as with Instant's.
+  { contract: "AgenEngineFactory", binding: "agenEngineFactoryAbi" },
+  { contract: "AgenEngineHook", binding: "agenEngineHookAbi" },
+  { contract: "AgenEngineVault", binding: "agenEngineVaultAbi" },
+
   // Instant, which is a preset rather than a model and so has its own factory rather
   // than a configuration of Verdant's. The factory is here because a creator's wallet
   // encodes `create` against it, and the vault because the profile reads a creator's

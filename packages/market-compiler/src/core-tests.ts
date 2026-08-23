@@ -37,9 +37,10 @@
  * same one.
  */
 
+import { oracleTests } from "./oracle.js";
 import type { GeneratedSource } from "./workspace.js";
 import type { MarketSpecification, Rule } from "./spec.js";
-import { feeAt, feeSchedule, type FeeSchedule } from "./threshold.js";
+import { downstreamOfTheCharge, feeAt, feeSchedule, type FeeSchedule } from "./threshold.js";
 
 export const CORE_TEST_PATH = "test/MarketCore.t.sol";
 
@@ -70,7 +71,11 @@ export interface StatedFee {
  */
 export function statedFee(specification: MarketSpecification, side: Side): number | null {
   const applies = (rule: Rule): boolean =>
-    rule.when.kind === side || rule.when.kind === "swap" || rule.when.kind === "trade";
+    rule.when.kind === side ||
+    rule.when.kind === "swap" ||
+    rule.when.kind === "trade" ||
+    rule.when.kind === "buyOrSell" ||
+    rule.when.kind === "buyAndSell";
 
   const alters = (rule: Rule): boolean => rule.then.some(chargesFee);
 
@@ -163,36 +168,11 @@ function chargesFee(effect: Rule["then"][number]): boolean {
   return FEE_EFFECTS.has(effect.kind) || /fee|tax|charge|skim|toll|cut/i.test(effect.kind);
 }
 
-/**
- * Whether a rule fires on a fee that has already been taken, rather than on a trade.
- *
- * Where a fee *goes* is a separate rule from what a trade *pays*, and interpretations write it
- * that way: EMBR asked for 3% on sells and 1% on buys, both stated plainly, and a third rule
- * sent the proceeds to the creator — `transferFee` on `feeCollected`. Read as one more rule
- * that might touch a fee, it made both sides unreadable, and a market whose prompt could not
- * have been clearer got no fee assertion from this file at all.
- *
- * Narrow on purpose, in the direction that costs nothing. Mistaking a real trade fee for a
- * routing rule would mean asserting a rate that another rule changes — failing a market that
- * is right, which is the one outcome this file must never produce. So both halves are
- * required: the trigger has to name a fee *and* say it already happened. A trigger that merely
- * mentions a fee still abandons the flat reading.
+/*
+ * `downstreamOfTheCharge` used to live here and now comes from `threshold.ts`, because both
+ * modules need the same answer and only one of them had it. See the note there: Exact Flow's
+ * fee policy was never written because that module read a payout rule as a charging one.
  */
-function downstreamOfTheCharge(rule: Rule): boolean {
-  const kind = rule.when.kind.toLowerCase();
-  if (/fee/.test(kind) && /collect|charged|taken|received|accru|earned/.test(kind)) return true;
-
-  /*
-   * And anything a trade cannot trigger at all.
-   *
-   * HOLD charges 0.3% on every swap and pays it out to holders when they claim. The payout rule
-   * fires on `claim`, mentions fees because that is what it distributes, and made the flat 0.3%
-   * unreadable — so the one number the market is built on was asserted by nothing. A claim, a
-   * withdrawal or a settlement happens because somebody asked for it, never because somebody
-   * traded, so no such rule can change what a trade pays.
-   */
-  return /^(?:claim|withdraw|harvest|redeem|distribut|settle|payout)/.test(kind);
-}
 
 /**
  * The rate an effect states, in parts per million, whatever unit it stated it in.
@@ -308,7 +288,21 @@ export interface CoreTestSuite {
  */
 export function coreTests(
   specification: MarketSpecification,
-  { collectsItsOwnFee }: { readonly collectsItsOwnFee: boolean },
+  {
+    collectsItsOwnFee,
+    prompt,
+  }: {
+    readonly collectsItsOwnFee: boolean;
+    /**
+     * The creator's own words, where the caller has them.
+     *
+     * Only the fee table needs it, and it needs it exactly: the policy library is written
+     * from the specification with the stated economics locked onto it, so a table built
+     * from the specification alone can disagree with the contract for a reason that has
+     * nothing to do with the contract.
+     */
+    readonly prompt?: string;
+  },
 ): CoreTestSuite {
   const sell = statedFee(specification, "sell");
   const buy = statedFee(specification, "buy");
@@ -374,6 +368,17 @@ ${claims.join("\n\n")}
    * as the test itself trades, and asserting a fee against a basis the test is
    * changing would fail a market that is right.
    */
+  /**
+   * Whether this file has already satisfied itself that a sell pays somebody.
+   *
+   * The two blocks below and the flat claim above are the only places that assert money
+   * arrives, and each is careful about when it may. Anything else asking the same question
+   * has to ask it in the same cases — a check that a sell fee is collected on some other
+   * route is nonsense for a market this file could not show collects one on the ordinary
+   * route, and would fail the passive fixtures that are right.
+   */
+  let sellsPaySomebody = sell !== null && sell > 0 && collectsItsOwnFee;
+
   if (
     collectsItsOwnFee &&
     sell === null &&
@@ -381,6 +386,7 @@ ${claims.join("\n\n")}
     sellSchedule.tier !== null &&
     sellSchedule.tier.threshold.basis === "supply"
   ) {
+    sellsPaySomebody = true;
     tests.push(sizeGatedSellFees({ ...sellSchedule, tier: sellSchedule.tier }));
     proves.push(
       `a sell of ${thresholdShare(sellSchedule.tier.threshold.percent)} of supply ` +
@@ -389,8 +395,43 @@ ${claims.join("\n\n")}
     );
   }
 
+  /*
+   * The trade the market did not choose the shape of.
+   *
+   * Every helper above swaps an exact amount in, because that is what AgenRouter does and
+   * what a creator pictures. A trader may instead ask for an exact amount out, and then
+   * the amount the swap names is the quote rather than the token — which is how a hook
+   * measuring `abs(amountSpecified)` ends up comparing a quote amount against a token
+   * supply, and how a surcharge becomes optional for anybody who reads the contract.
+   *
+   * `context.ts` has warned generators about this for a long time and nothing ever checked
+   * it, because no generated suite could reach the case. Claimed only where this file has
+   * already shown a sell pays somebody: charging nothing on this route is then a fee the
+   * market promised and did not take, and refusing the trade outright is a fair answer.
+   */
+  if (sellsPaySomebody) {
+    tests.push(EXACT_OUTPUT_SELL);
+    proves.push("an exact-output sell is charged or refused, and is not a way around the fee");
+  }
+
   tests.push(ceiling(specification.maxFeePpm));
   proves.push(`no trade is charged more than the declared ceiling of ${asPercent(specification.maxFeePpm)}`);
+
+  /*
+   * And the table, where Agen wrote the fee itself.
+   *
+   * Everything above trades and reads what was collected, which is the market working.
+   * This calls the policy directly at the sizes a rate goes wrong, which is the market
+   * being the one that was asked for — a different question, and the one a rendering bug
+   * fails. It is here rather than in a file of its own so that it is authoritative by
+   * construction: the quarantine that protects a build from a model's bad test has no way
+   * to reach inside Agen's own suite.
+   */
+  const oracle = oracleTests(specification, prompt);
+  if (oracle !== null) {
+    tests.push(oracle.functions);
+    proves.push(oracle.proves);
+  }
 
   return {
     source: {
@@ -399,6 +440,7 @@ ${claims.join("\n\n")}
 pragma solidity 0.8.26;
 
 import {MarketTestBase} from "./MarketTestBase.sol";
+${oracle === null ? "" : `${oracle.imports}\n`}
 
 /// @title MarketCoreTest
 /// @notice What Agen proves about every market, written by Agen rather than generated.
@@ -533,6 +575,30 @@ function ceiling(maxFeePpm: number): string {
     }`;
 }
 
+/**
+ * A sell routed the other way round pays this market, or does not happen.
+ *
+ * Deliberately not an assertion about how much. What the pool charges for an exact-output
+ * sell depends on a token amount the pool itself chose, and pinning a number here would
+ * fail markets that are right. Zero is the answer that means something: it is a fee the
+ * market promised and did not take, on a route anybody can use.
+ */
+const EXACT_OUTPUT_SELL = `    /// A sell that asks for an exact amount out is charged, or refused. Not free.
+    function test_core_an_exact_output_sell_is_not_a_way_around_the_fee() public {
+        buy(0.02 ether);
+
+        uint256 tokensBefore = _collectedTokens();
+        uint256 etherBefore = _collectedEther();
+
+        try this.sellForExactQuote(0.001 ether) {
+            uint256 paid = (_collectedTokens() - tokensBefore) + (_collectedEther() - etherBefore);
+            assertGt(paid, 0, "an exact-output sell paid this market nothing");
+        } catch {
+            // A market that cannot measure this trade before it runs is entitled to turn
+            // it away, and turning it away is not a way around anything.
+        }
+    }`;
+
 /** `5000` reads as `0.5%` in a message somebody has to act on. */
 function asPercent(ppm: number): string {
   const percent = ppm / 10_000;
@@ -571,32 +637,27 @@ function sizeGatedSellFees(schedule: FeeSchedule & { readonly tier: NonNullable<
     return { sharePpm, ppm };
   });
 
-  const rows = cases
-    .map(
-      ({ sharePpm, ppm }) =>
-        `            (${String(sharePpm)}, ${String(ppm)})`,
-    )
-    .join(",\n");
+  const calls = cases
+    .map(({ sharePpm, ppm }) => `        _assertSellFeeAtShare(supply, ${String(sharePpm)}, ${String(ppm)});`)
+    .join("\n");
 
   return `    /// A sell of this size pays this rate, including exactly on the named boundary.
     function test_core_size_gated_fees_match_the_specified_threshold() public {
         uint256 supply = tokenSupply();
-        (uint256 sharePpm, uint256 feePpm)[${String(cases.length)}] memory ladder = [
-${rows}
-        ];
+${calls}
+    }
 
-        for (uint256 at = 0; at < ladder.length; at++) {
-            uint256 amount = supply * ladder[at].sharePpm / 1_000_000;
-            require(amount > 0 && amount <= type(uint128).max, "share is not a sellable amount");
+    function _assertSellFeeAtShare(uint256 supply, uint256 sharePpm, uint256 feePpm) internal {
+        uint256 amount = supply * sharePpm / 1_000_000;
+        require(amount > 0 && amount <= type(uint128).max, "share is not a sellable amount");
 
-            uint256 tokensBefore = _collectedTokens();
-            sell(uint128(amount));
-            uint256 taken = _collectedTokens() - tokensBefore;
-            uint256 expected = uint256(lastSellTokens) * ladder[at].feePpm / 1_000_000;
+        uint256 tokensBefore = _collectedTokens();
+        sell(uint128(amount));
+        uint256 taken = _collectedTokens() - tokensBefore;
+        uint256 expected = uint256(lastSellTokens) * feePpm / 1_000_000;
 
-            assertGt(taken, 0, "the sell fee reached none of this market's accounts");
-            assertGe(taken + 1, expected, "the sell fee was smaller than specified at this size");
-            assertLe(taken, expected + 1, "the sell fee was larger than specified at this size");
-        }
+        assertGt(taken, 0, "the sell fee reached none of this market's accounts");
+        assertGe(taken + 1, expected, "the sell fee was smaller than specified at this size");
+        assertLe(taken, expected + 1, "the sell fee was larger than specified at this size");
     }`;
 }

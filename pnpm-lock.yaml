@@ -29,6 +29,9 @@ importers:
       '@verdant/market-compiler':
         specifier: workspace:*
         version: link:../../packages/market-compiler
+      '@verdant/market-engine':
+        specifier: workspace:*
+        version: link:../../packages/market-engine
       '@verdant/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
@@ -90,6 +93,9 @@ importers:
       '@verdant/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@verdant/market-engine':
+        specifier: workspace:*
+        version: link:../../packages/market-engine
       '@verdant/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
@@ -309,9 +315,31 @@ importers:
       '@verdant/config':
         specifier: workspace:*
         version: link:../config
+      '@verdant/market-engine':
+        specifier: workspace:*
+        version: link:../market-engine
       undici:
         specifier: ^7.16.0
         version: 7.29.0
+      viem:
+        specifier: ^2.40.0
+        version: 2.55.10(typescript@5.9.3)(zod@4.4.3)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.18.0
+        version: 22.20.1
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)
+
+  packages/market-engine:
+    dependencies:
+      '@verdant/config':
+        specifier: workspace:*
+        version: link:../config
       viem:
         specifier: ^2.40.0
         version: 2.55.10(typescript@5.9.3)(zod@4.4.3)

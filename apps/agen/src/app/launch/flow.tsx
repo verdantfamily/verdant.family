@@ -27,6 +27,12 @@ import { Info } from "./info";
 import { Progress } from "./progress";
 import { ImageField } from "./image-field";
 import { rememberImage } from "./remembered-image";
+import {
+  EngineClarify,
+  EngineInterpretationError,
+  EngineUnsupported,
+} from "./engine-outcome";
+import { EngineReviewScreen } from "./engine-review";
 import { Review } from "./review";
 
 type Phase = "describe" | "building" | "review";
@@ -111,8 +117,16 @@ function useJob(jobId: string | null, onMissing: () => void): PublicJob | null {
         setJob(next);
 
         // A finished build is not going to change, and a screen that keeps asking is a
-        // screen that keeps a server busy for nothing.
-        if (next.stage === "deployment_ready" || next.stage === "failed") return;
+        // screen that keeps a server busy for nothing. A build waiting on an answer will
+        // not advance either, and polling one is asking a server to confirm that nobody
+        // has typed anything yet.
+        if (
+          next.stage === "deployment_ready" ||
+          next.stage === "failed" ||
+          next.stage === "awaiting_clarification"
+        ) {
+          return;
+        }
       } catch {
         // A dropped request during a long build is ordinary. The next tick recovers, and
         // surfacing it would mean an error banner for a hiccup that resolves before
@@ -275,7 +289,13 @@ export function Flow() {
   // The build decides the screen once it exists.
   useEffect(() => {
     if (job === null) return;
-    setPhase(job.stage === "deployment_ready" || job.stage === "failed" ? "review" : "building");
+    setPhase(
+      job.stage === "deployment_ready" ||
+        job.stage === "failed" ||
+        job.stage === "awaiting_clarification"
+        ? "review"
+        : "building",
+    );
   }, [job]);
 
   const start = useCallback(async () => {
@@ -517,13 +537,93 @@ export function Flow() {
         </section>
       ) : null}
 
-      {phase === "review" && job !== null ? (
+      {/*
+        Engine v1 has four endings and engine 0 has two, so they cannot share a branch.
+        The routing reads `engineVersion` rather than sniffing which artefacts are present:
+        a job that failed before interpretation has neither a specification nor a
+        configuration, and guessing from absence would render the wrong screen exactly when
+        there is least to go on.
+      */}
+      {phase === "review" && job !== null && job.engineVersion === 1 ? (
+        <section className="panel-wide">
+          {job.stage === "awaiting_clarification" ? (
+            <EngineClarify
+              job={job}
+              onAnswer={async (answers) => {
+                const response = await fetch(`/api/markets/${job.id}/answer`, {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ answers }),
+                });
+                const body = (await response.json()) as { jobId?: string; error?: string };
+                if (!response.ok || body.jobId === undefined) {
+                  throw new Error(body.error ?? "Agen could not use those answers.");
+                }
+
+                setPhase("building");
+                // Same reasoning as the engine-0 edit path below: the id is unchanged and
+                // this tab's poll already stopped, so a reload is what restarts it.
+                window.location.reload();
+              }}
+            />
+          ) : job.engine?.outcome === "UNSUPPORTED" ? (
+            <EngineUnsupported
+              job={job}
+              onRestart={() => {
+                setJobId(null);
+                setPhase("describe");
+              }}
+            />
+          ) : job.engine?.outcome === "INTERPRETATION_ERROR" ? (
+            <EngineInterpretationError
+              onRetry={() => {
+                setJobId(null);
+                setPhase("describe");
+              }}
+            />
+          ) : job.failure === null ? (
+            <EngineReviewScreen job={job} />
+          ) : (
+            <>
+              <Progress job={job} />
+              <div className="ax-go">
+                <button
+                  type="button"
+                  className="ax-cta"
+                  onClick={() => {
+                    setJobId(null);
+                    setPhase("describe");
+                  }}
+                >
+                  Change the description
+                </button>
+              </div>
+            </>
+          )}
+        </section>
+      ) : null}
+
+      {phase === "review" && job !== null && job.engineVersion !== 1 ? (
         <section className="panel-wide">
           {job.failure === null ? (
             <Review
               job={job}
-              onEdit={() => {
-                setPhase("describe");
+              onEdit={async (instruction) => {
+                const response = await fetch(`/api/markets/${job.id}/edit`, {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ instruction }),
+                });
+                const body = (await response.json()) as { ok?: boolean; error?: string };
+                if (!response.ok || body.ok !== true) {
+                  throw new Error(body.error ?? "Agen could not apply that change.");
+                }
+
+                setPhase("building");
+                // The job id is unchanged and the old poll deliberately stopped at
+                // deployment_ready. Reloading starts a new poll against the persisted
+                // prompt_received state written by the edit route.
+                window.location.reload();
               }}
             />
           ) : (

@@ -208,9 +208,31 @@ abstract contract AgenBaseHook is IHooks {
         return params.zeroForOne;
     }
 
-    /// @notice The size of the swap, however it was specified.
+    /// @notice How much of the currency the swap *named* is moving.
+    /// @dev Which currency that is depends on the swap: the input on an exact-input swap,
+    /// the output on an exact-output one. So this is the right number for a rule about the
+    /// size of a trade in the abstract, and the wrong one for a rule about an amount of a
+    /// particular token. For the latter use tokenAmount, which says when it does not know.
     function swapAmount(SwapParams calldata params) internal pure returns (uint256) {
         return params.amountSpecified < 0 ? uint256(-params.amountSpecified) : uint256(params.amountSpecified);
+    }
+
+    /// @notice How much of the launched token this swap moves, where that is settled already.
+    ///
+    /// @dev A rule measured in the token — "a sell of at least 1% of the supply" — needs this
+    /// and not swapAmount, because only one of the two legs is fixed before the swap runs and
+    /// it is not always the token's. An Agen pool is (quote, token), so the token leg is
+    /// settled on an exact-input sell and on an exact-output buy, and decided by the pool on
+    /// the other two.
+    ///
+    /// @return amount The token amount, or zero where this swap has not fixed one.
+    /// @return known Whether amount means anything. False obliges the caller to either
+    /// resolve the trade in _afterSwap from the BalanceDelta, or refuse it — silently
+    /// treating zero, or the quote leg, as the token amount is how a size threshold ends up
+    /// measured in the wrong currency and skipped by anybody who routes exact-output.
+    function tokenAmount(SwapParams calldata params) internal pure returns (uint256 amount, bool known) {
+        known = params.zeroForOne != (params.amountSpecified < 0);
+        amount = known ? swapAmount(params) : 0;
     }
 
     /// @notice Move amount of currency out of the pool and into recipient.
@@ -740,6 +762,39 @@ abstract contract AgenTest is Test {
             SwapParams({
                 zeroForOne: zeroForOne,
                 amountSpecified: -int256(amount),
+                sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+            }),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+    }
+
+    /// @notice Swap for an exact amount out, which is the trade a market does not choose.
+    ///
+    /// @dev The other half of swapExactIn, and the half nothing used to exercise. A hook
+    /// reads params.amountSpecified as an amount of whichever currency the swap named, and
+    /// for this one that is the output — so a rule measured in the token is measured
+    /// against the wrong currency here and nowhere else. A market whose suite only ever
+    /// swaps exact-input cannot discover that, which is the position every generated
+    /// market was in.
+    ///
+    /// Native input is unsupported on purpose: the amount to send is not known until the
+    /// swap has run, so a caller would have to overpay and the router would strand it. In
+    /// an Agen pool that means selling, which is the direction this matters for.
+    function swapExactOut(PoolKey memory key, bool zeroForOne, uint256 amountOut)
+        internal
+        returns (BalanceDelta)
+    {
+        require(
+            !(zeroForOne && key.currency0.isAddressZero()),
+            "exact-output with native input needs an amount nobody knows yet"
+        );
+
+        return swapRouter.swap(
+            key,
+            SwapParams({
+                zeroForOne: zeroForOne,
+                amountSpecified: int256(amountOut),
                 sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
             }),
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),

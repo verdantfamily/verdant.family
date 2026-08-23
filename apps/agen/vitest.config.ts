@@ -8,7 +8,10 @@ export default defineConfig({
     // enclosing pnpm workspace, and a checkout nested inside another one collects every
     // test twice.
     root: dirname(fileURLToPath(import.meta.url)),
-    include: ["src/**/*.test.ts"],
+    // `.tsx` as well as `.ts`, since the engine-v1 review screens are asserted by rendering
+    // them — the invariant that the UI states only what the canonical configuration says
+    // cannot be checked without the markup.
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     environment: "node",
     /*
      * Above the default five seconds, which was never a claim about these tests.

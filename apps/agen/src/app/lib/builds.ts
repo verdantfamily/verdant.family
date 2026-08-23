@@ -35,6 +35,7 @@
 import "server-only";
 
 import { resolve } from "node:path";
+import { getAddress, isAddress, isHex, verifyMessage } from "viem";
 
 import type {
   ClarificationAnswer,
@@ -44,13 +45,17 @@ import type {
   ModelProvider,
 } from "@verdant/market-compiler";
 import {
+  approvalMessage,
+  engineApprovalMessage,
+  engineVersionOf,
   anthropicProvider,
   fallbackProvider,
   fileJobStore,
+  hashSpecification,
   openAiProvider,
 } from "@verdant/market-compiler";
 
-import { answer, positionOf, recoverInterrupted, submit, type QueuePosition } from "./queue";
+import { answer, edit, positionOf, recoverInterrupted, submit, type QueuePosition } from "./queue";
 
 /**
  * The repository root.
@@ -110,49 +115,104 @@ export interface ModelStatus {
   readonly model: string;
 }
 
-/** Whether a build can be started at all, and with what. */
+/**
+ * Whether a build can be started at all, and with what.
+ *
+ * Either vendor is enough, and the name reported is the one a stage would actually ask
+ * first — read from the same ordering the pipeline uses rather than worked out again here.
+ * The first version of this decided for itself, which is how the status endpoint came to
+ * name a vendor that `AGEN_PRIMARY` had already moved out of the way.
+ */
 export function modelStatus(): ModelStatus {
-  const key = process.env["OPENAI_API_KEY"];
+  const [primary] = orderedProviders();
+
   return {
-    configured: typeof key === "string" && key.length > 0,
-    model: process.env["AGEN_MODEL"] ?? "gpt-5",
+    configured: primary !== null,
+    model: primary?.model ?? openAiModel(),
   };
+}
+
+/** The Anthropic model for the strong role. `AGEN_ESCALATION_MODEL` is the old name. */
+function claudeModel(): string {
+  return (
+    process.env["AGEN_CLAUDE_MODEL"] ??
+    process.env["AGEN_ESCALATION_MODEL"] ??
+    "claude-sonnet-4-5"
+  );
+}
+
+/** The OpenAI model for the strong role. */
+function openAiModel(): string {
+  return process.env["AGEN_MODEL"] ?? "gpt-5";
+}
+
+/**
+ * Claude, if there is a key for it.
+ *
+ * Both models where they are configured, because the stages ask for a role rather than a
+ * name: the strong one does architecture, Solidity and repair, the fast one the work where
+ * the judgement was already made upstream. See STAGE_ROLES. No fast model is invented — a
+ * provider told about one model uses it for everything, which is slower and dearer than it
+ * needs to be but never wrong, and guessing an identifier that does not exist would fail
+ * every fast call.
+ */
+function claudeOrNull(): ModelProvider | null {
+  const key = process.env["ANTHROPIC_API_KEY"];
+  if (key === undefined || key.length === 0) return null;
+
+  const fast = process.env["AGEN_CLAUDE_MODEL_FAST"];
+
+  return anthropicProvider({
+    apiKey: key,
+    model: claudeModel(),
+    ...(fast === undefined ? {} : { fastModel: fast }),
+    ...(process.env["ANTHROPIC_BASE_URL"] === undefined
+      ? {}
+      : { baseUrl: process.env["ANTHROPIC_BASE_URL"] }),
+  });
+}
+
+/** OpenAI, if there is a key for it. */
+function openAiOrNull(): ModelProvider | null {
+  const key = process.env["OPENAI_API_KEY"];
+  if (key === undefined || key.length === 0) return null;
+
+  return openAiProvider({
+    apiKey: key,
+    model: openAiModel(),
+    fastModel: process.env["AGEN_MODEL_FAST"] ?? "gpt-5-mini",
+    ...(process.env["OPENAI_BASE_URL"] === undefined
+      ? {}
+      : { baseUrl: process.env["OPENAI_BASE_URL"] }),
+  });
 }
 
 /**
  * The vendor wiring the pipeline uses, shared so the agent planner asks the same
  * one. A second construction site would be a second set of environment variables
  * to get wrong, and a deployment where builds work and agents quietly do not.
+ *
+ * Claude leads where it is configured. Which one leads is a judgement about first-attempt
+ * correctness rather than about capability — a build that comes back right the first time
+ * saves a whole repair round, and repair rounds are most of what a slow build is made of.
+ * `AGEN_PRIMARY=openai` puts it back without a deploy.
+ *
+ * A build is twenty minutes of work, and any minute of it could be thrown away by the
+ * vendor being briefly unable to answer — an exhausted balance, a spell of 500s. That is
+ * not a market Agen failed to understand, but it reached a creator as a failed launch all
+ * the same. Only reachability fails over; a rejected artefact still belongs to the repair
+ * loops. See `fallbackProvider`.
  */
 export function providerOrNull(): ModelProvider | null {
-  const key = process.env["OPENAI_API_KEY"];
-  if (key === undefined || key.length === 0) return null;
+  const [primary, secondary] = orderedProviders();
+  if (primary === null) return null;
+  if (secondary === null) return primary;
 
-  // Both models, because the stages ask for a role rather than a name: the strong one
-  // does architecture, Solidity and repair, the fast one the work where the judgement
-  // was already made upstream. See STAGE_ROLES.
-  const openAi = openAiProvider({
-    apiKey: key,
-    model: modelStatus().model,
-    fastModel: process.env["AGEN_MODEL_FAST"] ?? "gpt-5-mini",
-    ...(process.env["OPENAI_BASE_URL"] === undefined
-      ? {}
-      : { baseUrl: process.env["OPENAI_BASE_URL"] }),
-  });
-
-  // A build is twenty minutes of work, and until now any minute of it could be thrown
-  // away by the vendor being briefly unable to answer — an exhausted balance, a spell of
-  // 500s. That is not a market Agen failed to understand, but it reached a creator as a
-  // failed launch all the same. Only reachability fails over; a rejected artefact still
-  // belongs to the repair loops. See `fallbackProvider`.
-  const other = escalationProviderOrNull();
-  if (other === null) return openAi;
-
-  return fallbackProvider(openAi, other, {
+  return fallbackProvider(primary, secondary, {
     onFailover: (error) => {
       console.warn(
-        `[agen] ${error.stage}: OpenAI could not answer (${error.message}); ` +
-          "finishing this stage on the escalation provider",
+        `[agen] ${error.stage}: ${primary.name} could not answer (${error.message}); ` +
+          `finishing this stage on ${secondary.name}`,
       );
     },
   });
@@ -161,21 +221,27 @@ export function providerOrNull(): ModelProvider | null {
 /**
  * The vendor the pipeline turns to when the first one is stuck rather than unreachable.
  *
- * Optional on purpose: with no `ANTHROPIC_API_KEY` the repair ladder stops one rung lower
- * and every build behaves as it did before. Nothing about a normal build reaches this —
- * it is asked only after a repair has come back with the same failure it was sent to fix.
+ * Always the family that is not leading, which is the whole point of it: a model's
+ * mistakes are correlated with itself far more than with the problem, so the third attempt
+ * at a repair is worth more from a different family than from a longer prompt to the same
+ * one. Null when only one vendor is configured — the repair ladder then stops one rung
+ * lower, and nothing else about a build changes.
  */
 export function escalationProviderOrNull(): ModelProvider | null {
-  const key = process.env["ANTHROPIC_API_KEY"];
-  if (key === undefined || key.length === 0) return null;
+  const [primary, secondary] = orderedProviders();
+  return primary === null ? null : secondary;
+}
 
-  return anthropicProvider({
-    apiKey: key,
-    model: process.env["AGEN_ESCALATION_MODEL"] ?? "claude-sonnet-4-5",
-    ...(process.env["ANTHROPIC_BASE_URL"] === undefined
-      ? {}
-      : { baseUrl: process.env["ANTHROPIC_BASE_URL"] }),
-  });
+/** Both vendors, the one that answers first in front. */
+function orderedProviders(): readonly [ModelProvider | null, ModelProvider | null] {
+  const claude = claudeOrNull();
+  const openAi = openAiOrNull();
+
+  if (process.env["AGEN_PRIMARY"] === "openai") {
+    return [openAi ?? claude, openAi === null ? null : claude];
+  }
+
+  return [claude ?? openAi, claude === null ? null : openAi];
 }
 
 export interface StartResult {
@@ -252,6 +318,177 @@ export async function answerBuildQuestions(
   return { ok: true, jobId: job.id };
 }
 
+/** Apply a creator's requested change to this build instead of starting an unrelated one. */
+export async function editBuild(jobId: string, instruction: string): Promise<StartResult> {
+  const provider = providerOrNull();
+  if (provider === null) {
+    return {
+      ok: false,
+      error: "No model endpoint is configured, so Agen cannot apply this change.",
+    };
+  }
+
+  const job = await edit(jobId, instruction, provider);
+  if (job === null) return { ok: false, error: "There is no build with that id." };
+  return { ok: true, jobId: job.id };
+}
+
+/**
+ * Record a wallet signature over the exact specification and implementation that passed.
+ *
+ * A rebuild changes a hash and invalidates this automatically. Approval therefore means
+ * "launch these bytes under this specification", not merely "I once saw this build".
+ */
+export async function approveBuild(request: {
+  readonly jobId: string;
+  readonly creator: string;
+  readonly signature: string;
+}): Promise<StartResult> {
+  const job = await jobStore().read(request.jobId);
+  if (job === null) return { ok: false, error: "There is no build with that id." };
+
+  if (engineVersionOf(job) === 1) return await approveEngineBuild(job, request);
+
+  if (
+    job.stage !== "deployment_ready" ||
+    job.manifest === null ||
+    job.specification === null ||
+    job.intent === null ||
+    job.intent === undefined
+  ) {
+    return { ok: false, error: "This build is not ready for approval." };
+  }
+  if (job.semanticCoverage?.complete !== true) {
+    return {
+      ok: false,
+      error: "This build has unproved behavior and cannot be approved for launch.",
+    };
+  }
+  if (!isAddress(request.creator, { strict: false }) || !isHex(request.signature)) {
+    return { ok: false, error: "The approval signature or creator address is invalid." };
+  }
+
+  const creator = getAddress(request.creator);
+  const intentHash = hashSpecification(job.intent);
+  const message = approvalMessage({
+    jobId: job.id,
+    specificationVersion: job.specification.version,
+    specificationHash: job.manifest.specificationHash,
+    implementationHash: job.manifest.implementationHash,
+    intentHash,
+    creator,
+  });
+  const valid = await verifyMessage({
+    address: creator,
+    message,
+    signature: request.signature,
+  }).catch(() => false);
+  if (!valid) return { ok: false, error: "The wallet did not sign this exact build." };
+
+  const approvedAt = Date.now();
+  await jobStore().write({
+    ...job,
+    updatedAt: approvedAt,
+    approval: {
+      specificationVersion: job.specification.version,
+      specificationHash: job.manifest.specificationHash,
+      implementationHash: job.manifest.implementationHash,
+      intentHash,
+      approvedAt,
+      approvedBy: creator,
+      signature: request.signature,
+    },
+  });
+
+  return { ok: true, jobId: job.id };
+}
+
+/**
+ * Which pipeline built this job, for a caller that has only its id.
+ *
+ * Exists so a route can branch before doing any work, without reaching into the store itself
+ * and without deciding for itself what "engine v1" looks like. Absent jobs report 0, which
+ * sends the caller down the engine-0 path and straight into its own "no such build" refusal —
+ * the right error, from the code that already words it well.
+ */
+export async function isEngineBuild(jobId: string): Promise<boolean> {
+  const job = await jobStore().read(jobId);
+  return job !== null && engineVersionOf(job) === 1;
+}
+
+/**
+ * The same act for an engine-v1 build, which has no manifest and no generated implementation.
+ *
+ * What is being approved is narrower and stronger than at engine 0: a commitment over the
+ * canonical configuration, the engine that will execute it and the chain it will run on. There
+ * is no compiled artefact to attest to, because nothing was compiled — so the checks that
+ * matter are that the build actually reached preparation, and that the signature is over the
+ * exact commitment now stored on the job.
+ *
+ * A rebuild changes the configuration, which changes the commitment, which makes any stored
+ * signature stop verifying. That is what makes approval binding rather than ceremonial, and it
+ * is the same property engine 0 gets from its specification and implementation hashes.
+ */
+async function approveEngineBuild(
+  job: GenerationJob,
+  request: { readonly jobId: string; readonly creator: string; readonly signature: string },
+): Promise<StartResult> {
+  const engine = job.engine;
+
+  if (
+    job.stage !== "deployment_ready" ||
+    engine === null ||
+    engine.configHash === null ||
+    engine.implementationHash === null
+  ) {
+    return { ok: false, error: "This build is not ready for approval." };
+  }
+
+  if (!isAddress(request.creator, { strict: false }) || !isHex(request.signature)) {
+    return { ok: false, error: "The approval signature or creator address is invalid." };
+  }
+
+  const creator = getAddress(request.creator);
+  const valid = await verifyMessage({
+    address: creator,
+    message: engineApprovalMessage({
+      jobId: job.id,
+      engineVersion: 1,
+      configHash: engine.configHash,
+      implementationHash: engine.implementationHash,
+      creator,
+    }),
+    signature: request.signature,
+  }).catch(() => false);
+  if (!valid) return { ok: false, error: "The wallet did not sign these exact market rules." };
+
+  const approvedAt = Date.now();
+  await jobStore().write({
+    ...job,
+    updatedAt: approvedAt,
+    approval: {
+      /*
+       * The engine's own numbers in the shared approval record.
+       *
+       * `specificationVersion` is the engine version and `specificationHash` is the
+       * configuration hash, because for an engine market those are the same facts under
+       * different names — the canonical configuration *is* the specification. `intentHash`
+       * repeats the commitment rather than inventing a value: engine 1 has no separate intent
+       * document, and a zero here would be a hash somebody could later mistake for one.
+       */
+      specificationVersion: 1,
+      specificationHash: engine.configHash,
+      implementationHash: engine.implementationHash,
+      intentHash: engine.implementationHash,
+      approvedAt,
+      approvedBy: creator,
+      signature: request.signature,
+    },
+  });
+
+  return { ok: true, jobId: job.id };
+}
+
 /**
  * What the browser is allowed to know about a job.
  *
@@ -275,6 +512,12 @@ export interface PublicJob {
   readonly tests: readonly { readonly path: string; readonly content: string }[];
   readonly testOutcomes: GenerationJob["testOutcomes"];
   readonly gateFindings: GenerationJob["gateFindings"];
+  readonly intent: GenerationJob["intent"];
+  readonly semanticCoverage: GenerationJob["semanticCoverage"];
+  readonly approval: null | {
+    readonly approvedAt: number;
+    readonly approvedBy: string;
+  };
   readonly simulation: GenerationJob["simulation"];
   readonly compilationAttempts: number;
   readonly testAttempts: number;
@@ -303,6 +546,10 @@ export interface PublicJob {
      * "kept by the pool's liquidity" for markets that were sending the fee to a vault.
      */
     readonly feeCollection: FeeCollection;
+    readonly specificationVersion: number;
+    readonly specificationHash: `0x${string}`;
+    readonly implementationHash: `0x${string}`;
+    readonly intentHash: `0x${string}`;
   } | null;
   /**
    * Set only while this build is waiting for a slot.
@@ -313,6 +560,24 @@ export interface PublicJob {
    * "waiting" and mean it.
    */
   readonly queue: QueuePosition | null;
+  /**
+   * Which pipeline built this job. Absent on every job persisted before the engine existed.
+   *
+   * The screen branches on this rather than sniffing which artefacts happen to be present,
+   * because "has a specification" and "has an engine configuration" are both true of nothing
+   * and a job mid-build has neither.
+   */
+  readonly engineVersion: 0 | 1;
+  /**
+   * The deterministic engine's artefacts, or `null` on an engine-0 job.
+   *
+   * Passed through whole rather than projected. Everything in it is already JSON-safe — the
+   * pipeline renders bigints as strings on the way in, for the reason the `launch` field above
+   * explains — and every field is something the review screen shows. Projecting it here would
+   * be a second opinion about what a market does, which is the one thing this refactor exists
+   * to remove.
+   */
+  readonly engine: GenerationJob["engine"];
 }
 
 export function publicView(job: GenerationJob): PublicJob {
@@ -331,13 +596,36 @@ export function publicView(job: GenerationJob): PublicJob {
     tests: job.tests,
     testOutcomes: job.testOutcomes,
     gateFindings: job.gateFindings,
+    intent: job.intent ?? null,
+    semanticCoverage: job.semanticCoverage ?? null,
+    approval:
+      job.approval === null || job.approval === undefined
+        ? null
+        : {
+            approvedAt: job.approval.approvedAt,
+            approvedBy: job.approval.approvedBy,
+          },
     simulation: job.simulation,
+    engineVersion: job.engineVersion ?? 0,
+    engine: job.engine ?? null,
     compilationAttempts: job.compilationAttempts,
     testAttempts: job.testAttempts,
     harnessAttempts: job.harnessAttempts,
-    failure: job.failure,
+    failure:
+      job.failure === null
+        ? null
+        : (() => {
+            // Compiler output is for operators. A creator who opened Technical
+            // details was shown a reserved keyword and thought their token was wrong.
+            const { diagnostics: _diagnostics, failingTests: _failingTests, ...safe } =
+              job.failure;
+            return safe;
+          })(),
     launch:
-      job.manifest === null
+      job.manifest === null ||
+      job.semanticCoverage?.complete !== true ||
+      job.intent === null ||
+      job.intent === undefined
         ? null
         : {
             supplyTokens: job.manifest.supplyTokens.toString(),
@@ -356,6 +644,10 @@ export function publicView(job: GenerationJob): PublicJob {
              * short of naming a destination, which is the honest answer rather than a tidy one.
              */
             feeCollection: job.manifest.feeMode === "dynamic" ? "unknown" : "market",
+            specificationVersion: job.specification?.version ?? 1,
+            specificationHash: job.manifest.specificationHash,
+            implementationHash: job.manifest.implementationHash,
+            intentHash: hashSpecification(job.intent),
           },
     queue: positionOf(job.id),
   };

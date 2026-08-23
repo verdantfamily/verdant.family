@@ -26,7 +26,7 @@ import { Chart } from "./chart";
 import { Comments } from "./comments";
 import { CopyAddress } from "./copy";
 import { Holders } from "./holders";
-import { Mechanics } from "./mechanics";
+import { EngineMechanics, Mechanics } from "./mechanics";
 import { CreatorPayout } from "./payout";
 import { TradePanel } from "./trade";
 import { Trades } from "./trades";
@@ -146,15 +146,25 @@ export default async function Token({ params }: { params: Promise<{ id: string }
   /*
    * The fee the trade card quotes before a quote exists.
    *
-   * Two sources, because the two products decide it in different places. A programmable
+   * Three sources now, because three products decide it in three places. A generated
    * market's is in the specification its creator approved and compiled. An Instant
    * market's is a constant of the shared hook, and `InstantFees` is the copy that
    * governs — not the registry row, whose `creatorBps` and `protocolBps` are zero on
    * purpose because a 1.00/0.50 split of 1.50% does not divide into whole basis points.
    * See ADR-014.
+   *
+   * An engine market's is derived by the engine from its canonical configuration and carried
+   * on the market. The card quotes the opening buy rate — what a trade pays before any tier or
+   * stage applies — because a card cannot know a trade's size before it is typed, and quoting
+   * a tier rate would quote a fee most trades never pay. The mechanics panel below states the
+   * rest, including the sell side where it differs.
    */
   const feePpm =
-    market.kind === "instant" ? INSTANT_FEE_PPM : market.specification.baseFeePpm;
+    market.kind === "instant"
+      ? INSTANT_FEE_PPM
+      : market.engineVersion === 1
+        ? market.openingBuyPpm
+        : market.specification.baseFeePpm;
 
   /** The links the About panel can truthfully offer. Built here so the markup stays flat. */
   const links = market.kind === "instant" ? market.links : {};
@@ -351,8 +361,16 @@ export default async function Token({ params }: { params: Promise<{ id: string }
               
               The union in `lib/markets.ts` is what enforces this: `market.specification`
               does not exist on the Instant branch, so this cannot be un-gated by accident.
+
+              And now it does not exist on the engine branch either, which is the same
+              enforcement doing the same job a second time. An engine market has no
+              specification to explain, no declared variables to read and no generated
+              contracts to point at — it has a configuration, and the engine already turned
+              that into the same review cards the creator approved. Rendering those is
+              rendering exactly what was deployed, which is the property this whole path is
+              built around.
             */}
-            {market.kind === "programmable" ? (
+            {market.kind === "programmable" && market.engineVersion === 0 ? (
               <Mechanics
                 sections={howThisMarketWorks(market.specification)}
                 descriptors={liveStateDescriptors(market.specification)}
@@ -360,6 +378,10 @@ export default async function Token({ params }: { params: Promise<{ id: string }
                 baseFeePpm={market.specification.baseFeePpm}
                 maxFeePpm={market.specification.maxFeePpm}
               />
+            ) : null}
+
+            {market.kind === "programmable" && market.engineVersion === 1 ? (
+              <EngineMechanics review={market.review} />
             ) : null}
           </div>
         </div>

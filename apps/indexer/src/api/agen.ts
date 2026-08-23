@@ -96,6 +96,31 @@ function present(row: MarketRow) {
     specificationHash: row.specificationHash,
     implementationHash: row.implementationHash,
 
+    /**
+     * Which engine runs this market, and — where it is the deterministic one — its rules.
+     *
+     * Always present and never inferred. A consumer branches on `version` rather than on
+     * whether `config` happens to be there, because the two engines are mechanically different
+     * and a market shown under the wrong one is a market described by the wrong rules.
+     *
+     * `config` is the canonical configuration as bytes, which is what makes an engine market
+     * legible without its prompt: decoding it with `@verdant/market-engine` yields every rate,
+     * threshold, recipient and protection it will ever apply. It is verified against `hash`
+     * before it is stored, so bytes present here have been proved to be the ones the hook
+     * derived its own commitment from.
+     *
+     * Note that `hook` above is shared by every engine-1 market. It is not an identifier for
+     * one, and nothing may resolve a market through it.
+     */
+    engine: {
+      version: row.engineVersion,
+      hash: row.configHash,
+      config: row.encodedConfig,
+      vault: row.vault,
+      /** The quote asset, or the launched token where size tiers forced it. See ADR-018. */
+      feeCurrency: row.feeCurrency,
+    },
+
     locker: row.locker,
     firstPositionId: row.firstPositionId.toString(),
     supplyLocked: row.supplyLocked.toString(),
@@ -208,11 +233,21 @@ export function agenRoutes({
         tokenAmount: entry.tokenAmount.toString(),
         price: price(entry.sqrtPriceX96),
         /**
-         * The rate this swap was actually charged, which for a generated market is the
-         * hook's own decision at that moment rather than the pool's stored fee. It is
-         * the most interesting number in the row: it is the mechanic, observed.
+         * The rate this swap was actually charged.
+         *
+         * For a generated market, the pool's reported fee — which for those pools is the hook's
+         * own decision at that moment rather than a stored constant. It is the most interesting
+         * number in the row: it is the mechanic, observed.
+         *
+         * For an engine market, `programmableFeePpm`. The engine hook zeroes the pool's LP fee
+         * and takes Agen's fee as a swap delta, so the pool reports nothing and the rate comes
+         * from the hook's own `FeeTaken`. Resolved here rather than left to each consumer,
+         * because a client reading the pool's zero would publish "this trade was free" about a
+         * trade that paid four percent.
          */
-        feePpm: entry.feePpm,
+        feePpm: entry.programmableFeePpm ?? entry.feePpm,
+        /** What was taken, in the fee currency's base units. Null on a generated market. */
+        feeAmount: entry.feeAmount === null ? null : entry.feeAmount.toString(),
         timestamp: entry.timestamp,
         transactionHash: entry.transactionHash,
       })),

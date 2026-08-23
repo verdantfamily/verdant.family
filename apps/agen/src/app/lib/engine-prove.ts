@@ -34,7 +34,7 @@
 
 import type { PreparedLaunch } from "@verdant/market-compiler";
 import type { CanonicalConfig } from "@verdant/market-engine";
-import { type Address, type Hex } from "viem";
+import { type Hex, getAddress } from "viem";
 
 import { publicClient } from "./onchain";
 
@@ -58,8 +58,17 @@ const GAS_HEADROOM_WEI = 10n ** 18n;
  *
  * Deliberately not the treasury or any address with privileges, so a proof cannot pass on
  * permissions the real creator will not have.
+ *
+ * Written lowercase and checksummed by `getAddress` rather than typed out in mixed case. The
+ * mixed-case form of these twenty bytes was hand-written once and was wrong — EIP-55 case is
+ * a hash of the digits, not a style — and `as Address` hid it, because `Address` is a template
+ * literal type that a cast satisfies without anything checking the value. viem does check, at
+ * the point of use, so every engine build failed in `encodeFunctionData` while preparing its
+ * calldata: `undeployable`, on a market whose configuration was fine. Deriving the checksum
+ * makes the literal unable to disagree with itself, and `getAddress` throws on import rather
+ * than mid-build if the digits are ever mistyped.
  */
-export const SIMULATED_CREATOR = "0xA9e1f0000000000000000000000000000000A9e1" as Address;
+export const SIMULATED_CREATOR = getAddress("0xa9e1f0000000000000000000000000000000a9e1");
 
 export class LaunchProofError extends Error {
   constructor(

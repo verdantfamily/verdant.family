@@ -15,14 +15,19 @@
 # the wrong Uniswap — or paying the wrong treasury — is not repaired, it is abandoned, along
 # with any market launched through it in the meantime.
 #
-# Simulating is the default. Broadcasting takes --broadcast, and the key is never an argument
-# or an environment variable: forge prompts for it, so it stays out of argv, out of the
-# environment and out of shell history.
+# Simulating is the default. Broadcasting takes --broadcast and signs from an encrypted
+# keystore, so the key is never an argument, never an environment variable, and never pasted
+# at a prompt where a terminal could scroll it or a clipboard could keep it. Only the
+# passphrase is typed, and only into forge's own prompt.
 set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 readonly BROADCAST=${1:-}
+
+# The keystore under ~/.foundry/keystores that holds the operator's key. A name, not a secret:
+# what it unlocks is decided by the passphrase, which this script never sees.
+readonly ACCOUNT=${ACCOUNT:-mainnet-deployer}
 
 # Which chain. The alias is a foundry.toml rpc_endpoint, so this cannot be pointed at an
 # endpoint the rest of the repository does not know about.
@@ -150,9 +155,36 @@ if [ "$BROADCAST" != "--broadcast" ]; then
 fi
 
 echo
+echo "--- confirming the signer before anything irreversible ---"
+# Asked of the keystore directly, and compared here, rather than left to forge.
+#
+# forge does refuse to sign for an address it has no wallet for, so a mismatched keystore
+# cannot broadcast — but that refusal arrives after the suite, the sizes and the simulation
+# have all run, and it reads like a configuration error rather than the thing it is: this is
+# not the operator, so every address in the book above is wrong. `FactoryOrigin` derives from
+# the signing account and its nonce, so the identity of the signer *is* the deployment.
+#
+# The passphrase is typed into this prompt and nowhere else. Only the address it resolves to
+# is captured, and that is public.
+resolved=$(cd packages/contracts && cast wallet address --account "$ACCOUNT")
+[ -n "$resolved" ] || fail "the keystore '$ACCOUNT' could not be unlocked, so the signer is unknown. Nothing was sent."
+
+lower() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
+if [ "$(lower "$resolved")" != "$(lower "$SENDER")" ]; then
+  fail "the keystore '$ACCOUNT' holds $resolved, but this deployment was simulated for $SENDER.
+         Every address in the book above derives from the signing account, so this keystore
+         would deploy a different engine at different addresses. Nothing was sent."
+fi
+echo "  ok    keystore '$ACCOUNT' holds $resolved, which is the operator this was simulated for"
+
+echo
 echo "--- 4/4 broadcasting ---"
-# --interactives 1 prompts for the key. Paste it at the prompt; it is not echoed and it does
-# not reach argv, the environment or the shell's history.
+# Signed from the keystore. forge prompts for its passphrase; the key itself is never in argv,
+# the environment, or the shell's history, which a pasted private key cannot avoid being.
+#
+# You will be asked for the passphrase a second time here: the confirmation above spends one
+# unlock and forge needs its own. That is deliberate friction in front of the irreversible
+# step, not an oversight.
 #
 # Through a file rather than a command substitution so the broadcast is visible while it
 # happens: a silent minute during an irreversible deployment invites the operator to
@@ -163,7 +195,7 @@ trap 'rm -f "$log"' EXIT
 
 (cd packages/contracts &&
   forge script script/DeployAgenEngine.s.sol --rpc-url "$RPC" --broadcast \
-    --sender "$SENDER" --interactives 1 2>&1) | tee "$log"
+    --sender "$SENDER" --account "$ACCOUNT" 2>&1) | tee "$log"
 [ "${PIPESTATUS[0]}" -eq 0 ] || fail "the broadcast failed. Read the output above before retrying: a partial deployment is abandoned at a fresh anchor, not resumed."
 broadcast=$(cat "$log")
 

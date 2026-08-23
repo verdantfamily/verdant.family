@@ -39,6 +39,30 @@ fail() {
   exit 1
 }
 
+lower() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
+
+# The production deployment that was reviewed and approved, address by address.
+#
+# Recorded so that the simulation can be held to it rather than merely read. Every address
+# below derives from the operator's account *at one particular nonce*, so a single unrelated
+# transaction from that account between the review and the broadcast moves all of them — and
+# the deployment that follows is internally consistent, passes every check in the deployment
+# script, and is simply not the one anybody agreed to. That is the failure this catches: not a
+# broken deployment, a substituted one.
+#
+# Only applied when signing as this operator, so the script stays usable on a fork or another
+# chain, where a different book is the correct answer rather than a mismatch.
+readonly APPROVED_OPERATOR=0x1f23c28F93aE48E6346DD05Ca66ba5e2213b00b8
+readonly APPROVED_ORIGIN=0x79Fcd7E5aF04BD28AdD9AF681Fd833D8e0273cF6
+readonly APPROVED_FACTORY=0x20D5F0867C7dcFfa86f6C411aab4752E1A04b22d
+readonly APPROVED_DEPLOYER=0x633525243d3C2b0419dB462C9eD13B3f52f49147
+readonly APPROVED_REGISTRY=0x71a284dd8Efe6aBFd240B96E861486638B0099eE
+readonly APPROVED_HOOK=0x41BC055e9abc03fAd3A8f65da05B93F449f3F8Cc
+readonly APPROVED_HOOK_SALT=0x0000000000000000000000000000000000000000000000000000000000004382
+readonly APPROVED_FACTORY_CODEHASH=0x18ebda0132f2c12d937a318be43bc33e24bf2e8a5638da07c732fbae31ca20fe
+readonly APPROVED_HOOK_CODEHASH=0x77fbe101096096af54ce3ea0e615ab1d669632b4675d132c60b9b2d64886ee28
+readonly APPROVED_TREASURY=0xabfB34D1C870c7b2334E93b25B1299346209bE38
+
 [ -n "${SENDER:-}" ] || fail "SENDER is unset. It is the operator address this is simulated and broadcast from, and the address committed into FactoryOrigin."
 [ -n "${AGEN_ENGINE_TREASURY:-}" ] || fail "AGEN_ENGINE_TREASURY is unset. It is where a Treasury recipient's share of every engine market accrues, immutably, for every market this factory ever creates."
 
@@ -144,6 +168,38 @@ fi
 echo
 echo "mined hook $hook carries 0x38cc, including both returns-delta bits."
 
+# Held to the reviewed book, for this operator only. See the APPROVED_* constants above.
+if [ "$(lower "$SENDER")" = "$(lower "$APPROVED_OPERATOR")" ]; then
+  echo
+  echo "--- this is the approved production deployment ---"
+  drift=0
+  same() {
+    if grep -qi -- "$2" <<<"$simulated"; then
+      echo "  ok    $1"
+    else
+      echo "  DRIFT $1"
+      drift=$((drift + 1))
+    fi
+  }
+  same "FactoryOrigin      $APPROVED_ORIGIN" "origin    $APPROVED_ORIGIN"
+  same "AgenEngineFactory  $APPROVED_FACTORY" "factory   $APPROVED_FACTORY"
+  same "AgenEngineDeployer $APPROVED_DEPLOYER" "deployer  $APPROVED_DEPLOYER"
+  same "AgenMarketRegistry $APPROVED_REGISTRY" "registry  $APPROVED_REGISTRY"
+  same "AgenEngineHook     $APPROVED_HOOK" "hook      $APPROVED_HOOK"
+  same "hook salt          $APPROVED_HOOK_SALT" "hook salt $APPROVED_HOOK_SALT"
+  same "factory code hash  $APPROVED_FACTORY_CODEHASH" "factory runtime code hash $APPROVED_FACTORY_CODEHASH"
+  same "hook code hash     $APPROVED_HOOK_CODEHASH" "hook runtime code hash    $APPROVED_HOOK_CODEHASH"
+  same "treasury           $APPROVED_TREASURY" "treasury  $APPROVED_TREASURY"
+
+  if [ "$drift" -ne 0 ]; then
+    fail "$drift value(s) differ from the approved deployment. The most likely cause is that
+         $SENDER has sent a transaction since the review, which moves every address derived
+         from its nonce. What this would deploy is self-consistent and is not what was
+         approved. Re-review the book above and update the APPROVED_* constants deliberately,
+         or use the account and nonce the book was computed for."
+  fi
+fi
+
 if [ "$BROADCAST" != "--broadcast" ]; then
   echo
   echo "Simulated only. Nothing was sent."
@@ -169,7 +225,6 @@ echo "--- confirming the signer before anything irreversible ---"
 resolved=$(cd packages/contracts && cast wallet address --account "$ACCOUNT")
 [ -n "$resolved" ] || fail "the keystore '$ACCOUNT' could not be unlocked, so the signer is unknown. Nothing was sent."
 
-lower() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
 if [ "$(lower "$resolved")" != "$(lower "$SENDER")" ]; then
   fail "the keystore '$ACCOUNT' holds $resolved, but this deployment was simulated for $SENDER.
          Every address in the book above derives from the signing account, so this keystore

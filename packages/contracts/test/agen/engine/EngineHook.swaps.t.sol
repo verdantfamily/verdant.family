@@ -61,9 +61,7 @@ contract EngineHookSwapsTest is EngineFixture {
         swapRouter.swap(
             key,
             SwapParams({
-                zeroForOne: zeroForOne,
-                amountSpecified: amountSpecified,
-                sqrtPriceLimitX96: _limit(zeroForOne)
+                zeroForOne: zeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: _limit(zeroForOne)
             }),
             _settings(),
             ""
@@ -156,9 +154,7 @@ contract EngineHookSwapsTest is EngineFixture {
         // forge-lint: disable-next-line(unsafe-typecast) -- test-controlled
         _swap(key, _zeroForOne(quoteIsLower, true), int256(uint256(ONE_PERCENT)));
         assertEq(
-            vault.totalAccrued() - before,
-            (uint256(ONE_PERCENT) * 5_000) / 1e6,
-            "a sell tier must not reach a buy"
+            vault.totalAccrued() - before, (uint256(ONE_PERCENT) * 5_000) / 1e6, "a sell tier must not reach a buy"
         );
     }
 
@@ -168,6 +164,80 @@ contract EngineHookSwapsTest is EngineFixture {
 
     function test_tiered_market_collects_in_token_is_currency0() public {
         _tieredCollectsInToken(false);
+    }
+
+    /// @dev The boundary triple on an ERC-20-quoted market, in full: one base unit below the
+    /// threshold, exactly at it, and one base unit above.
+    ///
+    /// The third was missing, and its absence was not obvious because the other two were
+    /// there. `>=` and `>` agree on every trade except one — a trade of exactly the threshold
+    /// — so the pair "below pays base, at pays the tier" pins the comparison. What it does not
+    /// pin is that the tier keeps applying *past* the boundary. A tier implemented as equality
+    /// rather than as a lower bound, or one whose selection loop stopped at the first match in
+    /// the wrong direction, passes "below" and "at" and fails only here: every trade larger
+    /// than the threshold quietly reverts to the base rate, which on a sell tier is the exact
+    /// case the tier exists to price and the exact case worth the most to get wrong.
+    ///
+    /// Asserted in both orientations, because the gross launched-token amount is read from a
+    /// different leg of the swap in each and a tier that read the quote leg would still look
+    /// correct in one of them.
+    ///
+    /// The native-quote equivalent lives in `EngineNative.t.sol`; this is the ERC-20 path,
+    /// where the fee is settled by transfer rather than by native value.
+    function _theBoundaryTriple(bool quoteIsLower) private {
+        PoolKey memory key = _keyFor();
+        // 0.5% base, 4% at or above 1% of supply.
+        AgenRuleLib.Config memory config = _tieredConfig(quoteIsLower, 5_000, ONE_PERCENT, 40_000);
+        AgenEngineVault vault = _openPool(key, config);
+
+        uint256 threshold = uint256(ONE_PERCENT);
+        bool sell = _zeroForOne(quoteIsLower, false);
+
+        // One below: the base rate.
+        uint256 before = vault.totalAccrued();
+        // forge-lint: disable-next-line(unsafe-typecast) -- test-controlled
+        _swap(key, sell, -int256(threshold - 1));
+        assertEq(
+            vault.totalAccrued() - before,
+            ((threshold - 1) * 5_000) / 1e6,
+            "one base unit below the threshold must pay the base rate"
+        );
+
+        // Exactly at it: the tier. `>=`, not `>`.
+        before = vault.totalAccrued();
+        // forge-lint: disable-next-line(unsafe-typecast) -- test-controlled
+        _swap(key, sell, -int256(threshold));
+        assertEq(
+            vault.totalAccrued() - before,
+            (threshold * 40_000) / 1e6,
+            "a sell of exactly the threshold must pay the tier"
+        );
+
+        // One above: still the tier. The case that was never tested.
+        before = vault.totalAccrued();
+        // forge-lint: disable-next-line(unsafe-typecast) -- test-controlled
+        _swap(key, sell, -int256(threshold + 1));
+        assertEq(
+            vault.totalAccrued() - before,
+            ((threshold + 1) * 40_000) / 1e6,
+            "one base unit above the threshold must still pay the tier, not the base rate"
+        );
+
+        // And the same three asked of the hook directly, so a failure distinguishes "the rate
+        // selected was wrong" from "the amount charged was wrong". The swaps above are the
+        // proof that the selected rate is what a trader actually pays.
+        PoolId poolId = key.toId();
+        assertEq(uint256(hook.feePpmFor(poolId, false, threshold - 1)), 5_000, "rate below the boundary");
+        assertEq(uint256(hook.feePpmFor(poolId, false, threshold)), 40_000, "rate at the boundary");
+        assertEq(uint256(hook.feePpmFor(poolId, false, threshold + 1)), 40_000, "rate above the boundary");
+    }
+
+    function test_the_boundary_triple_token_is_currency1() public {
+        _theBoundaryTriple(true);
+    }
+
+    function test_the_boundary_triple_token_is_currency0() public {
+        _theBoundaryTriple(false);
     }
 
     // --- the pre-fee rule, on a real swap -----------------------------------

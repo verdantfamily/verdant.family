@@ -34,6 +34,38 @@ contract Rejecter {
     }
 }
 
+/// @dev An ERC-20 whose transfer can be made to fail, for one holder or for everybody.
+///
+/// The native-value equivalent of this is `Rejecter`, and the two are not interchangeable: a
+/// native payout fails because the *recipient* refuses it, and an ERC-20 payout fails because
+/// the *token* refuses to move it. The vault takes completely different code paths for the two
+/// — `recipient.call{value:}` against `currency.transfer` — so a market whose fee currency is
+/// an ERC-20 was relying on a liveness property only ever proved for native ETH.
+///
+/// Both failure shapes are here because both occur. A blocklisting token reverts; a token that
+/// returns `false` instead of reverting is the older and nastier pattern, and a vault that
+/// ignored the return value would record a claim as paid and send nothing.
+contract FailingERC20 is MockERC20 {
+    mapping(address holder => bool blocked) public blocked;
+    bool public returnsFalse;
+
+    constructor() MockERC20("Failing", "FAIL", 18) {}
+
+    function block_(address holder, bool value) external {
+        blocked[holder] = value;
+    }
+
+    function setReturnsFalse(bool value) external {
+        returnsFalse = value;
+    }
+
+    function transfer(address to, uint256 amount) public override returns (bool) {
+        require(!blocked[to], "recipient is blocked");
+        if (returnsFalse) return false;
+        return super.transfer(to, amount);
+    }
+}
+
 /// @title AgenEngineVault
 /// @notice The ledger, the split and the claim, tested without a pool.
 ///
@@ -330,8 +362,9 @@ contract EngineVaultTest is Deployers {
         attacker.point(vault);
 
         // Native currency, so the fallback runs on payout.
-        AgenEngineVault native =
-            new AgenEngineVault(address(this), manager, Currency.wrap(address(0)), _addrs(address(attacker)), _shares());
+        AgenEngineVault native = new AgenEngineVault(
+            address(this), manager, Currency.wrap(address(0)), _addrs(address(attacker)), _shares()
+        );
         vm.deal(address(native), 1_000);
         native.credit(1_000);
 
@@ -364,6 +397,93 @@ contract EngineVaultTest is Deployers {
         // The other recipient is unaffected.
         native.claim(1);
         assertEq(bob.balance, 500);
+    }
+
+    /// @notice An ERC-20 fee whose transfer fails leaves the entitlement intact.
+    ///
+    /// @dev The same liveness property as the native case above, on the path that carries it
+    /// for every market whose fee currency is a token — which by ADR-018 is every market with
+    /// size tiers, so a large share of them.
+    ///
+    /// What has to hold is stronger than "the claim fails". `claim` writes `claimed[slot]`
+    /// *before* it pays, which is what stops a reentering recipient being paid twice. That
+    /// ordering would be a disaster if the write could survive a failed transfer: the vault
+    /// would record the fee as paid, the recipient would have nothing, and the entitlement
+    /// would be gone with no way to recover it, since there is no owner and no sweep.
+    ///
+    /// It cannot, because the transfer reverting reverts the write with it — but that is a
+    /// property of the whole transaction rather than of anything written in the contract, so
+    /// it is asserted rather than assumed. The market keeps accruing throughout, and the
+    /// entitlement is claimable in full once the token stops refusing.
+    function test_an_erc20_recipient_whose_transfer_fails_keeps_its_entitlement() public {
+        FailingERC20 failing = new FailingERC20();
+
+        address[] memory recipients = new address[](2);
+        recipients[0] = alice;
+        recipients[1] = bob;
+        uint24[] memory shares = new uint24[](2);
+        shares[0] = 600_000;
+        shares[1] = 400_000;
+
+        AgenEngineVault vault =
+            new AgenEngineVault(address(this), manager, Currency.wrap(address(failing)), recipients, shares);
+
+        failing.mint(address(vault), 1_000);
+        vault.credit(1_000);
+
+        failing.block_(alice, true);
+
+        assertEq(vault.claimable(0), 600, "alice is owed her share before anything is attempted");
+
+        vm.expectRevert();
+        vault.claim(0);
+
+        // Nothing moved and nothing was recorded as having moved. Both halves matter: the
+        // second is what makes the entitlement recoverable rather than merely unpaid.
+        assertEq(failing.balanceOf(alice), 0, "a failed transfer moved value anyway");
+        assertEq(vault.claimed(0), 0, "a failed claim was recorded as paid");
+        assertEq(vault.claimable(0), 600, "the entitlement was consumed by a failure");
+        assertEq(vault.outstanding(), 1_000, "the ledger forgot what it owes");
+
+        // The other recipient is unaffected, which is the liveness claim.
+        vault.claim(1);
+        assertEq(failing.balanceOf(bob), 400);
+
+        // And so is the market: fees keep accruing while one recipient cannot be paid.
+        failing.mint(address(vault), 500);
+        vault.credit(500);
+        assertEq(vault.claimable(0), 900, "accrual stopped because a recipient was unpayable");
+
+        // Once the token stops refusing, the whole entitlement is still there.
+        failing.block_(alice, false);
+        vault.claim(0);
+        assertEq(failing.balanceOf(alice), 900, "the recovered claim did not pay the full entitlement");
+        assertEq(vault.claimable(0), 0);
+    }
+
+    /// @notice A token that returns `false` rather than reverting cannot silently consume a claim.
+    ///
+    /// @dev The older ERC-20 failure convention, and the one that turns a liveness bug into a
+    /// loss: if the vault ignored the return value, `claimed[slot]` would be written, no value
+    /// would move, and the entitlement would be permanently gone. v4's `CurrencyLibrary`
+    /// checks the returned word, so this reverts — asserted here because the alternative is
+    /// unrecoverable and the check lives in a dependency rather than in this repository.
+    function test_a_token_that_returns_false_does_not_consume_the_claim() public {
+        FailingERC20 failing = new FailingERC20();
+
+        AgenEngineVault vault =
+            new AgenEngineVault(address(this), manager, Currency.wrap(address(failing)), _addrs(alice), _shares());
+
+        failing.mint(address(vault), 1_000);
+        vault.credit(1_000);
+        failing.setReturnsFalse(true);
+
+        vm.expectRevert();
+        vault.claim(0);
+
+        assertEq(failing.balanceOf(alice), 0);
+        assertEq(vault.claimed(0), 0, "a transfer that returned false was recorded as paid");
+        assertEq(vault.claimable(0), 1_000);
     }
 
     // --- accounting ----------------------------------------------------------

@@ -24,6 +24,7 @@
     "test": "vitest run",
     "measure:precompile": "node scripts/precompile-recall.mjs",
     "journey:emit": "tsc -p tsconfig.json && node --experimental-strip-types scripts/emit-journey.ts",
+    "approval:emit": "tsc -p tsconfig.json && node --experimental-strip-types scripts/emit-approval-vectors.ts",
     "test:watch": "vitest"
   },
   "dependencies": {

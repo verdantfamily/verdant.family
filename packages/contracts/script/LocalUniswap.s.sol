@@ -8,6 +8,7 @@ import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol"
 import {IPositionDescriptor} from "@uniswap/v4-periphery/src/interfaces/IPositionDescriptor.sol";
 import {IWETH9} from "@uniswap/v4-periphery/src/interfaces/external/IWETH9.sol";
 import {PositionManager} from "@uniswap/v4-periphery/src/PositionManager.sol";
+import {StateView} from "@uniswap/v4-periphery/src/lens/StateView.sol";
 import {V4Quoter} from "@uniswap/v4-periphery/src/lens/V4Quoter.sol";
 
 import {Multicall3Lite} from "./Multicall3Lite.sol";
@@ -38,15 +39,19 @@ import {Multicall3Lite} from "./Multicall3Lite.sol";
 /// SDK and the contracts agree — which does not depend on which build of v4 is
 /// underneath.
 ///
-/// ## The quoter is deployed here and then moved
+/// ## The two lenses are deployed here and then moved
 ///
-/// `V4Quoter` is deployed at whatever address the broadcaster's nonce gives it, and
-/// `scripts/indexer-proof.sh` copies its runtime code to the address
-/// `EXTERNAL_ADDRESSES.v4Quoter` names. That is the address the interface and the SDK
-/// read a quote from, by chain id, and the rig runs at chain id 4663 — so without the
-/// move the app's own code path could not be exercised at all. The address printed
-/// below is where it lands first; see that script for why relocating runtime code is
-/// sound.
+/// `V4Quoter` and `StateView` are deployed at whatever addresses the broadcaster's nonce
+/// gives them, and `scripts/indexer-proof.sh` copies their runtime code to the addresses
+/// `EXTERNAL_ADDRESSES.v4Quoter` and `EXTERNAL_ADDRESSES.stateView` name. Those are the
+/// addresses the interface and the SDK resolve by chain id, and the rig runs at chain id
+/// 4663 — so without the move the app's own code path could not be exercised at all. The
+/// addresses printed below are where they land first; see that script for why relocating
+/// runtime code is sound.
+///
+/// `StateView` is what `apps/agen` reads a pool's price, tick and liquidity through, so a
+/// rig without it can launch a market and then cannot show what it is worth — which is a
+/// missing price on the market page rather than an error anywhere.
 contract LocalUniswap is Script {
     function run()
         external
@@ -55,7 +60,8 @@ contract LocalUniswap is Script {
             PositionManager positionManager,
             PoolSwapTest swapRouter,
             Multicall3Lite multicall,
-            V4Quoter quoter
+            V4Quoter quoter,
+            StateView stateView
         )
     {
         vm.startBroadcast();
@@ -86,6 +92,11 @@ contract LocalUniswap is Script {
         // quote the opening fee for the life of the market.
         quoter = new V4Quoter(manager);
 
+        // How `apps/agen` reads a pool: price, tick and liquidity by pool id. The registry
+        // records the id and not the key, so there is no way to ask the PoolManager directly
+        // without rebuilding the key — which is what this lens exists to avoid.
+        stateView = new StateView(manager);
+
         vm.stopBroadcast();
 
         console.log("POOL_MANAGER    ", address(manager));
@@ -93,5 +104,6 @@ contract LocalUniswap is Script {
         console.log("SWAP_ROUTER     ", address(swapRouter));
         console.log("MULTICALL3      ", address(multicall));
         console.log("V4_QUOTER_STAGED", address(quoter));
+        console.log("STATE_VIEW_STAGED", address(stateView));
     }
 }

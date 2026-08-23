@@ -32,8 +32,28 @@ function code(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 
+interface Field {
+  readonly name?: string;
+  readonly type: string;
+  readonly components?: readonly Field[];
+}
+
+/**
+ * A tuple's shape as one comparable value, nested tuples included.
+ *
+ * `{ name, type }` pairs stop at `tuple[]`, which is how a width mismatch inside a nested
+ * struct stayed invisible. This descends.
+ */
+function shapeOf(fields: readonly Field[]): unknown {
+  return fields.map((field) => ({
+    name: field.name,
+    type: field.type,
+    ...(field.components === undefined ? {} : { components: shapeOf(field.components) }),
+  }));
+}
+
 /** The `config` field of the factory's manifest, as Solidity declares it. */
-function manifestConfigComponents(): readonly { name?: string; type: string }[] {
+function manifestConfigComponents(): readonly Field[] {
   for (const entry of abi.agenEngineFactoryAbi) {
     if (entry.type !== "function" || entry.name !== "deployMarket") continue;
 
@@ -42,7 +62,7 @@ function manifestConfigComponents(): readonly { name?: string; type: string }[] 
 
       for (const component of input.components) {
         if (component.name === "config" && "components" in component) {
-          return component.components as readonly { name?: string; type: string }[];
+          return component.components as readonly Field[];
         }
       }
     }
@@ -121,10 +141,30 @@ describe("the canonical configuration, across the boundary", () => {
    */
   it("declares the same fields in the same order as the contract", () => {
     const solidity = manifestConfigComponents();
-    const typescript = CONFIG_ABI[0].components as readonly { name: string; type: string }[];
+    const typescript = CONFIG_ABI[0].components as readonly Field[];
 
     expect(typescript.map((field) => field.name)).toEqual(solidity.map((field) => field.name));
     expect(typescript.map((field) => field.type)).toEqual(solidity.map((field) => field.type));
+  });
+
+  /*
+   * The same claim, all the way down, which the one above cannot make.
+   *
+   * A `tuple[]` field compares equal to another `tuple[]` whatever is inside it, so the version
+   * of this test that only mapped the top level passed while `Stage.threshold` was declared
+   * `uint256` here against `uint128` on chain. Nothing noticed for the same reason nothing
+   * noticed anywhere else: the ABI pads either width to 32 bytes, so every encoding and every
+   * hash was identical and the vectors agreed.
+   *
+   * What differed was the function selector, since that is `keccak` of the signature string —
+   * so every launch transaction the app built was addressed to a `deployMarket` the factory does
+   * not have, and reverted with no reason data. This is the cheap check for it; the expensive
+   * one is `scripts/indexer-proof.sh`, which found it by putting the calldata on a chain.
+   */
+  it("declares the same types inside every nested tuple", () => {
+    expect(shapeOf(CONFIG_ABI[0].components as readonly Field[])).toEqual(
+      shapeOf(manifestConfigComponents()),
+    );
   });
 });
 
@@ -168,8 +208,8 @@ describe("what an engine trade is recorded as paying", () => {
   });
 
   /*
-   * The fee arrives on a second event and must land on the swap that already exists. A handler
-   * that inserted instead would double every engine trade in every feed that counts them.
+   * The fee arrives on a second event and must land on the swap rather than beside it. A handler
+   * that inserted a swap would double every engine trade in every feed that counts them.
    */
   it("attaches the fee to the existing swap rather than adding one", () => {
     const handler = code(HANDLER);
@@ -177,6 +217,50 @@ describe("what an engine trade is recorded as paying", () => {
 
     expect(fee).toContain("context.db.update(agenSwap");
     expect(fee).not.toContain("insert(agenSwap)");
+  });
+
+  /*
+   * The bug this pair of tests exists for, and the reason it survived review.
+   *
+   * The hook charges in `beforeSwap` when the fee comes out of the currency the trader named,
+   * and in `afterSwap` when it comes out of the other leg. So for an ordinary buy — ether
+   * specified, fee taken from it — `FeeTaken` is emitted *before* the pool's `Swap` and there is
+   * no row to update. The handler assumed one order ("the hook emits after the pool"), found
+   * nothing, and returned: the fee was dropped permanently and every buy on every engine market
+   * read as free, while every sell was correct.
+   *
+   * Asserted structurally because it cannot be asserted any other way here: the failure needs
+   * two events in one transaction in a known order, which is what the anvil rig provides and a
+   * unit test cannot.
+   */
+  it("keeps a fee that arrives before its swap instead of dropping it", () => {
+    const handler = code(HANDLER);
+    const fee = handler.slice(handler.indexOf('ponder.on("AgenEngineHook:FeeTaken"'));
+
+    expect(fee, "a fee with no swap row yet has to be parked, not discarded").toContain(
+      "insert(agenPendingFee)",
+    );
+    // And the old shape must not come back: an early return on "no row" is the bug itself.
+    expect(fee).not.toMatch(/if\s*\(row === undefined\)\s*return;/);
+  });
+
+  it("claims that fee when the swap it belongs to is indexed", () => {
+    const legacy = code(LEGACY);
+
+    expect(legacy, "the swap handler is the other half of the join").toContain("claimPendingFee(");
+    expect(code(HANDLER)).toContain("delete(agenPendingFee");
+  });
+
+  /*
+   * Which order a fee was charged in is decided by the amounts, not by counting events. A
+   * transaction can hold several swaps on one pool, and a trade too small to owe a base unit
+   * emits no `FeeTaken` at all — so position alone misaligns every pair after it.
+   */
+  it("tells the two orders apart by the amounts the hook measured", () => {
+    const fee = code(HANDLER);
+
+    expect(fee).toContain("event.args.grossQuoteAmount");
+    expect(fee).toContain("event.args.grossTokenAmount");
   });
 
   /*
@@ -196,11 +280,12 @@ describe("what an engine trade is recorded as paying", () => {
   it("leaves a generated market's rate exactly where it was", () => {
     const legacy = code(LEGACY);
 
-    // The pool's own fee still goes in `feePpm`, and the engine columns are null rather than
-    // zero: no engine fee was measured, which is a different claim from one of zero.
+    // The pool's own fee still goes in `feePpm`, and the engine columns default to null rather
+    // than zero: no engine fee was measured, which is a different claim from one of zero. A
+    // generated market emits no `FeeTaken`, so nothing is ever waiting to be claimed for it.
     expect(legacy).toContain("feePpm: event.args.fee");
-    expect(legacy).toContain("programmableFeePpm: null");
-    expect(legacy).toContain("feeAmount: null");
+    expect(legacy).toContain("programmableFeePpm: early?.programmableFeePpm ?? null");
+    expect(legacy).toContain("feeAmount: early?.feeAmount ?? null");
   });
 
   /*

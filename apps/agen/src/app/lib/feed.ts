@@ -200,6 +200,81 @@ export async function fetchCandles(
   };
 }
 
+interface RawSwaps {
+  readonly poolId: string;
+  readonly swaps: readonly {
+    readonly id: string;
+    readonly sender: string;
+    readonly buy: boolean;
+    readonly quoteAmount: string;
+    readonly tokenAmount: string;
+    readonly feePpm: number;
+    readonly feeAmount: string | null;
+    readonly timestamp: number;
+    readonly transactionHash: string;
+  }[];
+}
+
+/** One trade, as the indexer reports it. */
+export interface AgenTrade {
+  readonly id: string;
+  readonly at: number;
+  /** Whoever called the PoolManager. A router for almost every trade. */
+  readonly sender: string;
+  readonly side: "buy" | "sell";
+  /** The quote leg, in whole units. Ether for every market Agen creates today. */
+  readonly quote: number;
+  readonly tokens: number;
+  /**
+   * The rate this trade actually paid, in parts per million.
+   *
+   * The indexer resolves it: for an engine market the pool's own fee is zero — the hook
+   * zeroes the LP fee and takes Agen's fee as a swap delta — so the rate comes from the
+   * hook's `FeeTaken` instead. Reading the pool's zero would publish "this trade was free"
+   * about a trade that paid four percent.
+   */
+  readonly feePpm: number;
+  /** What was taken, in the fee currency's base units. Null on a generated market. */
+  readonly feeAmount: bigint | null;
+  readonly txHash: string;
+}
+
+/**
+ * A programmable market's trades, newest first.
+ *
+ * ## Why this had to be written
+ *
+ * The market page has always rendered a trade list, and for a programmable market the list
+ * was always empty: `buildStoreSource().trades` returned `[]` with a comment explaining that
+ * a fabricated trade is indistinguishable from a real one. That was the right decision when
+ * no programmable market had ever traded and there was nothing to ask. It stopped being right
+ * once the indexer began recording engine swaps and the fees they paid — at which point the
+ * page was showing "No trades yet" about a market with trades in it, which is the same class
+ * of untruth the original comment was avoiding, pointing the other way.
+ *
+ * Nothing here is fabricated. Every field comes from the indexer, and the rate on each row is
+ * the one the hook emitted rather than the zero the pool reports.
+ *
+ * Empty rather than null when the feed cannot answer: the caller renders a list, and a page
+ * with no indexer configured is already a page that shows no history anywhere.
+ */
+export async function fetchAgenTrades(id: string, limit = 50): Promise<readonly AgenTrade[]> {
+  const raw = await get<RawSwaps>(`/agen/markets/${id}/swaps?limit=${String(limit)}`, false);
+  if (raw === null) return [];
+
+  return raw.swaps.map((swap) => ({
+    id: swap.id,
+    at: swap.timestamp,
+    sender: swap.sender,
+    side: swap.buy ? ("buy" as const) : ("sell" as const),
+    quote: Number(swap.quoteAmount) / 1e18,
+    tokens: Number(swap.tokenAmount) / 1e18,
+    feePpm: swap.feePpm,
+    feeAmount: swap.feeAmount === null ? null : BigInt(swap.feeAmount),
+    txHash: swap.transactionHash,
+  }));
+}
+
 /** The rolling day and the all-time extremes the stat band shows. */
 export async function fetchMarketStats(id: string, fresh = false): Promise<MarketStats | null> {
   const raw = await get<RawStats>(`/agen/markets/${id}/stats`, fresh);

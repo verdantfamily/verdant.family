@@ -37,13 +37,16 @@
  */
 
 import { ponder } from "ponder:registry";
-import { and, desc, eq, isNull } from "ponder";
-import { agenComponent, agenMarket, agenSwap, poolInit } from "ponder:schema";
+import { and, desc, eq, lt } from "ponder";
+import { agenComponent, agenMarket, agenPendingFee, agenSwap, poolInit } from "ponder:schema";
 import { abi } from "@verdant/sdk";
 import { CONFIG_ABI } from "@verdant/market-engine";
 import { decodeFunctionData, encodeAbiParameters, erc20Abi, keccak256, type Hex } from "viem";
 
 import { AGEN_ENGINE } from "./addresses";
+
+/** The shape the swap handler hands to `claimPendingFee`. Mirrors `agen.ts`'s `SwapHandler`. */
+type SwapHandlerContext = Parameters<Parameters<typeof ponder.on<"PoolManager:Swap">>[1]>[0];
 
 /** The two currencies a programmable fee can be taken in. Mirrors `AgenRuleLib.FeeCurrency`. */
 const FEE_CURRENCY_QUOTE = 0;
@@ -263,14 +266,34 @@ ponder.on("AgenEngineFactory:EngineMarketDeployed", async ({ event, context }) =
  *
  * ## Why it updates a row rather than writing one
  *
- * The swap row already exists. `PoolManager:Swap` is what creates it, and it has the price,
- * the tick and the liquidity that `FeeTaken` does not. Writing a second row would double every
- * engine trade in every feed that counts them.
+ * The swap row already exists — usually. `PoolManager:Swap` is what creates it, and it has the
+ * price, the tick and the liquidity that `FeeTaken` does not. Writing a second row would double
+ * every engine trade in every feed that counts them.
  *
- * The two events share a transaction and are ordered within it, and the swap's log index is
- * always lower — the hook emits after the pool. Rather than assume how much lower, the row is
- * found by transaction and pool, taking the latest swap that has no fee recorded yet, which is
- * correct even for a transaction containing several swaps against the same market.
+ * ## The ordering, which is not fixed, and which this used to get wrong
+ *
+ * This handler assumed the swap always came first: "the hook emits after the pool". That is
+ * true for half of all trades and false for the other half. The hook charges in `beforeSwap`
+ * when the fee comes out of the currency the trader specified, and in `afterSwap` when it comes
+ * out of the other leg — so for an ordinary buy, where the trader names the ether they are
+ * spending, `FeeTaken` is emitted *before* the pool's `Swap` and there is nothing to update
+ * yet. The old code found nothing, returned, and dropped the fee. Every buy on every engine
+ * market read as free while every sell was correct, in the API and on the market page.
+ *
+ * Both orders are handled now: a fee that arrives first is parked in `agenPendingFee` and
+ * claimed by `claimPendingFee` when the swap lands.
+ *
+ * ## Telling one order from the other
+ *
+ * By the amounts, which is exact rather than heuristic. `FeeTaken` carries the gross legs the
+ * hook measured. Charged in `afterSwap`, those are the legs the pool just reported, so they
+ * equal the swap row's own. Charged in `beforeSwap`, the gross is the trader's specified amount
+ * *before* the fee came out of it, so it cannot equal a leg of any swap that has already
+ * happened.
+ *
+ * That matters in a transaction with several swaps on one pool. Position alone is ambiguous
+ * there — a dust trade too small to owe a base unit emits no `FeeTaken` at all, so counting
+ * events would misalign every pair after it — and comparing amounts is not.
  *
  * ## Where the shared hook does not matter
  *
@@ -278,14 +301,26 @@ ponder.on("AgenEngineFactory:EngineMarketDeployed", async ({ event, context }) =
  * says which pool it belongs to. Nothing here resolves a market *from* the hook.
  */
 ponder.on("AgenEngineHook:FeeTaken", async ({ event, context }) => {
+  /*
+   * The nearest swap on this pool already indexed in this transaction.
+   *
+   * Nearest rather than "any with no fee yet": a swap's own `Swap` and its own `FeeTaken` are
+   * adjacent in the pool's sequence, because v4 runs one swap call at a time and cannot begin
+   * another between a pool event and the hook callback that follows it.
+   */
   const rows = await context.db.sql
-    .select({ id: agenSwap.id })
+    .select({
+      id: agenSwap.id,
+      quoteAmount: agenSwap.quoteAmount,
+      tokenAmount: agenSwap.tokenAmount,
+      programmableFeePpm: agenSwap.programmableFeePpm,
+    })
     .from(agenSwap)
     .where(
       and(
         eq(agenSwap.transactionHash, event.transaction.hash),
         eq(agenSwap.poolId, event.args.poolId),
-        isNull(agenSwap.programmableFeePpm),
+        lt(agenSwap.logIndex, event.log.logIndex),
       ),
     )
     .orderBy(desc(agenSwap.logIndex))
@@ -293,13 +328,73 @@ ponder.on("AgenEngineHook:FeeTaken", async ({ event, context }) => {
 
   const row = rows[0];
 
-  // No swap row means the pool is not one this indexer follows, which happens while the engine
-  // start block is ahead of a market's first trades. Nothing to attach the fee to, and
-  // inventing a row to hold it would put a trade in the feed that the feed cannot price.
-  if (row === undefined) return;
+  const chargedAfterTheSwap =
+    row !== undefined &&
+    row.programmableFeePpm === null &&
+    row.quoteAmount === event.args.grossQuoteAmount &&
+    row.tokenAmount === event.args.grossTokenAmount;
 
-  await context.db.update(agenSwap, { id: row.id }).set({
-    programmableFeePpm: event.args.feePpm,
+  if (chargedAfterTheSwap) {
+    await context.db.update(agenSwap, { id: row.id }).set({
+      programmableFeePpm: event.args.feePpm,
+      feeAmount: event.args.feeAmount,
+    });
+    return;
+  }
+
+  /*
+   * Parked for the swap that has not been indexed yet.
+   *
+   * Which is the `beforeSwap` case, and also the case where this pool's swaps are not being
+   * followed at all — a market whose first trades predate the engine start block. The row is
+   * harmless then: nothing claims it, and `claimPendingFee` is the only reader.
+   */
+  await context.db.insert(agenPendingFee).values({
+    id: `${event.transaction.hash}-${String(event.log.logIndex)}`,
+    poolId: event.args.poolId,
+    transactionHash: event.transaction.hash,
+    logIndex: event.log.logIndex,
+    feePpm: event.args.feePpm,
     feeAmount: event.args.feeAmount,
   });
 });
+
+/**
+ * The fee for a swap that was charged before the pool announced it.
+ *
+ * Called by the swap handler immediately after it writes a row, which is the other half of the
+ * join described above. Returns what to record, or null when this swap paid no programmable fee
+ * — which is every generated market's swap, and an engine swap too small to owe a base unit.
+ *
+ * The pending row is deleted as it is claimed, so each fee is attached exactly once and a
+ * `agenPendingFee` table that is not empty at rest means a fee was emitted for a swap this
+ * indexer never indexed.
+ */
+export async function claimPendingFee(
+  { event, context }: Pick<SwapHandlerContext, "event" | "context">,
+  poolId: Hex,
+): Promise<{ programmableFeePpm: number; feeAmount: bigint } | null> {
+  const pending = await context.db.sql
+    .select({
+      id: agenPendingFee.id,
+      feePpm: agenPendingFee.feePpm,
+      feeAmount: agenPendingFee.feeAmount,
+    })
+    .from(agenPendingFee)
+    .where(
+      and(
+        eq(agenPendingFee.transactionHash, event.transaction.hash),
+        eq(agenPendingFee.poolId, poolId),
+        lt(agenPendingFee.logIndex, event.log.logIndex),
+      ),
+    )
+    .orderBy(desc(agenPendingFee.logIndex))
+    .limit(1);
+
+  const fee = pending[0];
+  if (fee === undefined) return null;
+
+  await context.db.delete(agenPendingFee, { id: fee.id });
+
+  return { programmableFeePpm: fee.feePpm, feeAmount: fee.feeAmount };
+}

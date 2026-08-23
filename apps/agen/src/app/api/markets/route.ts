@@ -100,5 +100,19 @@ export function GET(): NextResponse {
     ready: status.configured,
     // The model's name is not a secret and knowing it is useful. The key is neither.
     model: status.configured ? status.model : null,
+    /*
+     * The vendors' health, for an operator rather than for the form.
+     *
+     * Served here because a failover leaves no trace a creator or a probe could see: the
+     * build completes, on the other vendor, and the market is identical. So a primary vendor
+     * that has been unreachable for hours is indistinguishable from one that is fine unless
+     * something reports it, and a log line is only found by somebody who already suspects
+     * there is something to find. Counts rather than a verdict, so the threshold for caring
+     * lives with whoever is watching.
+     *
+     * Nothing here is a secret. It is two vendor names and some integers; the keys are not
+     * in it and neither is any prompt, artefact or market.
+     */
+    health: status.health,
   });
 }

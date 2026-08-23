@@ -1,0 +1,94 @@
+{
+  "vectors": [
+    {
+      "name": "flat",
+      "covers": "one rate forever, the simplest market that launches",
+      "jobId": "vector-flat",
+      "engineVersion": 1,
+      "configHash": "0x0111b22ee7777016cce7e2924458552fbd6f13c2e61a7790004864199099ffaa",
+      "implementationHash": "0x8c2f24aa61190ba50cb719cb0a628f12bc9be35f2e6a8ec990eed6268e1d880a",
+      "creator": "0x00000000000000000000000000000000000C0001",
+      "approvalMessage": "Approve this Agen market\nBuild: vector-flat\nEngine version: 1\nConfiguration hash: 0x0111b22ee7777016cce7e2924458552fbd6f13c2e61a7790004864199099ffaa\nCommitment: 0x8c2f24aa61190ba50cb719cb0a628f12bc9be35f2e6a8ec990eed6268e1d880a\nCreator: 0x00000000000000000000000000000000000c0001\n\nI reviewed these market rules and approve exactly this configuration. No contract was written for this market: Agen's audited engine executes the configuration above, and changing any rate, threshold, recipient or asset changes the commitment."
+    },
+    {
+      "name": "tiered",
+      "covers": "a size-gated sell rate, which settles in the launched token per ADR-018",
+      "jobId": "vector-tiered",
+      "engineVersion": 1,
+      "configHash": "0xffee9714820fcf36691dccb85c662676825e723b263052f53f218a575d4fb713",
+      "implementationHash": "0x8ea72e5081ef5dac76dc1af25fbd015775e82922c073965065e711647b4fd255",
+      "creator": "0x00000000000000000000000000000000000C0001",
+      "approvalMessage": "Approve this Agen market\nBuild: vector-tiered\nEngine version: 1\nConfiguration hash: 0xffee9714820fcf36691dccb85c662676825e723b263052f53f218a575d4fb713\nCommitment: 0x8ea72e5081ef5dac76dc1af25fbd015775e82922c073965065e711647b4fd255\nCreator: 0x00000000000000000000000000000000000c0001\n\nI reviewed these market rules and approve exactly this configuration. No contract was written for this market: Agen's audited engine executes the configuration above, and changing any rate, threshold, recipient or asset changes the commitment."
+    },
+    {
+      "name": "time-ladder",
+      "covers": "a rate that steps down with elapsed time",
+      "jobId": "vector-time",
+      "engineVersion": 1,
+      "configHash": "0x272e80fb1a5f0af59d15af0ba46ef7aa6b65289d536b011a60797072959cba8f",
+      "implementationHash": "0x74026d093957e8fec02dced5a90fece9e81d065c952bf6f4079297e81ee4e4c6",
+      "creator": "0x00000000000000000000000000000000000C0001",
+      "approvalMessage": "Approve this Agen market\nBuild: vector-time\nEngine version: 1\nConfiguration hash: 0x272e80fb1a5f0af59d15af0ba46ef7aa6b65289d536b011a60797072959cba8f\nCommitment: 0x74026d093957e8fec02dced5a90fece9e81d065c952bf6f4079297e81ee4e4c6\nCreator: 0x00000000000000000000000000000000000c0001\n\nI reviewed these market rules and approve exactly this configuration. No contract was written for this market: Agen's audited engine executes the configuration above, and changing any rate, threshold, recipient or asset changes the commitment."
+    },
+    {
+      "name": "volume-ladder",
+      "covers": "a rate that steps down with cumulative quote volume",
+      "jobId": "vector-volume",
+      "engineVersion": 1,
+      "configHash": "0x0ec71abd966861b46e44b4c812d9552352646bd1140786b554967e9a424d246d",
+      "implementationHash": "0xf89954e2f7ddfbbb8317427ede991cfe52ab47b3a389df254a57a928a66473ed",
+      "creator": "0x00000000000000000000000000000000000C0001",
+      "approvalMessage": "Approve this Agen market\nBuild: vector-volume\nEngine version: 1\nConfiguration hash: 0x0ec71abd966861b46e44b4c812d9552352646bd1140786b554967e9a424d246d\nCommitment: 0xf89954e2f7ddfbbb8317427ede991cfe52ab47b3a389df254a57a928a66473ed\nCreator: 0x00000000000000000000000000000000000c0001\n\nI reviewed these market rules and approve exactly this configuration. No contract was written for this market: Agen's audited engine executes the configuration above, and changing any rate, threshold, recipient or asset changes the commitment."
+    },
+    {
+      "name": "native-quote",
+      "covers": "native Robinhood Chain ETH as the quote asset, unwrapped",
+      "jobId": "vector-native",
+      "engineVersion": 1,
+      "configHash": "0xffee9714820fcf36691dccb85c662676825e723b263052f53f218a575d4fb713",
+      "implementationHash": "0x8ea72e5081ef5dac76dc1af25fbd015775e82922c073965065e711647b4fd255",
+      "creator": "0x00000000000000000000000000000000000C0001",
+      "approvalMessage": "Approve this Agen market\nBuild: vector-native\nEngine version: 1\nConfiguration hash: 0xffee9714820fcf36691dccb85c662676825e723b263052f53f218a575d4fb713\nCommitment: 0x8ea72e5081ef5dac76dc1af25fbd015775e82922c073965065e711647b4fd255\nCreator: 0x00000000000000000000000000000000000c0001\n\nI reviewed these market rules and approve exactly this configuration. No contract was written for this market: Agen's audited engine executes the configuration above, and changing any rate, threshold, recipient or asset changes the commitment."
+    },
+    {
+      "name": "erc20-quote",
+      "covers": "an ERC-20 quote asset, which changes the economics and so the commitment",
+      "jobId": "vector-erc20",
+      "engineVersion": 1,
+      "configHash": "0xcd6112df0a2e481f1e8c4f6966ebd0d311b0cd0ddcaa4afc7565bff7e9a3e1c0",
+      "implementationHash": "0x8b81544b4c5c36442bf9ec3cdf9228101c7499ff0ce9cd750e1ba54f425ce57a",
+      "creator": "0x00000000000000000000000000000000000C0001",
+      "approvalMessage": "Approve this Agen market\nBuild: vector-erc20\nEngine version: 1\nConfiguration hash: 0xcd6112df0a2e481f1e8c4f6966ebd0d311b0cd0ddcaa4afc7565bff7e9a3e1c0\nCommitment: 0x8b81544b4c5c36442bf9ec3cdf9228101c7499ff0ce9cd750e1ba54f425ce57a\nCreator: 0x00000000000000000000000000000000000c0001\n\nI reviewed these market rules and approve exactly this configuration. No contract was written for this market: Agen's audited engine executes the configuration above, and changing any rate, threshold, recipient or asset changes the commitment."
+    },
+    {
+      "name": "different-creator",
+      "covers": "the same market approved by somebody else: one signer's consent is not another's",
+      "jobId": "vector-flat",
+      "engineVersion": 1,
+      "configHash": "0x0111b22ee7777016cce7e2924458552fbd6f13c2e61a7790004864199099ffaa",
+      "implementationHash": "0x8c2f24aa61190ba50cb719cb0a628f12bc9be35f2e6a8ec990eed6268e1d880a",
+      "creator": "0x000000000000000000000000000000000000dEaD",
+      "approvalMessage": "Approve this Agen market\nBuild: vector-flat\nEngine version: 1\nConfiguration hash: 0x0111b22ee7777016cce7e2924458552fbd6f13c2e61a7790004864199099ffaa\nCommitment: 0x8c2f24aa61190ba50cb719cb0a628f12bc9be35f2e6a8ec990eed6268e1d880a\nCreator: 0x000000000000000000000000000000000000dead\n\nI reviewed these market rules and approve exactly this configuration. No contract was written for this market: Agen's audited engine executes the configuration above, and changing any rate, threshold, recipient or asset changes the commitment."
+    },
+    {
+      "name": "different-config-hash",
+      "covers": "the same build with different economics: consent must not carry over",
+      "jobId": "vector-flat",
+      "engineVersion": 1,
+      "configHash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+      "implementationHash": "0x8c2f24aa61190ba50cb719cb0a628f12bc9be35f2e6a8ec990eed6268e1d880a",
+      "creator": "0x00000000000000000000000000000000000C0001",
+      "approvalMessage": "Approve this Agen market\nBuild: vector-flat\nEngine version: 1\nConfiguration hash: 0x3333333333333333333333333333333333333333333333333333333333333333\nCommitment: 0x8c2f24aa61190ba50cb719cb0a628f12bc9be35f2e6a8ec990eed6268e1d880a\nCreator: 0x00000000000000000000000000000000000c0001\n\nI reviewed these market rules and approve exactly this configuration. No contract was written for this market: Agen's audited engine executes the configuration above, and changing any rate, threshold, recipient or asset changes the commitment."
+    },
+    {
+      "name": "different-implementation-hash",
+      "covers": "the same economics committed to a different engine or chain",
+      "jobId": "vector-flat",
+      "engineVersion": 1,
+      "configHash": "0x0111b22ee7777016cce7e2924458552fbd6f13c2e61a7790004864199099ffaa",
+      "implementationHash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+      "creator": "0x00000000000000000000000000000000000C0001",
+      "approvalMessage": "Approve this Agen market\nBuild: vector-flat\nEngine version: 1\nConfiguration hash: 0x0111b22ee7777016cce7e2924458552fbd6f13c2e61a7790004864199099ffaa\nCommitment: 0x4444444444444444444444444444444444444444444444444444444444444444\nCreator: 0x00000000000000000000000000000000000c0001\n\nI reviewed these market rules and approve exactly this configuration. No contract was written for this market: Agen's audited engine executes the configuration above, and changing any rate, threshold, recipient or asset changes the commitment."
+    }
+  ]
+}

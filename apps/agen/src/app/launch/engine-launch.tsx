@@ -18,6 +18,21 @@
  * It costs nothing, it can be checked line by line against the screen above it, and the server
  * refuses to prepare a transaction without it. The second is the transaction.
  *
+ * The message is *built* here rather than fetched, which matters: a message the server hands
+ * over for signing is a message the server chose, and the creator would be approving whatever
+ * arrived. Building it from values already on this page means the wallet's dialog can be read
+ * against the screen behind it.
+ *
+ * It is built by calling the one canonical builder, not by restating it. There was a second
+ * copy of the text in this file, kept in step with the first by a test that compared source
+ * strings — which is a test of two implementations agreeing rather than of there being one.
+ * A reworded sentence in either copy would have produced a wallet showing text the server
+ * will not verify: every approval failing, and failing silently, since a signature that does
+ * not recover is indistinguishable from a wrong wallet. `@verdant/market-compiler/browser`
+ * is the entry point that exists for exactly this — pure modules the interface shares with
+ * the pipeline — so the browser and the server now sign and check the same bytes because they
+ * are the same function.
+ *
  * The separation is what makes "the market you were shown is the market you get" enforceable
  * rather than promised. Between the two, the server recomputes the commitment from the stored
  * configuration and refuses if it moved — so a rebuild, a tampered record or a decoder that
@@ -31,6 +46,7 @@
  * different factory.
  */
 
+import { engineApprovalMessage } from "@verdant/market-compiler/browser";
 import { useCallback, useEffect, useState } from "react";
 import { isAddress } from "viem";
 import {
@@ -56,40 +72,6 @@ interface PreparedEngineLaunch {
   readonly vault: string | null;
   readonly quoteAsset: `0x${string}`;
   readonly quoteIsNative: boolean;
-}
-
-/**
- * The exact text the wallet will show, rebuilt here.
- *
- * Restated rather than fetched, and that is the point of it: a message the server hands over
- * for signing is a message the server chose, and the creator would be approving whatever
- * arrived. Building it in the browser from values already on this page means the wallet's
- * dialog can be read against the screen behind it — and the server verifies the signature
- * against its own copy, so the two have to agree.
- */
-function approvalText({
-  jobId,
-  configHash,
-  implementationHash,
-  creator,
-}: {
-  readonly jobId: string;
-  readonly configHash: string;
-  readonly implementationHash: string;
-  readonly creator: string;
-}): string {
-  return [
-    "Approve this Agen market",
-    `Build: ${jobId}`,
-    "Engine version: 1",
-    `Configuration hash: ${configHash}`,
-    `Commitment: ${implementationHash}`,
-    `Creator: ${creator.toLowerCase()}`,
-    "",
-    "I reviewed these market rules and approve exactly this configuration. No contract was " +
-      "written for this market: Agen's audited engine executes the configuration above, and " +
-      "changing any rate, threshold, recipient or asset changes the commitment.",
-  ].join("\n");
 }
 
 export function EngineLaunch({
@@ -150,7 +132,13 @@ export function EngineLaunch({
 
     try {
       const signature = await sign.signMessageAsync({
-        message: approvalText({ jobId: job.id, configHash, implementationHash, creator: address }),
+        message: engineApprovalMessage({
+          jobId: job.id,
+          engineVersion: 1,
+          configHash,
+          implementationHash,
+          creator: address,
+        }),
       });
 
       const response = await fetch(`/api/markets/${job.id}/approve`, {

@@ -32,6 +32,7 @@ import { abi } from "@verdant/sdk";
 import { erc20Abi } from "viem";
 
 import { AGEN } from "./addresses";
+import { claimPendingFee } from "./agen-engine";
 
 ponder.on("AgenFactory:MarketDeployed", async ({ event, context }) => {
   const poolId = event.args.poolId;
@@ -199,6 +200,18 @@ export async function indexAgenSwap({ event, context }: SwapHandler): Promise<bo
   const quoteAmount = event.args.amount0 < 0n ? -event.args.amount0 : event.args.amount0;
   const tokenAmount = event.args.amount1 < 0n ? -event.args.amount1 : event.args.amount1;
 
+  /*
+   * The programmable fee, when the hook charged it before the pool announced the swap.
+   *
+   * Which is what an ordinary buy looks like: the engine takes its cut out of the currency the
+   * trader specified, so `beforeSwap` charges and `FeeTaken` is indexed before this row exists.
+   * `claimPendingFee` holds the other half of that join and explains it.
+   *
+   * Null for every generated market, which emits no `FeeTaken` at all, and for an engine swap
+   * whose fee was taken from the output leg — that one arrives after this row and updates it.
+   */
+  const early = await claimPendingFee({ event, context }, event.args.id);
+
   await context.db.insert(agenSwap).values({
     id: `${event.transaction.hash}-${String(event.log.logIndex)}`,
     poolId: event.args.id,
@@ -213,15 +226,17 @@ export async function indexAgenSwap({ event, context }: SwapHandler): Promise<bo
     tick: event.args.tick,
     feePpm: event.args.fee,
     /*
-     * Null, and stays null for a generated market.
+     * What the *engine* charged, which only an engine market has.
      *
-     * These two columns carry what the *engine* charged, which only an engine market has. A
-     * generated market's rate is `feePpm` above — the pool's own reported fee, which for those
-     * pools is the hook's per-swap override and therefore the truth. Writing zeros here would
-     * say an engine fee of zero was measured rather than that none applies.
+     * Null for a generated market, whose rate is `feePpm` above — the pool's own reported fee,
+     * which for those pools is the hook's per-swap override and therefore the truth. Writing
+     * zeros here would say an engine fee of zero was measured rather than that none applies.
+     *
+     * Non-null here only when the fee was charged in `beforeSwap` and has been waiting for this
+     * row. An engine fee charged in `afterSwap` lands a moment later and updates the row.
      */
-    programmableFeePpm: null,
-    feeAmount: null,
+    programmableFeePpm: early?.programmableFeePpm ?? null,
+    feeAmount: early?.feeAmount ?? null,
     timestamp: Number(event.block.timestamp),
     blockNumber: event.block.number,
     logIndex: event.log.logIndex,

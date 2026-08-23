@@ -36,7 +36,7 @@ import type { Address } from "viem";
 import { jobStore, publicView } from "./builds";
 import { INSTANT_ADDRESSES } from "./chain";
 import { isDelisted } from "./delisted";
-import { fetchMarketStats, type CandleSeries, type MarketStats } from "./feed";
+import { fetchAgenTrades, fetchMarketStats, type CandleSeries, type MarketStats } from "./feed";
 import { fetchInstantCandles, fetchInstantStats, fetchInstantTrades } from "./instant-feed";
 import { readInstantMarket, readInstantMarkets, type InstantMarket } from "./instant-markets";
 import { readLaunch, readLaunches, type LaunchRecord } from "./launched";
@@ -452,7 +452,18 @@ function summaryFrom(
     creator: live?.creator ?? launch?.creator ?? null,
     hookAddress: live?.hook ?? launch?.hook ?? null,
     tokenAddress: live?.token ?? launch?.token ?? null,
-    phase: live === null ? "ready" : "live",
+    /*
+     * A market with a launch record is deployed, whether or not the registry could be read
+     * this second.
+     *
+     * It used to hinge on `live` alone, which made an RPC that did not answer look exactly
+     * like a market that had never launched — the page reverted to describing an unlaunched
+     * build, with a token address on it, for as long as the chain was unreachable. The
+     * launch record is not a guess about this: it is written only from a successful receipt
+     * carrying the configured factory's own event. `trading` still depends on `live`, so a
+     * market that cannot be read shows no price rather than a wrong one.
+     */
+    phase: live === null && launch === null ? "ready" : "live",
     mechanics,
     headline: mechanics.headline,
     // The programmable flow never asks for one; the card draws the token's machine.
@@ -503,7 +514,10 @@ async function chainStateFor(jobId: string): Promise<{
   const launch = await readLaunch(jobId).catch(() => null);
   if (launch === null) return { launch: null, live: null, stats: null };
 
-  const live = await readLiveMarket(launch.token as Address);
+  // The record says which factory created this market, so the read goes to that factory's
+  // registry. Guessing would ask the generated-market registry about an engine market and
+  // be told, truthfully and uselessly, that no such market exists.
+  const live = await readLiveMarket(launch.token as Address, launch.engineVersion);
 
   // Only once there is a pool to ask about, and never fatal: the day's volume is worth
   // a request on a market page and worth nothing at all if it can take the page down.
@@ -536,7 +550,10 @@ export function buildStoreSource(): MarketSource {
       const summaries = await Promise.all(
         jobs.map(async (job) => {
           const launch = launches.get(job.id) ?? null;
-          const live = launch === null ? null : await readLiveMarket(launch.token as Address);
+          const live =
+            launch === null
+              ? null
+              : await readLiveMarket(launch.token as Address, launch.engineVersion);
           return summaryFrom(publicView(job), launch, live);
         }),
       );
@@ -607,9 +624,56 @@ export function buildStoreSource(): MarketSource {
       };
     },
 
-    // Both empty, and both deliberately not stubbed with samples. A sample trade is
-    // indistinguishable from a real one once it is on the page.
-    trades: async () => [],
+    /**
+     * Real trades, from the indexer, for a market that has launched.
+     *
+     * This returned `[]` for every programmable market, with a comment that a sample trade is
+     * indistinguishable from a real one on the page. That was correct while nothing had
+     * traded. It stopped being correct once the indexer began recording engine swaps and the
+     * fee each one paid: the page then said "No trades yet" about a market with trades in it,
+     * which is the same untruth the comment was guarding against, facing the other way.
+     *
+     * Nothing is invented. An unlaunched build has no pool to ask about and returns nothing;
+     * a launched one is asked by its pool id, which the launch record already holds, so this
+     * needs no chain read of its own.
+     */
+    trades: async (id) => {
+      const launch = await readLaunch(id).catch(() => null);
+      if (launch === null) return [];
+
+      const found = await fetchAgenTrades(launch.poolId).catch(() => []);
+
+      return found.map((trade) => ({
+        id: trade.id,
+        at: trade.at,
+        trader: trade.sender,
+        side: trade.side,
+        // Zero rather than a converted figure, exactly as the Instant path does: nothing here
+        // knows an ether price, and `amountEth` below is what this trade actually moved.
+        amountUsd: 0,
+        /*
+         * The quote leg, named as ether because for an engine market it is.
+         *
+         * `queue.ts` binds every engine-v1 build to the zero address — native Robinhood Chain
+         * ETH — so there is no engine market whose quote asset is anything else, and the label
+         * is a fact rather than an assumption. It would become one the day a build could name
+         * an equity quote, and the fix then is to carry the quote's symbol rather than to
+         * rename this field.
+         */
+        amountEth: trade.quote,
+        tokens: trade.tokens,
+        txHash: trade.txHash,
+        feePpm: trade.feePpm,
+        // The rules that fired are not reconstructed from a trade. The engine emits the rate
+        // it chose, which is on the row above; naming *which* rule produced it would be this
+        // module deriving economics, and every other surface reads the engine's own review
+        // instead. See `mechanicsOf`.
+        effects: [],
+      }));
+    },
+
+    // Deliberately empty. An engine market declares no state variables — the hook keeps two
+    // accumulators and both are already visible as the thresholds in the cards that use them.
     state: async () => [],
   };
 }

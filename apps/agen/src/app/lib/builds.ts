@@ -43,6 +43,7 @@ import type {
   GenerationJob,
   JobStore,
   ModelProvider,
+  ProviderHealth,
 } from "@verdant/market-compiler";
 import {
   approvalMessage,
@@ -113,6 +114,14 @@ export function jobStore(): JobStore {
 export interface ModelStatus {
   readonly configured: boolean;
   readonly model: string;
+  /**
+   * How the two vendors are actually behaving, or null where only one is configured.
+   *
+   * Reported because a failover is invisible by design — the build completes on the other
+   * vendor and the market is identical — which means a primary vendor that has been dead
+   * for hours looks exactly like one that is fine. See `ProviderHealth`.
+   */
+  readonly health: ProviderHealth | null;
 }
 
 /**
@@ -126,9 +135,14 @@ export interface ModelStatus {
 export function modelStatus(): ModelStatus {
   const [primary] = orderedProviders();
 
+  // Composed for its side effect of establishing the singleton, so a status read before the
+  // first build still reports the two vendors rather than null.
+  providerOrNull();
+
   return {
     configured: primary !== null,
     model: primary?.model ?? openAiModel(),
+    health: composedHealth?.() ?? null,
   };
 }
 
@@ -203,19 +217,88 @@ function openAiOrNull(): ModelProvider | null {
  * the same. Only reachability fails over; a rejected artefact still belongs to the repair
  * loops. See `fallbackProvider`.
  */
+/**
+ * Composed once per process, not once per build.
+ *
+ * It used to be built on every call, which made the failover counters useless before they
+ * existed: each build would have got a fresh object with a zeroed count, so "the primary has
+ * failed forty times in a row" could never be observed. One instance also means one place
+ * for a status endpoint to read the vendors' health from, and it costs nothing — the
+ * providers are stateless wrappers around `fetch`.
+ *
+ * Null is not memoised, so an environment that gains a key mid-process starts working. There
+ * is no case where one that *loses* a key needs to start failing.
+ */
+let composedProvider: ModelProvider | null = null;
+
+/**
+ * The composed provider's health, or null where only one vendor is configured.
+ *
+ * Held beside the provider rather than read off it, because the pipeline is handed a plain
+ * `ModelProvider` — the whole point of `fallbackProvider` is that nothing downstream learns
+ * there are two vendors — so the type that reaches callers has no `health` on it.
+ */
+let composedHealth: (() => ProviderHealth) | null = null;
+
+/**
+ * How many consecutive failovers count as "the primary vendor is down" rather than "the
+ * primary vendor had a bad minute".
+ *
+ * Five, because a build makes many model calls and a genuine blip affects one or two of
+ * them before the vendor recovers. Crossing this escalates the log from `warn` to `error`
+ * and says the thing an operator needs told — that every call is now going to the other
+ * vendor — rather than repeating a line that reads as routine.
+ */
+const PRIMARY_DOWN_AFTER = 5;
+
 export function providerOrNull(): ModelProvider | null {
+  if (composedProvider !== null) return composedProvider;
+
   const [primary, secondary] = orderedProviders();
   if (primary === null) return null;
-  if (secondary === null) return primary;
+  if (secondary === null) {
+    composedProvider = primary;
+    return primary;
+  }
 
-  return fallbackProvider(primary, secondary, {
-    onFailover: (error) => {
-      console.warn(
+  const composed = fallbackProvider(primary, secondary, {
+    onFailover: (error, health) => {
+      const line =
         `[agen] ${error.stage}: ${primary.name} could not answer (${error.message}); ` +
-          `finishing this stage on ${secondary.name}`,
+        `finishing this stage on ${secondary.name}. ` +
+        `${String(health.consecutivePrimaryFailures)} consecutive, ` +
+        `${String(health.primaryFailures)} of ${String(health.calls)} calls this process`;
+
+      // Escalated rather than repeated. A vendor that has refused five calls in a row is
+      // not having a blip, and a hundred identical warnings is the shape of a problem
+      // nobody notices — the whole reason this was worth changing.
+      if (health.consecutivePrimaryFailures >= PRIMARY_DOWN_AFTER) {
+        console.error(
+          `${line}. ${primary.name} appears to be down; every build is running on ` +
+            `${secondary.name} until it recovers.`,
+        );
+      } else {
+        console.warn(line);
+      }
+    },
+
+    // Both vendors down is a different event and was previously silent: `onFailover` had
+    // already logged "finishing this stage on the other vendor", which is untrue when the
+    // other vendor cannot answer either. A build is about to fail, and this is the only
+    // line that says why.
+    onSecondaryFailure: (error, health) => {
+      console.error(
+        `[agen] ${error.stage}: neither ${primary.name} nor ${secondary.name} could answer ` +
+          `(${error.message}). No model is reachable, so builds will fail until one is. ` +
+          `${String(health.secondaryFailures)} such calls this process.`,
       );
     },
   });
+
+  composedProvider = composed;
+  composedHealth = composed.health;
+
+  return composedProvider;
 }
 
 /**

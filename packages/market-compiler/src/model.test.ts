@@ -498,6 +498,186 @@ describe("one provider standing behind another", () => {
       /could not be reached/,
     );
   });
+
+  /*
+   * Both vendors down is a different event from a failover, and it used to be silent.
+   * `onFailover` had already fired, and the natural line to write there — "finishing this
+   * stage on the other vendor" — is untrue when the other vendor cannot answer either. So a
+   * total outage read in the logs as a routine failover, and the only visible symptom was
+   * builds failing for a reason the logs said had been handled.
+   */
+  it("says so separately when neither vendor can answer", async () => {
+    const down = scriptedProvider([
+      new ModelError("openai", "interpret", "the model provider could not be reached", {
+        retryable: true,
+      }),
+    ]);
+    const alsoDown = scriptedProvider([
+      new ModelError("spare", "interpret", "the spare is down too", { retryable: true }),
+    ]);
+
+    const failovers: string[] = [];
+    const outages: string[] = [];
+
+    const provider = fallbackProvider(down, alsoDown, {
+      onFailover: (error) => failovers.push(error.message),
+      onSecondaryFailure: (error) => outages.push(error.message),
+    });
+
+    await expect(provider.generate(REQUEST)).rejects.toThrow(/could not be reached/);
+
+    expect(failovers).toHaveLength(1);
+    expect(outages).toEqual(["the spare is down too"]);
+  });
+});
+
+/**
+ * That a dead primary vendor is visible.
+ *
+ * A failover is invisible by design: the build completes on the other vendor and the market
+ * is identical, which is the behaviour a creator should get and is also the reason a primary
+ * vendor that has been unreachable for hours looks exactly like one that is fine. A log line
+ * per event is not enough on its own — finding it requires already suspecting there is
+ * something to find — so the composed provider counts, and something can be asked.
+ */
+describe("provider health", () => {
+  function bothUp() {
+    return fallbackProvider(
+      scriptedProvider([{ summary: "one" }, { summary: "two" }]),
+      scriptedProvider([{ summary: "spare" }]),
+    );
+  }
+
+  it("counts nothing against a vendor that is answering", async () => {
+    const provider = bothUp();
+
+    await provider.generate(REQUEST);
+    await provider.generate(REQUEST);
+
+    expect(provider.health()).toMatchObject({
+      calls: 2,
+      primaryFailures: 0,
+      secondaryUsed: 0,
+      secondaryFailures: 0,
+      consecutivePrimaryFailures: 0,
+      lastPrimaryFailureAt: null,
+      lastPrimaryFailure: null,
+    });
+  });
+
+  it("counts a failover, and names both vendors", async () => {
+    const provider = fallbackProvider(
+      scriptedProvider([
+        new ModelError("openai", "interpret", "the model provider could not be reached", {
+          retryable: true,
+        }),
+      ]),
+      scriptedProvider([{ summary: "spare" }]),
+    );
+
+    await provider.generate(REQUEST);
+    const health = provider.health();
+
+    expect(health).toMatchObject({
+      primary: "scripted",
+      secondary: "scripted",
+      calls: 1,
+      primaryFailures: 1,
+      secondaryUsed: 1,
+      secondaryFailures: 0,
+      consecutivePrimaryFailures: 1,
+    });
+    expect(health.lastPrimaryFailure).toMatch(/could not be reached/);
+    expect(health.lastPrimaryFailureAt).toBeTypeOf("number");
+  });
+
+  /*
+   * The number an operator actually acts on. A handful of failovers is a vendor having a bad
+   * minute; a run of them is an outage or an empty account, and the difference is only
+   * visible if the run is counted as a run.
+   */
+  it("counts consecutive failures, so an outage looks different from a blip", async () => {
+    const unreachable = () =>
+      new ModelError("openai", "interpret", "the model provider could not be reached", {
+        retryable: true,
+      });
+
+    const provider = fallbackProvider(
+      scriptedProvider([unreachable(), unreachable(), unreachable()]),
+      scriptedProvider([{ summary: "a" }, { summary: "b" }, { summary: "c" }]),
+    );
+
+    for (let i = 0; i < 3; i += 1) await provider.generate(REQUEST);
+
+    expect(provider.health().consecutivePrimaryFailures).toBe(3);
+    expect(provider.health().primaryFailures).toBe(3);
+  });
+
+  it("forgets a run of failures as soon as the primary answers again", async () => {
+    const provider = fallbackProvider(
+      scriptedProvider([
+        new ModelError("openai", "interpret", "the model provider could not be reached", {
+          retryable: true,
+        }),
+        { summary: "recovered" },
+      ]),
+      scriptedProvider([{ summary: "spare" }]),
+    );
+
+    await provider.generate(REQUEST);
+    expect(provider.health().consecutivePrimaryFailures).toBe(1);
+
+    await provider.generate(REQUEST);
+
+    // The run is over, and the total is not forgotten — the first says "is it down now",
+    // the second says "how much has this cost today".
+    expect(provider.health().consecutivePrimaryFailures).toBe(0);
+    expect(provider.health().primaryFailures).toBe(1);
+  });
+
+  /*
+   * A rejected artefact is not a mark against the vendor: it answered, promptly, with
+   * something the request could not use. Counting it would make the health figure a measure
+   * of how hard the prompts are rather than of whether the vendor is up, which is the one
+   * thing it exists to say.
+   */
+  it("does not blame a vendor for a request it answered badly", async () => {
+    const provider = fallbackProvider(
+      scriptedProvider([
+        new ModelError("openai", "interpret", "the model provider answered 400 Bad Request", {
+          retryable: false,
+        }),
+      ]),
+      scriptedProvider([{ summary: "never asked" }]),
+    );
+
+    await expect(provider.generate(REQUEST)).rejects.toThrow(/400 Bad Request/);
+
+    expect(provider.health()).toMatchObject({
+      calls: 1,
+      primaryFailures: 0,
+      consecutivePrimaryFailures: 0,
+    });
+  });
+
+  it("counts a total outage separately from a failover", async () => {
+    const provider = fallbackProvider(
+      scriptedProvider([
+        new ModelError("openai", "interpret", "the model provider could not be reached", {
+          retryable: true,
+        }),
+      ]),
+      scriptedProvider([new ModelError("spare", "interpret", "down too", { retryable: true })]),
+    );
+
+    await expect(provider.generate(REQUEST)).rejects.toThrow(/could not be reached/);
+
+    expect(provider.health()).toMatchObject({
+      primaryFailures: 1,
+      secondaryUsed: 0,
+      secondaryFailures: 1,
+    });
+  });
 });
 
 describe("the scripted provider", () => {

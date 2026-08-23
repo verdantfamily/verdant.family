@@ -184,7 +184,15 @@ const MANIFEST_ABI = [
   },
 ] as const;
 
-const DEPLOY_MARKET_ABI = [
+/**
+ * Exported so `prepare.test.ts` can hold it against the compiled factory's own signature.
+ *
+ * That test exists because byte-parity is not type-parity: `CONFIG_ABI` declared two integers
+ * one width too wide, which changed nothing about any encoding or any hash and moved the
+ * function selector — so every launch this module built was addressed to a function the
+ * factory does not have. Nothing short of comparing signatures catches that from this side.
+ */
+export const DEPLOY_MARKET_ABI = [
   {
     type: "function",
     name: "deployMarket",

@@ -79,6 +79,24 @@ const ZERO_ADDRESS: Address = "0x0000000000000000000000000000000000000000";
  * whatever builds the calldata is a second definition, and the two would agree until they
  * did not — at which point a creator would have signed a commitment over one configuration
  * and sent a transaction carrying another.
+ *
+ * ## The widths are part of the type, not only of the encoding
+ *
+ * Every integer here has to be the width Solidity declares, and byte-parity is not enough to
+ * establish that. `threshold` and `thresholdTokens` are `uint128` on chain and were `uint256`
+ * here, which is invisible to every hash: the ABI pads both to 32 bytes, so `abi.encode`
+ * produced identical bytes and `RuleLib.vectors.t.sol` passed on every vector.
+ *
+ * What it is not invisible to is the function selector. A selector is `keccak` of the
+ * signature *string*, so a manifest with this tuple nested inside it hashed to
+ * `deployMarket(...(uint256,uint24,uint24)[]...)` while the deployed factory answers to
+ * `...(uint128,uint24,uint24)[]...`. Every launch transaction the app built was addressed to
+ * a function that does not exist, and reverted at the factory with no reason data — after the
+ * review screen, after the signature, after the commitment checks, all of which were correct.
+ *
+ * It was found by `scripts/indexer-proof.sh` putting the app's own calldata on a chain, which
+ * is the only thing that could have found it: it is not reachable from either side alone.
+ * `prepare.test.ts` now asserts this tuple against the compiled contract's own signature.
  */
 export const CONFIG_ABI = [
   {
@@ -94,7 +112,7 @@ export const CONFIG_ABI = [
         type: "tuple[]",
         name: "stages",
         components: [
-          { type: "uint256", name: "threshold" },
+          { type: "uint128", name: "threshold" },
           { type: "uint24", name: "buyFeePpm" },
           { type: "uint24", name: "sellFeePpm" },
         ],
@@ -103,7 +121,7 @@ export const CONFIG_ABI = [
         type: "tuple[]",
         name: "buyTiers",
         components: [
-          { type: "uint256", name: "thresholdTokens" },
+          { type: "uint128", name: "thresholdTokens" },
           { type: "uint24", name: "feePpm" },
         ],
       },
@@ -111,7 +129,7 @@ export const CONFIG_ABI = [
         type: "tuple[]",
         name: "sellTiers",
         components: [
-          { type: "uint256", name: "thresholdTokens" },
+          { type: "uint128", name: "thresholdTokens" },
           { type: "uint24", name: "feePpm" },
         ],
       },

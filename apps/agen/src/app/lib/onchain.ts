@@ -19,14 +19,31 @@
  * the market is not there. A launchpad whose discovery page 500s because an RPC hiccuped
  * is worse than one that shows a dash: the mechanics, the rules and the contracts are
  * all still true and still worth serving.
+ *
+ * ## Two registries, and which one to ask is not a guess
+ *
+ * `AgenMarketRegistry` is one contract type deployed twice: once for generated markets,
+ * once for the engine. Each names its own factory as the only account allowed to write to
+ * it, so an engine market appears in the engine's registry and nowhere else. The two are
+ * indistinguishable by ABI and completely distinct by content, which is the worst possible
+ * combination for a reader that guesses: asking the generated registry about an engine
+ * market returns "no such market" rather than an error, and the market it describes goes on
+ * rendering as an unlaunched build.
+ *
+ * So every read here takes the engine version as an argument and resolves the registry from
+ * it. The caller always knows — it came from the launch record, which recorded which
+ * factory's event it decoded — and making it a parameter rather than a default means a new
+ * call site cannot silently inherit engine 0's registry.
  */
 
 import "server-only";
 
+import type { EngineVersion } from "@verdant/market-compiler";
 import { agen } from "@verdant/sdk";
-import { createPublicClient, http, type Address, type Hex, type PublicClient } from "viem";
+import { createPublicClient, getAddress, http, type Address, type Hex, type PublicClient } from "viem";
 
 import { AGEN_ADDRESSES, EXTERNAL, chain } from "./chain";
+import { engineAddressesOrNull } from "./programmable";
 
 /**
  * Module scope, so a page render does not build a transport per component.
@@ -86,22 +103,39 @@ export interface LiveMarket {
 }
 
 /**
- * A market by its token, from the registry and the pool.
+ * The registry that records markets from a given engine, or `null` where that engine is
+ * not deployed on this chain.
+ *
+ * Exported because the tests assert the routing directly: that engine 1 resolves to the
+ * engine's own registry, that engine 0 resolves to the generated-market one, and that
+ * neither ever answers with the other's address.
+ */
+export function registryFor(engineVersion: EngineVersion): Address | null {
+  if (engineVersion === 1) {
+    const engine = engineAddressesOrNull();
+    return engine === null ? null : getAddress(engine.registry);
+  }
+
+  return AGEN_ADDRESSES.ok ? AGEN_ADDRESSES.addresses.registry : null;
+}
+
+/**
+ * A market by its token, from its own engine's registry and the pool.
  *
  * `null` covers three different situations that all mean the same thing to a page:
- * Agen is not deployed here, this token is not one of its markets, or the chain did not
- * answer. Distinguishing them would give a caller three branches that render the same
- * thing.
+ * this engine is not deployed here, this token is not one of its markets, or the chain
+ * did not answer. Distinguishing them would give a caller three branches that render the
+ * same thing.
  */
-export async function readLiveMarket(token: Address): Promise<LiveMarket | null> {
-  if (!AGEN_ADDRESSES.ok) return null;
+export async function readLiveMarket(
+  token: Address,
+  engineVersion: EngineVersion,
+): Promise<LiveMarket | null> {
+  const registry = registryFor(engineVersion);
+  if (registry === null) return null;
 
   try {
-    const record = await agen.readAgenMarketByToken(
-      publicClient(),
-      AGEN_ADDRESSES.addresses.registry,
-      token,
-    );
+    const record = await agen.readAgenMarketByToken(publicClient(), registry, token);
     if (record === null) return null;
 
     return await withPool(record);
@@ -111,22 +145,22 @@ export async function readLiveMarket(token: Address): Promise<LiveMarket | null>
 }
 
 /**
- * Every market the registry knows, newest first.
+ * Every market one engine's registry knows, newest first.
  *
  * The registry pages, so this is one call for the list and one multicall per market for
  * its pool. That is fine at the scale a new launchpad operates at and stops being fine
  * somewhere around a few hundred markets — at which point the indexer's feed answers
  * this question instead, and this function becomes the thing that verifies it.
  */
-export async function readLiveMarkets(limit = 50): Promise<readonly LiveMarket[]> {
-  if (!AGEN_ADDRESSES.ok) return [];
+export async function readLiveMarkets(
+  engineVersion: EngineVersion,
+  limit = 50,
+): Promise<readonly LiveMarket[]> {
+  const registry = registryFor(engineVersion);
+  if (registry === null) return [];
 
   try {
-    const records = await agen.readAgenMarketPage(
-      publicClient(),
-      AGEN_ADDRESSES.addresses.registry,
-      { limit },
-    );
+    const records = await agen.readAgenMarketPage(publicClient(), registry, { limit });
 
     const settled = await Promise.all(records.map(async (record) => withPool(record)));
     return settled.filter((market): market is LiveMarket => market !== null);

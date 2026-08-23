@@ -127,14 +127,19 @@ export function Trades({
             </div>
 
             {/*
-              Two denominations, because the two products report in different units.
-              
-              A programmable trade carries `amountUsd` and always has; an Instant trade
-              carries the ether it actually moved, and putting that through a dollar
-              formatter would print a `$` in front of a quantity of ETH. The fee column
-              works the same way: v4 reports zero for an Instant swap because the hook
-              overrides the LP fee and charges the ether leg instead, so the real 1.50%
-              is stated once beneath the table rather than faked per row.
+              Two denominations, because the products report in different units.
+
+              An engine-0 programmable trade carries `amountUsd` and always has; an Instant
+              trade, and an engine-v1 one, carry the ether they actually moved — and putting
+              that through a dollar formatter would print a `$` in front of a quantity of ETH.
+
+              The fee column is decided by whether a rate is *known*, not by the denomination.
+              It used to be keyed off `amountEth`, which was a stand-in for "this is an Instant
+              trade": v4 reports zero for an Instant swap because the hook overrides the LP fee
+              and charges the ether leg instead, so the real 1.50% is stated once beneath the
+              table rather than faked per row. An engine trade reports in ether too, and its
+              rate *is* known — the indexer takes it from the hook's own `FeeTaken` — so keying
+              off the denomination dashed a number the feed had already answered.
             */}
             {trades.map((trade) => (
               <div className="ax-tk-tr" key={trade.id}>
@@ -145,7 +150,7 @@ export function Trades({
                     : `${eth(trade.amountEth)} ETH`}
                 </span>
                 <span className="dim">{trade.tokens === undefined ? "—" : tokens(trade.tokens)}</span>
-                <span className="dim">{trade.amountEth === undefined ? feeRate(trade.feePpm) : DASH}</span>
+                <span className="dim">{trade.feePpm > 0 ? feeRate(trade.feePpm) : DASH}</span>
                 <span className="dim">{short(trade.trader)}</span>
                 <span className="dim">{age(trade.at, now)}</span>
               </div>

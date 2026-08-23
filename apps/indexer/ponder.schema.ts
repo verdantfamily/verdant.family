@@ -973,6 +973,42 @@ export const agenSwap = onchainTable(
   }),
 );
 
+/**
+ * A programmable fee whose swap row did not exist yet.
+ *
+ * ## Why a fee can arrive before the trade it belongs to
+ *
+ * The engine hook charges in `beforeSwap` when the fee comes out of the specified currency, and
+ * in `afterSwap` when it comes out of the other leg. `beforeSwap` runs before the PoolManager
+ * emits `Swap`, so for those trades — every ordinary buy, where the trader specifies the ether
+ * they are spending — `FeeTaken` is indexed *first* and there is no row to attach it to.
+ *
+ * The handler used to assume the opposite ("the swap's log index is always lower — the hook
+ * emits after the pool"), find nothing, and return. The fee was dropped, permanently and
+ * silently: every buy on every engine market read as free, on the market page and in the API,
+ * while sells were correct. Found by `scripts/indexer-proof.sh`, which buys and then sells and
+ * compares both against the hook's own events.
+ *
+ * So a fee that arrives early is parked here and claimed by the swap when it lands. Rows are
+ * deleted as they are claimed, which makes a non-empty table at rest a real signal: it means a
+ * `FeeTaken` was emitted for a swap this indexer never saw.
+ */
+export const agenPendingFee = onchainTable(
+  "agen_pending_fee",
+  (t) => ({
+    /** The `FeeTaken` log's own identity: its transaction and its position in it. */
+    id: t.text().primaryKey(),
+    poolId: t.hex().notNull(),
+    transactionHash: t.hex().notNull(),
+    logIndex: t.integer().notNull(),
+    feePpm: t.integer().notNull(),
+    feeAmount: t.bigint().notNull(),
+  }),
+  (table) => ({
+    pairingIdx: index().on(table.transactionHash, table.poolId, table.logIndex),
+  }),
+);
+
 /** Every contract a generated market is made of, so an interface can list them. */
 export const agenComponent = onchainTable(
   "agen_component",

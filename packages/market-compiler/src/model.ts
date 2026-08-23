@@ -812,6 +812,45 @@ export function anthropicProvider(options: AnthropicOptions): ModelProvider {
 // --- composing providers ---------------------------------------------------
 
 /**
+ * How much work each vendor is doing, and how much of it is happening because the other
+ * one cannot.
+ *
+ * ## Why a counter rather than only a log line
+ *
+ * The failover is deliberately invisible to a creator: their build completes, on the other
+ * vendor, and nothing about the market is different. That is the right behaviour and it is
+ * also the problem — a primary vendor that has been dead since Tuesday looks, from the
+ * outside, exactly like one that is fine. The log line per event is not enough on its own,
+ * because reading it requires already suspecting there is something to look for.
+ *
+ * So the composed provider counts. One number an operator can look at — or a status
+ * endpoint can serve — answers "is the primary vendor working", which is a question nobody
+ * can answer from a stream of individually-unremarkable warnings.
+ *
+ * `consecutivePrimaryFailures` is the one that matters most: a handful of failovers is a
+ * vendor having a bad minute, and a hundred in a row is an outage or an empty account.
+ */
+export interface ProviderHealth {
+  readonly primary: string;
+  readonly secondary: string;
+  /** Every call made through the composed provider. */
+  readonly calls: number;
+  readonly primaryFailures: number;
+  /** Calls the secondary answered. Equal to `primaryFailures` minus its own failures. */
+  readonly secondaryUsed: number;
+  /** Calls where neither vendor could answer, which is what a creator sees as a failure. */
+  readonly secondaryFailures: number;
+  /** Reset by any successful primary call, so this is "is it down *now*". */
+  readonly consecutivePrimaryFailures: number;
+  /** Epoch milliseconds, or null if the primary has never failed. */
+  readonly lastPrimaryFailureAt: number | null;
+  readonly lastPrimaryFailure: string | null;
+}
+
+/** A composed provider, plus the health of the two vendors behind it. */
+export type FallbackProvider = ModelProvider & { readonly health: () => ProviderHealth };
+
+/**
  * One provider backed by another, for when the first cannot answer at all.
  *
  * This exists so a second vendor can be added without the pipeline learning that there
@@ -828,29 +867,79 @@ export function anthropicProvider(options: AnthropicOptions): ModelProvider {
  * The failure is not swallowed either way: if the fallback also cannot answer, the
  * original error is what surfaces, because the primary is the one an operator has to go
  * and fix.
+ *
+ * ## The two callbacks are different events and need saying separately
+ *
+ * `onFailover` fires when the primary could not answer and the secondary is about to be
+ * asked. `onSecondaryFailure` fires when the secondary could not answer either. Reporting
+ * only the first was actively misleading: the natural thing to log there is "finishing this
+ * stage on the other vendor", which is a sentence that gets written to the log even when the
+ * other vendor is down too — so a total outage read as a routine failover, and the only
+ * visible symptom was builds failing for reasons the logs said had been handled.
  */
 export function fallbackProvider(
   primary: ModelProvider,
   fallback: ModelProvider,
-  options?: { readonly onFailover?: (error: ModelError) => void },
-): ModelProvider {
+  options?: {
+    readonly onFailover?: (error: ModelError, health: ProviderHealth) => void;
+    readonly onSecondaryFailure?: (error: ModelError, health: ProviderHealth) => void;
+  },
+): FallbackProvider {
+  let calls = 0;
+  let primaryFailures = 0;
+  let secondaryUsed = 0;
+  let secondaryFailures = 0;
+  let consecutivePrimaryFailures = 0;
+  let lastPrimaryFailureAt: number | null = null;
+  let lastPrimaryFailure: string | null = null;
+
+  const health = (): ProviderHealth => ({
+    primary: primary.name,
+    secondary: fallback.name,
+    calls,
+    primaryFailures,
+    secondaryUsed,
+    secondaryFailures,
+    consecutivePrimaryFailures,
+    lastPrimaryFailureAt,
+    lastPrimaryFailure,
+  });
+
   return {
     name: `${primary.name}+${fallback.name}`,
     model: primary.model,
+    health,
 
     generate: async <T>(request: StructuredRequest): Promise<StructuredResponse<T>> => {
+      calls += 1;
+
       try {
-        return await primary.generate<T>(request);
+        const answer = await primary.generate<T>(request);
+        consecutivePrimaryFailures = 0;
+        return answer;
       } catch (error) {
         // Anything that is not the provider being unable to answer belongs to the
-        // caller, unchanged.
+        // caller, unchanged — and is not a mark against the vendor either, so the
+        // counters do not move.
         if (!(error instanceof ModelError) || !unreachable(error)) throw error;
 
-        options?.onFailover?.(error);
+        primaryFailures += 1;
+        consecutivePrimaryFailures += 1;
+        lastPrimaryFailureAt = Date.now();
+        lastPrimaryFailure = error.message;
+
+        options?.onFailover?.(error, health());
 
         try {
-          return await fallback.generate<T>(request);
-        } catch {
+          const answer = await fallback.generate<T>(request);
+          secondaryUsed += 1;
+          return answer;
+        } catch (secondary) {
+          secondaryFailures += 1;
+          options?.onSecondaryFailure?.(
+            secondary instanceof ModelError ? secondary : error,
+            health(),
+          );
           throw error;
         }
       }

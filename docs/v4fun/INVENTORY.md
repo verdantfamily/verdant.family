@@ -19,6 +19,7 @@ test, CI gate or lint configuration was modified.
 - [What already produces identity, simulation and review](#what-already-produces-identity-simulation-and-review)
 - [Live engine markets](#live-engine-markets)
 - [Corrections to stated assumptions](#corrections-to-stated-assumptions)
+- [Decisions](#decisions)
 - [Missing](#missing)
 
 ## Deployed contracts
@@ -373,6 +374,45 @@ Two further observations, offered rather than corrected:
 No CI gate blocked this work. `pnpm verify:docs` resolves the links in this file;
 `packages/registry` adds `build`, `typecheck` and `test` scripts that Turbo picks up by
 convention, and no existing task definition, test or lint configuration was edited.
+
+## Decisions
+
+Recorded as they are taken, newest last.
+
+### D1 — The registry is tolerant of which engine version exists
+
+`packages/registry` reads the four engine-v2 rule fields — `walletMaxBuyTokens`,
+`walletWindowSeconds`, `epochPeriodSeconds`, `buybackTriggerTokens` — through an optional view,
+and treats an absent one exactly as the engine's own `NO_V2_RULES` treats it: no wallet limit,
+no epoch, no buyback. The `Recipient` switch likewise handles all five variants although a v1
+build declares only three.
+
+**Why.** This was found the hard way. M0 was written against a working tree that carried
+uncommitted engine-v2 changes, and it read those four fields directly. When the v2 work was moved
+to its own branch, `packages/registry` stopped compiling on the engine-v1 base — eight type
+errors — and fourteen of its tests failed at runtime with `walletWindowSeconds must be a bigint,
+a number or a decimal string, got undefined`. The chain-verified identity tests were unaffected;
+the failure was confined to normalization.
+
+The general principle is the reason the fix is tolerance rather than a version pin. This package
+sits downstream of a schema it does not own, and it is meant to be consumed by more than one
+surface. A registry whose build depended on which engine branch was checked out would push that
+dependency onto every consumer, and the failure mode is bad in both directions: pinned to v1 it
+silently ignores v2 rules that change what a market charges, and pinned to v2 it will not build
+until v2 ships.
+
+**Why this is not the coercion `normalize.ts` otherwise refuses.** That file refuses to round a
+rate or truncate a threshold, because a nearly-right fee merges two markets that charge
+differently. Reading an *absent* wallet limit as "no wallet limit" is not that. A v1 market
+genuinely has no wallet limit, so the absence is a fact and recording it preserves the economics
+exactly. A field that is present and unreadable is still a refusal.
+
+**What it does not change.** `configHash` is untouched and still comes from
+`@verdant/market-engine`. On the engine-v1 base `CONFIG_ABI` does not carry the v2 fields at all,
+so spelling them out as empty cannot change the canonical bytes and therefore cannot change the
+identity — which `version-tolerance.test.ts` asserts, along with the general invariant that the
+hash changes exactly when the bytes change. That test also records that the hash half of the
+question is not exercisable on this base rather than manufacturing a case for it.
 
 ## Missing
 

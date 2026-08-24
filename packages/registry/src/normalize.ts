@@ -38,9 +38,50 @@
  * matter.
  */
 
-import type { CanonicalConfig } from "@verdant/market-engine";
+import type { CanonicalConfig, SizeAmount } from "@verdant/market-engine";
 
 import type { Hex, SchemaVersion } from "./types.js";
+
+/**
+ * The engine-v2 rule fields, read as optional.
+ *
+ * `CanonicalConfig` gains a wallet limit, an epoch and a buyback trigger when engine v2 is
+ * present, and on a build without v2 those four properties do not exist at all — not as
+ * `null`, but absent, because the type does not declare them.
+ *
+ * This package is deliberately tolerant of both. It sits downstream of a schema it does not
+ * own, and a registry that stopped compiling because the engine had not shipped a feature yet
+ * would make every consumer's build depend on which engine branch was checked out. So the four
+ * are read through this view and an absent one is treated as the engine's own `NO_V2_RULES`
+ * treats it: no wallet limit, no epoch, no buyback.
+ *
+ * That is not a coercion of the kind the file header refuses. A v1 market genuinely has no
+ * wallet limit, so reading the absence as "no limit" preserves its economics exactly; it is
+ * `undefined` standing for a fact, not a number being rounded. What is still refused is a field
+ * that is *present* and unreadable.
+ */
+interface OptionalV2Rules {
+  readonly walletMaxBuyTokens?: bigint | number | string | null;
+  readonly walletWindowSeconds?: bigint | number | string;
+  readonly epochPeriodSeconds?: bigint | number | string;
+  readonly buybackTriggerTokens?: bigint | number | string | null;
+}
+
+/**
+ * A recipient's fields, widened across engine versions.
+ *
+ * `Recipient` is a closed union of three variants at v1 and five at v2, so a `switch` with a
+ * `never` exhaustiveness check cannot compile against both: the two extra cases are
+ * unreachable-and-therefore-an-error on one build, and required on the other. Widening to this
+ * shape is what lets one function handle either, at the cost of the compiler no longer proving
+ * the switch is total — which is why its `default` throws by name rather than falling through.
+ */
+interface RecipientFields {
+  readonly kind: string;
+  readonly address?: string;
+  readonly periodSeconds?: bigint | number | string;
+  readonly trigger?: SizeAmount;
+}
 
 /**
  * A configuration reduced to its economics, as JSON-safe values in a fixed field order.
@@ -114,6 +155,9 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
  */
 export function normalizeForDedupe(config: CanonicalConfig): NormalizedConfig {
   const referenceSupply = integer(config.referenceSupply, "referenceSupply");
+  // An assertion rather than an annotation, because on a build without engine v2 the two types
+  // have no property in common and TypeScript rejects the plain assignment.
+  const v2 = config as CanonicalConfig & OptionalV2Rules;
 
   return {
     schemaVersion: config.engineVersion,
@@ -127,10 +171,12 @@ export function normalizeForDedupe(config: CanonicalConfig): NormalizedConfig {
     distribution: sortShares(config.distribution.map((each) => share(each, referenceSupply))),
     maxBuyTokens: optionalInteger(config.maxBuyTokens, "maxBuyTokens"),
     maxSellTokens: optionalInteger(config.maxSellTokens, "maxSellTokens"),
-    walletMaxBuyTokens: optionalInteger(config.walletMaxBuyTokens, "walletMaxBuyTokens"),
-    walletWindowSeconds: integer(config.walletWindowSeconds, "walletWindowSeconds").toString(),
-    epochPeriodSeconds: integer(config.epochPeriodSeconds, "epochPeriodSeconds").toString(),
-    buybackTriggerTokens: optionalInteger(config.buybackTriggerTokens, "buybackTriggerTokens"),
+    // Absent means no such rule, which is what `NO_V2_RULES` means in the engine. See
+    // `OptionalV2Rules`.
+    walletMaxBuyTokens: optionalInteger(v2.walletMaxBuyTokens, "walletMaxBuyTokens"),
+    walletWindowSeconds: integer(v2.walletWindowSeconds ?? 0, "walletWindowSeconds").toString(),
+    epochPeriodSeconds: integer(v2.epochPeriodSeconds ?? 0, "epochPeriodSeconds").toString(),
+    buybackTriggerTokens: optionalInteger(v2.buybackTriggerTokens, "buybackTriggerTokens"),
   };
 }
 
@@ -187,11 +233,13 @@ function recipient(
   value: CanonicalConfig["distribution"][number]["recipient"],
   referenceSupply: bigint,
 ): NormalizedRecipient {
-  switch (value.kind) {
+  const held: RecipientFields = value;
+
+  switch (held.kind) {
     case "ADDRESS":
       return {
         kind: "ADDRESS",
-        address: address(value.address, "recipient.address"),
+        address: address(held.address, "recipient.address"),
         periodSeconds: "0",
         trigger: null,
       };
@@ -199,7 +247,7 @@ function recipient(
       return {
         kind: "LARGEST_HOLDER",
         address: ZERO_ADDRESS,
-        periodSeconds: integer(value.periodSeconds, "recipient.periodSeconds").toString(),
+        periodSeconds: integer(held.periodSeconds ?? 0, "recipient.periodSeconds").toString(),
         trigger: null,
       };
     case "BUYBACK":
@@ -207,23 +255,22 @@ function recipient(
         kind: "BUYBACK",
         address: ZERO_ADDRESS,
         periodSeconds: "0",
-        trigger: triggerTokens(value.trigger, referenceSupply).toString(),
+        trigger: triggerTokens(held.trigger, referenceSupply).toString(),
       };
     case "CREATOR":
     case "TREASURY":
-      return { kind: value.kind, address: ZERO_ADDRESS, periodSeconds: "0", trigger: null };
-    default: {
-      const exhaustive: never = value;
-      return exhaustive;
-    }
+      return { kind: held.kind, address: ZERO_ADDRESS, periodSeconds: "0", trigger: null };
+    default:
+      throw new Error(`"${held.kind}" is not a recipient kind this registry knows`);
   }
 }
 
 /** A buyback trigger as tokens, whichever of the two forms it was stated in. */
-function triggerTokens(
-  value: { readonly kind: "PERCENT_REFERENCE_SUPPLY"; readonly percent: string } | { readonly kind: "ABSOLUTE_TOKENS"; readonly tokens: string },
-  referenceSupply: bigint,
-): bigint {
+function triggerTokens(value: SizeAmount | undefined, referenceSupply: bigint): bigint {
+  if (value === undefined) {
+    throw new Error("a buyback recipient must carry a trigger, and this one has none");
+  }
+
   if (value.kind === "ABSOLUTE_TOKENS") return integer(value.tokens, "trigger.tokens");
 
   // Percent to ppm exactly, via a scaled integer. `2.675 * 10_000` is 26749.999999999996 in
@@ -356,8 +403,8 @@ function divideExactly(digits: bigint, places: number, field: string, text: stri
 }
 
 /** An address, lowercased. EIP-55 case is a checksum, not data. */
-function address(value: string, field: string): Hex {
-  if (!/^0x[0-9a-fA-F]{40}$/.test(value)) {
+function address(value: string | undefined, field: string): Hex {
+  if (value === undefined || !/^0x[0-9a-fA-F]{40}$/.test(value)) {
     throw new Error(`${field} must be a 20-byte hex address, got "${value}"`);
   }
   return value.toLowerCase() as Hex;

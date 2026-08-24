@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@verdant/market-compiler": "workspace:*",
-    "viem": "^2.55.10"
+    "viem": "^2.55.19"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

@@ -12,8 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import { backfillPrograms } from "./backfill.js";
 import { listPrograms } from "./programs.js";
-import { upSql } from "./migrate.js";
-import { scratchDatabase, type Scratch } from "./testing/scratch.js";
+import { applyMigrations, scratchDatabase, type Scratch } from "./testing/scratch.js";
 import { fakeIndexer, failingIndexer, snapshot } from "./testing/fixtures.js";
 import mainnet from "../../registry/src/fixtures/mainnet-engine-markets.json" with { type: "json" };
 
@@ -21,7 +20,7 @@ const CHAIN_ID = mainnet.chainId;
 
 async function migrated(): Promise<Scratch> {
   const scratch = await scratchDatabase();
-  await scratch.execute(upSql());
+  await applyMigrations(scratch);
   return scratch;
 }
 

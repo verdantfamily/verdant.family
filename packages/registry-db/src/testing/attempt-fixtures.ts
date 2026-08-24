@@ -18,9 +18,8 @@ import type { Hex } from "@verdant/registry";
 
 import type { LaunchAttemptStatus, NewLaunchAttempt } from "../attempts.js";
 import type { IndexerClient, IndexerMarket } from "../indexer.js";
-import { attemptsUpSql, upSql } from "../migrate.js";
 import { snapshot } from "./fixtures.js";
-import type { Scratch } from "./scratch.js";
+import { applyMigrations, type Scratch } from "./scratch.js";
 import mainnet from "../../../registry/src/fixtures/mainnet-engine-markets.json" with {
   type: "json",
 };
@@ -164,10 +163,15 @@ export function attemptFor(
   };
 }
 
-/** Both migrations, in order, against an empty scratch database. */
+/**
+ * The current schema, against an empty scratch database.
+ *
+ * Delegates rather than naming migrations, which is the whole point of `applyMigrations`: this
+ * helper used to apply `0000` and `0001` by name and would have silently stopped covering the
+ * schema the moment a third existed.
+ */
 export async function migrate(scratch: Scratch): Promise<void> {
-  await scratch.execute(upSql());
-  await scratch.execute(attemptsUpSql());
+  await applyMigrations(scratch);
 }
 
 /**

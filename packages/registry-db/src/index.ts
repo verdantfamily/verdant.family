@@ -33,7 +33,10 @@ export {
 export {
   ALL_TABLES,
   ATTEMPT_TABLES,
+  MIGRATION_TAGS,
   PROGRAM_TABLES,
+  allDownSql,
+  allUpSql,
   attemptsDownSql,
   attemptsUpSql,
   downSql,

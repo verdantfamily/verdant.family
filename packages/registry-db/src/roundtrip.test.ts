@@ -19,14 +19,13 @@ import { dedupeKeyFor, deriveProgramIdentity, normalizeForDedupe } from "@verdan
 import type { Program, ProgramVersion } from "@verdant/registry";
 
 import { readProgram, saveProgram } from "./programs.js";
-import { upSql } from "./migrate.js";
-import { scratchDatabase, type Scratch } from "./testing/scratch.js";
+import { applyMigrations, scratchDatabase, type Scratch } from "./testing/scratch.js";
 import { programFromFixture } from "./testing/fixtures.js";
 import mainnet from "../../registry/src/fixtures/mainnet-engine-markets.json" with { type: "json" };
 
 async function withDatabase(body: (scratch: Scratch) => Promise<void>): Promise<void> {
   const scratch = await scratchDatabase();
-  await scratch.execute(upSql());
+  await applyMigrations(scratch);
   try {
     await body(scratch);
   } finally {

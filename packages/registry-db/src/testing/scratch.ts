@@ -20,6 +20,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 
+import { allUpSql } from "../migrate.js";
 import * as schema from "../schema.js";
 
 export interface Scratch {
@@ -42,6 +43,29 @@ export async function scratchDatabase(): Promise<Scratch> {
       await client.close();
     },
   };
+}
+
+/**
+ * Bring a scratch database up to the current schema.
+ *
+ * Every migration in drizzle's journal, in order — never a named one. A suite that applies a
+ * specific migration is pinned to the schema as it was on the day it was written, and the failure
+ * that produces arrives later, in a different test, as a missing column nobody was asking about.
+ *
+ * The two migration suites are the deliberate exception and do not use this: applying one migration
+ * alone, and reversing it alone, is what they are testing.
+ */
+export async function applyMigrations(scratch: Scratch): Promise<void> {
+  for (const sql of allUpSql()) {
+    await scratch.execute(sql);
+  }
+}
+
+/** A scratch database at the current schema, which is what almost every suite wants. */
+export async function migratedDatabase(): Promise<Scratch> {
+  const scratch = await scratchDatabase();
+  await applyMigrations(scratch);
+  return scratch;
 }
 
 /**

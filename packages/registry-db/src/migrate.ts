@@ -50,6 +50,62 @@ function read(file: string): string {
   return readFileSync(fileURLToPath(new URL(`../drizzle/${file}`, import.meta.url)), "utf8");
 }
 
+/**
+ * Every migration, in order, read from drizzle-kit's own journal.
+ *
+ * ## Why this is derived rather than listed
+ *
+ * Because a list is a thing to forget. Before this existed, each suite set its database up by
+ * calling `upSql()` — migration `0000` by name — which was correct exactly once and became a latent
+ * defect the moment a second migration existed. It surfaced the way that class of defect always
+ * does: not as "the test pins the wrong migration" but as
+ * `column "slug" of relation "programs" does not exist`, eight times, in tests that have nothing to
+ * do with slugs and whose assertions were entirely correct.
+ *
+ * The journal is drizzle-kit's record of what it has generated and is written by `generate`, so a
+ * migration that exists is in it and one that does not is not. Deriving the order from there means
+ * a new migration is applied everywhere without anybody editing a test, which is the property that
+ * was missing.
+ *
+ * The per-migration accessors below stay, because `migrate.test.ts` and `attempts-migrate.test.ts`
+ * are *about* one migration each — applying it alone and reversing it alone is their subject rather
+ * than their setup. Those are the only two places a migration may be named.
+ */
+interface JournalEntry {
+  readonly idx: number;
+  readonly tag: string;
+}
+
+function journalTags(): readonly string[] {
+  const parsed = JSON.parse(read("meta/_journal.json")) as {
+    readonly entries?: readonly JournalEntry[];
+  };
+
+  const entries = [...(parsed.entries ?? [])].sort((left, right) => left.idx - right.idx);
+
+  if (entries.length === 0) {
+    throw new Error(
+      "drizzle's journal lists no migrations, so there is no schema to apply. This is a build " +
+        "problem rather than an empty database: the journal is committed alongside the SQL.",
+    );
+  }
+
+  return entries.map((entry) => entry.tag);
+}
+
+/** Every migration's tag, oldest first. */
+export const MIGRATION_TAGS: readonly string[] = journalTags();
+
+/** Every forward migration, in the order they must be applied. */
+export function allUpSql(): readonly string[] {
+  return MIGRATION_TAGS.map((tag) => read(`${tag}.sql`));
+}
+
+/** Every reverse migration, newest first, which is the order they must be applied in. */
+export function allDownSql(): readonly string[] {
+  return [...MIGRATION_TAGS].reverse().map((tag) => read(`${tag}.down.sql`));
+}
+
 /** The forward migration, as generated from `schema.ts`. */
 export function upSql(): string {
   return read(`${PROGRAMS_MIGRATION}.sql`);

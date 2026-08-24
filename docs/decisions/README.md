@@ -28,6 +28,8 @@ original design intent, and these files are the diff.
 | [015](015-boost-is-a-fee-recipient-not-a-fee-change.md) | Agen Boost captures both fee streams by being the fee recipient and the treasury; the platform half needs one Instant redeployment of unchanged bytecode | extends 014 |
 | [016](016-a-fee-seat-can-change-hands.md) | A market names a `CreatorSeat` as its fee recipient so the 1% can change hands; Agen may propose a successor after a 14-day veto window, and a founder may turn that path off forever | extends 015 |
 | [017](017-a-tweet-is-a-launch.md) | A reply on X launches a real Instant market; the creator is an immutable X user id and its fee accrues to one `CreatorSeat` per account, claimed later | extends 016 |
+| [018](018-the-engine-derives-its-fee-currency.md) | A programmable market's fee currency is derived from whether it has size tiers, not chosen | extends 008 |
+| [019](019-wallet-aware-markets-are-engine-v2.md) | Wallet-aware markets are engine v2: a per-wallet rule makes a market routed-only, the largest holder is time-weighted and claimed under challenge, an hour is a lazily rolled epoch, and a buyback is armed by one trade and executed by a later one | extends 018 |
 
 ## Format
 

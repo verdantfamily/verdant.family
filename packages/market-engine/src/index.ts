@@ -25,8 +25,11 @@ export { MAX_RECIPIENTS, MAX_STAGES, MAX_TIERS_PER_SIDE, MAX_TIME_HORIZON_SECOND
 export { compile, type CompileResult } from "./compile.js";
 export {
   AGEN_ENGINE_CONFIG_V1_DOMAIN,
+  AGEN_ENGINE_CONFIG_V2_DOMAIN,
   CONFIG_ABI,
+  CONFIG_V2_ABI,
   configFields,
+  configFieldsV2,
   configHash,
   decodeConfig,
   encodeConfig,
@@ -73,7 +76,7 @@ export {
   type UnsupportedRequest,
 } from "./interpret.js";
 export { parseSpec, type ParseResult } from "./parse.js";
-export { isNativeQuote } from "./spec.js";
+export { isNativeQuote, NO_V2_RULES } from "./spec.js";
 export {
   engineSummary,
   review,
@@ -106,6 +109,7 @@ export type {
   SizeTier,
   TimeStage,
   VolumeStage,
+  WalletBuyLimit,
 } from "./spec.js";
 export {
   MAX_FEE_PPM,

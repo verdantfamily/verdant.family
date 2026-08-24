@@ -47,7 +47,7 @@
  */
 
 import { engineApprovalMessage } from "@verdant/market-compiler/browser";
-import { useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { isAddress } from "viem";
 import {
   useAccount,
@@ -58,11 +58,22 @@ import {
 } from "wagmi";
 
 import type { PublicJob } from "../lib/builds";
-import { CHAIN_ID } from "../lib/chain";
+import { CHAIN_ID, EXPLORER_URL } from "../lib/chain";
+
+/**
+ * What the chain said the launch produced, as `/launched` recorded it.
+ *
+ * Structural, and every field optional in practice — the card is built to be worth reading
+ * with only the transaction hash, because the hash is the one thing it always has.
+ */
+interface LaunchedRecord {
+  readonly token?: string;
+  readonly vault?: string;
+}
 
 /** What `/api/markets/[id]/launch` answers for an engine build. */
 interface PreparedEngineLaunch {
-  readonly engineVersion: 1;
+  readonly engineVersion: 1 | 2;
   readonly chainId: number;
   readonly to: `0x${string}`;
   readonly data: `0x${string}`;
@@ -77,10 +88,13 @@ interface PreparedEngineLaunch {
 export function EngineLaunch({
   job,
   factory,
+  secondary = null,
 }: {
   readonly job: PublicJob;
   /** The engine factory this page is configured for. Null where it is not deployed here. */
   readonly factory: string | null;
+  /** The way back, rendered beside the one action that goes forward. */
+  readonly secondary?: ReactNode;
 }) {
   const { address, chainId, status } = useAccount();
   const switchChain = useSwitchChain();
@@ -92,6 +106,7 @@ export function EngineLaunch({
   const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [approvedBy, setApprovedBy] = useState<string | null>(job.approval?.approvedBy ?? null);
+  const [launched, setLaunched] = useState<LaunchedRecord | null>(null);
 
   useEffect(() => {
     setApprovedBy(job.approval?.approvedBy ?? null);
@@ -134,7 +149,7 @@ export function EngineLaunch({
       const signature = await sign.signMessageAsync({
         message: engineApprovalMessage({
           jobId: job.id,
-          engineVersion: 1,
+          engineVersion: job.engineVersion === 2 ? 2 : 1,
           configHash,
           implementationHash,
           creator: address,
@@ -213,44 +228,117 @@ export function EngineLaunch({
   useEffect(() => {
     if (!receipt.isSuccess || hash === undefined) return;
 
-    void fetch(`/api/markets/${job.id}/launched`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ txHash: hash }),
-    }).catch(() => {
-      // The indexer reads it from the chain regardless. Nothing to tell the creator: their
-      // market was created, which is what they were waiting for.
-    });
+    /*
+     * Recording the launch, and keeping what it answers.
+     *
+     * The response is the chain's own account of what the transaction did, which is where the
+     * token's address comes from — it cannot be known before the launch, and this is the first
+     * moment anything on this page can name it. The call was already being made; ignoring the
+     * body meant the creator finished a launch on a screen that could not tell them the
+     * address of the thing they had just created.
+     *
+     * A failure here is still a launched market: the indexer reads it from the chain either
+     * way. So it falls back to asking, and if that fails too the card renders without the
+     * address rather than not rendering.
+     */
+    const record = async (): Promise<void> => {
+      const posted = await fetch(`/api/markets/${job.id}/launched`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ txHash: hash }),
+      })
+        .then((response) => (response.ok ? response.json() : null))
+        .catch(() => null);
+
+      const body = posted as { readonly record?: LaunchedRecord } | null;
+      if (body?.record !== undefined) {
+        setLaunched(body.record);
+        return;
+      }
+
+      const read = await fetch(`/api/markets/${job.id}/launched`)
+        .then((response) => (response.ok ? response.json() : null))
+        .catch(() => null);
+
+      const asked = read as { readonly record?: LaunchedRecord | null } | null;
+      if (asked?.record !== undefined && asked.record !== null) setLaunched(asked.record);
+    };
+
+    void record();
   }, [receipt.isSuccess, hash, job.id]);
 
   if (receipt.isSuccess && hash !== undefined) {
-    return (
-      <section className="review-section">
-        <h2 className="review-h2">Launched</h2>
-        <p className="engine-card-summary">
-          ${job.symbol} is live and trading under the rules above. They cannot be changed.
-        </p>
-        <p className="engine-card-summary">
-          <code>{hash}</code>
-        </p>
-      </section>
-    );
+    return <Live hash={hash} job={job} record={launched} />;
   }
 
-  return (
-    <section className="review-section">
-      <h2 className="review-h2">Launch</h2>
+  /*
+   * The one action that goes forward, named for the act it performs.
+   *
+   * Approving and launching are two different things — the first is free and binding, the
+   * second spends — and the button says which one it is about to do rather than reading
+   * "Launch" for both. A creator who has not signed yet is not one click from a market, and a
+   * button that implies otherwise is the kind of surprise that gets a wallet dialog dismissed.
+   */
+  const action = wrongNetwork ? (
+    <button
+      className="ax-rv-go"
+      onClick={() => {
+        switchChain.switchChain({ chainId: CHAIN_ID });
+      }}
+      type="button"
+    >
+      Switch network
+    </button>
+  ) : approved ? (
+    <button
+      className="ax-rv-go"
+      disabled={blocked !== null || preparing || send.isPending}
+      onClick={() => void go()}
+      type="button"
+    >
+      <svg
+        viewBox="0 0 20 20"
+        aria-hidden="true"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M8.4 11.6c-2.4.8-3.8 2.3-4.4 4.4 2.1-.6 3.6-2 4.4-4.4z" />
+        <path d="M11.6 8.4 8.4 11.6 6.2 11a12 12 0 0 1 9.6-7.8A12 12 0 0 1 9 12.8z" />
+      </svg>
+      {preparing || send.isPending ? "Launching…" : "Launch market"}
+    </button>
+  ) : (
+    <button
+      className="ax-rv-go"
+      disabled={!connected || sign.isPending}
+      onClick={() => void approve()}
+      type="button"
+    >
+      {sign.isPending ? "Waiting for your wallet…" : "Approve these rules"}
+    </button>
+  );
 
-      <article className="engine-card">
-        <label className="engine-question" htmlFor="engine-fee-receiver">
-          Who collects the liquidity&apos;s trading fees
-        </label>
-        <p className="engine-card-summary">
+  return (
+    <div className="ax-rv-foot">
+      {/*
+        Optional, and folded away because it is: left blank it is the wallet launching, which is
+        what almost everybody wants. It stays on this screen rather than moving into the details
+        drawer because it is an input — the only one here — and an input nobody can see is one
+        nobody can fill in.
+      */}
+      <details className="ax-rv-optional">
+        <summary>Who collects the liquidity&apos;s trading fees</summary>
+
+        <p className="ax-rv-note">
           Separate from the fee split above, which the configuration fixes. Leave it blank to use
           the wallet you launch with.
         </p>
+
         <input
-          className="engine-answer"
+          className="ax-rv-input"
           id="engine-fee-receiver"
           onChange={(event) => {
             setFeeReceiver(event.target.value);
@@ -259,47 +347,232 @@ export function EngineLaunch({
           type="text"
           value={feeReceiver}
         />
-      </article>
+      </details>
 
-      {wrongNetwork ? (
-        <button
-          className="engine-submit"
-          onClick={() => {
-            switchChain.switchChain({ chainId: CHAIN_ID });
-          }}
-          type="button"
-        >
-          Switch network
-        </button>
-      ) : approved ? (
-        <button
-          className="engine-submit"
-          disabled={blocked !== null || preparing || send.isPending}
-          onClick={() => void go()}
-          type="button"
-        >
-          {preparing || send.isPending ? "Launching…" : `Launch $${job.symbol}`}
-        </button>
-      ) : (
-        <button
-          className="engine-submit"
-          disabled={!connected || sign.isPending}
-          onClick={() => void approve()}
-          type="button"
-        >
-          {sign.isPending ? "Waiting for your wallet…" : "Approve these rules"}
-        </button>
-      )}
+      <div className="ax-rv-actions">
+        <div className="ax-rv-secondary">{secondary}</div>
+        {action}
+      </div>
 
       {approved ? null : (
-        <p className="engine-card-summary">
-          A free signature naming the exact configuration. Nothing is sent and nothing is spent;
-          Agen will not prepare a transaction without it.
+        <p className="ax-rv-note ax-rv-centre">
+          Approving is a free signature naming the exact configuration. Nothing is sent and
+          nothing is spent; Agen will not prepare a transaction without it.
         </p>
       )}
 
-      {blocked === null || wrongNetwork ? null : <p className="deploy-note">{blocked}</p>}
-      {error === null ? null : <p className="deploy-note">{error}</p>}
-    </section>
+      {blocked === null || wrongNetwork ? null : <p className="ax-rv-blocked">{blocked}</p>}
+      {error === null ? null : <p className="ax-rv-blocked ax-rv-bad">{error}</p>}
+
+      <p className="ax-rv-lock">
+        <svg
+          viewBox="0 0 20 20"
+          aria-hidden="true"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <rect height="7.4" rx="1.5" width="10.4" x="4.8" y="9" />
+          <path d="M7.3 8.8V7.2a2.7 2.7 0 0 1 5.4 0v1.6" />
+        </svg>
+        No contract is written until you launch.
+      </p>
+    </div>
+  );
+}
+
+function Mark({ children }: { readonly children: ReactNode }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {children}
+    </svg>
+  );
+}
+
+function CopyMark() {
+  return (
+    <Mark>
+      <rect height="9.4" rx="2.2" width="9.4" x="7.2" y="7.2" />
+      <path d="M12.8 7.2V5.3a1.9 1.9 0 0 0-1.9-1.9H5.3a1.9 1.9 0 0 0-1.9 1.9v5.6a1.9 1.9 0 0 0 1.9 1.9h1.9" />
+    </Mark>
+  );
+}
+
+/**
+ * A value that is worth reading and worth having on the clipboard.
+ *
+ * Shown in full rather than shortened, with the middle elided by the stylesheet: the ends are
+ * the part anybody compares against what they were sent, and slicing here would make the
+ * value unselectable. The confirmation replaces the value in place instead of arriving as a
+ * toast, because a toast for a clipboard write notifies somebody about their own action.
+ */
+function Copy({ value, of }: { readonly value: string; readonly of: string }) {
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <button
+      aria-label={`Copy the ${of}, ${value}`}
+      className="ax-rv-copy"
+      onClick={() => {
+        void navigator.clipboard.writeText(value).then(
+          () => {
+            setCopied(true);
+            setTimeout(() => {
+              setCopied(false);
+            }, 1_400);
+          },
+          () => undefined,
+        );
+      }}
+      title={value}
+      type="button"
+    >
+      <span>{copied ? "Copied to your clipboard" : value}</span>
+      <CopyMark />
+    </button>
+  );
+}
+
+function CopyLink({ path }: { readonly path: string }) {
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <button
+      className="ax-rv-back"
+      onClick={() => {
+        void navigator.clipboard.writeText(`${window.location.origin}${path}`).then(
+          () => {
+            setCopied(true);
+            setTimeout(() => {
+              setCopied(false);
+            }, 1_400);
+          },
+          () => undefined,
+        );
+      }}
+      type="button"
+    >
+      <CopyMark />
+      {copied ? "Link copied" : "Copy the link"}
+    </button>
+  );
+}
+
+/**
+ * The market, launched.
+ *
+ * This was two lines and a hash, which is the wrong size for the only irreversible thing that
+ * happens on this screen — and it withheld the one fact a creator needs next. The token's
+ * address does not exist until the transaction lands, so this is the first moment anything can
+ * name it, and a screen that finishes a launch without naming it sends somebody to a block
+ * explorer to find out what they just made.
+ *
+ * It takes itself to the middle of the window on mount. The launch bar sits at the end of a
+ * long page and the receipt arrives while the creator is looking at their wallet, so without it
+ * the outcome appears somewhere off-screen behind the dialog they were reading.
+ */
+function Live({
+  hash,
+  job,
+  record,
+}: {
+  readonly hash: string;
+  readonly job: PublicJob;
+  readonly record: LaunchedRecord | null;
+}) {
+  const card = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    card.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, []);
+
+  const token = record?.token ?? null;
+  const market = `/markets/${job.id}`;
+
+  return (
+    <div className="ax-rv-live" ref={card}>
+      <span className="ax-rv-live-mark">
+        <Mark>
+          <circle cx="10" cy="10" r="7.6" />
+          <path d="m6.6 10.2 2.3 2.3 4.5-4.9" />
+        </Mark>
+      </span>
+
+      <h2>Your programmable market is live</h2>
+
+      <p className="ax-rv-note">
+        ${job.symbol} is trading under the rules above. They cannot be changed — the engine that
+        runs them has no owner and no setter.
+      </p>
+
+      <dl className="ax-rv-live-rows">
+        <div>
+          <dt className="ax-rv-label">Token contract address</dt>
+          <dd>
+            {token === null ? (
+              <span className="ax-rv-live-wait">Reading it from the chain…</span>
+            ) : (
+              <Copy of="contract address" value={token} />
+            )}
+          </dd>
+        </div>
+
+        <div>
+          <dt className="ax-rv-label">Launch transaction</dt>
+          <dd>
+            <Copy of="transaction hash" value={hash} />
+          </dd>
+        </div>
+      </dl>
+
+      <div className="ax-rv-live-acts">
+        <a className="ax-rv-go" href={market}>
+          View your market
+          <Mark>
+            <path d="M4.2 10h11.6M11.3 5.6l4.5 4.4-4.5 4.4" />
+          </Mark>
+        </a>
+
+        <CopyLink path={market} />
+
+        {token === null || EXPLORER_URL === undefined ? null : (
+          <a
+            className="ax-rv-back"
+            href={`${EXPLORER_URL}/address/${token}`}
+            rel="noreferrer"
+            target="_blank"
+          >
+            <Mark>
+              <path d="M11.4 4.2h4.4v4.4M15.4 4.6 9.2 10.8M13.8 11.6v3a1.2 1.2 0 0 1-1.2 1.2H5.4a1.2 1.2 0 0 1-1.2-1.2V7.4a1.2 1.2 0 0 1 1.2-1.2h3" />
+            </Mark>
+            Token on the explorer
+          </a>
+        )}
+
+        {EXPLORER_URL === undefined ? null : (
+          <a
+            className="ax-rv-back"
+            href={`${EXPLORER_URL}/tx/${hash}`}
+            rel="noreferrer"
+            target="_blank"
+          >
+            <Mark>
+              <path d="M11.4 4.2h4.4v4.4M15.4 4.6 9.2 10.8M13.8 11.6v3a1.2 1.2 0 0 1-1.2 1.2H5.4a1.2 1.2 0 0 1-1.2-1.2V7.4a1.2 1.2 0 0 1 1.2-1.2h3" />
+            </Mark>
+            Transaction
+          </a>
+        )}
+      </div>
+    </div>
   );
 }

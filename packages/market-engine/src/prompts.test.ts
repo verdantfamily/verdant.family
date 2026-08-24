@@ -273,9 +273,46 @@ const CASES: readonly Case[] = [
     }),
     expect: "SUPPORTED",
   },
+  {
+    n: 23,
+    prompt:
+      "Every hour the largest holder receives 50% of the fees. The remaining 50% is used for " +
+      "buyback which is triggered after every large sell. Do not let anyone buy more than 2% " +
+      "of the supply in the first 12hrs of trading.",
+    envelope: supported(
+      {
+        engineVersion: 2,
+        baseRate: { buy: "0.3", sell: "0.3" },
+        ladder: null,
+        sizeTiers: [],
+        distribution: [
+          { recipient: { kind: "LARGEST_HOLDER", periodSeconds: 3600 }, share: "50" },
+          {
+            recipient: {
+              kind: "BUYBACK",
+              trigger: { kind: "PERCENT_REFERENCE_SUPPLY", percent: "1" },
+            },
+            share: "50",
+          },
+        ],
+        protections: [
+          {
+            kind: "WALLET_BUY_LIMIT",
+            amount: { kind: "PERCENT_REFERENCE_SUPPLY", percent: "2" },
+            windowSeconds: 12 * 60 * 60,
+          },
+        ],
+      },
+      [
+        "no fee was stated, so the market opens at 0.3% — the rate most Uniswap pools charge",
+        "a large sell is read as 1% of supply",
+      ],
+    ),
+    expect: "SUPPORTED",
+  },
 ];
 
-describe("Phase 2 acceptance: 22 realistic prompts", () => {
+describe("Phase 2 acceptance: 23 realistic prompts", () => {
   for (const testCase of CASES) {
     it(`${String(testCase.n).padStart(2, "0")} ${testCase.expect} — ${testCase.prompt}`, () => {
       const result = resolve(testCase.envelope, BINDING);
@@ -293,7 +330,7 @@ describe("Phase 2 acceptance: 22 realistic prompts", () => {
 
   it("classifies every case, with no silent passes", () => {
     const classified = CASES.map((testCase) => resolve(testCase.envelope, BINDING).outcome);
-    expect(classified).toHaveLength(22);
+    expect(classified).toHaveLength(23);
     expect(classified.every((outcome) => outcome !== undefined)).toBe(true);
   });
 });

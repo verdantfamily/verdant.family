@@ -73,6 +73,10 @@ function recipientName(recipient: Recipient): string {
       return "the Agen treasury";
     case "ADDRESS":
       return `${recipient.address.slice(0, 6)}…${recipient.address.slice(-4)}`;
+    case "LARGEST_HOLDER":
+      return "the largest holder";
+    case "BUYBACK":
+      return "buybacks";
     default: {
       const exhaustive: never = recipient;
       return exhaustive;
@@ -257,6 +261,43 @@ function ceilingCard(config: CanonicalConfig): ReviewCard | null {
   };
 }
 
+function walletCard(config: CanonicalConfig): ReviewCard | null {
+  if (config.walletMaxBuyTokens === null) return null;
+
+  const window =
+    config.walletWindowSeconds === 0
+      ? "for as long as the market exists"
+      : `for the first ${duration(BigInt(config.walletWindowSeconds))} after launch`;
+
+  return {
+    heading: "Per-wallet buy limit",
+    summary: `One wallet may buy at most ${exactAmount(config, config.walletMaxBuyTokens)} ${window}.`,
+    rows: [
+      { when: "This market is tradable", then: "only through Agen's router" },
+      { when: "The limit is", then: "per wallet, not per person" },
+    ],
+    caution:
+      "Ten wallets buy ten times the cap. The engine can see an address, not a person. " +
+      "Unrouted swaps are refused while this limit exists.",
+  };
+}
+
+function buybackCard(config: CanonicalConfig): ReviewCard | null {
+  if (config.buybackTriggerTokens === null) return null;
+
+  return {
+    heading: "Buybacks",
+    summary: `A sell of ${exactAmount(config, config.buybackTriggerTokens)} or more arms a buyback.`,
+    rows: [
+      { when: "The triggering sell", then: "does not execute the buyback" },
+      { when: "Anyone may execute it", then: "in a later transaction" },
+    ],
+    caution:
+      "A public, predictable buyback can be sandwiched. It is bounded and permissionless, " +
+      "not hidden.",
+  };
+}
+
 /** Everything a creator should read before signing. */
 export function review(config: CanonicalConfig): Review {
   const highest = maximumFeePpm(config);
@@ -268,6 +309,8 @@ export function review(config: CanonicalConfig): Review {
     tierCard(config, "BUY"),
     distributionCard(config),
     ceilingCard(config),
+    walletCard(config),
+    buybackCard(config),
   ].filter((card): card is ReviewCard => card !== null);
 
   return {

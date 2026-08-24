@@ -20,17 +20,14 @@
  * Recorded here rather than discovered by a creator. Each of these is a specific
  * `UNSUPPORTED` with a reason, not a gap:
  *
- *  - **Wallet primitives.** Cooldowns, per-wallet caps, per-wallet counters. They need
- *    the trader's identity, and v4 reports the router as the sender. Agen can only
- *    learn the real trader through `AgenRouter`'s `hookData`, so any such rule binds
- *    router-routed trades and is bypassed by a direct `PoolManager` swap. A limit that
- *    a determined trader can step around is worse than no limit, because it reads like
- *    a promise on the review screen.
+ *  - **Wallet primitives in v1.** Cooldowns, per-wallet caps, per-wallet counters. They
+ *    need the trader's identity, and v4 reports the router as the sender. Engine **v2**
+ *    expresses a per-wallet buy limit by refusing any swap that did not arrive through
+ *    `AgenRouter` (ADR-019). Cooldowns and per-wallet *rates* are still refused.
  *
- *  - **Burn and buyback.** The fee is captured in the quote asset. Burning the quote
- *    asset destroys a real asset rather than the launched token, and burning the
- *    launched token means buying it first — a swap inside a swap, on the swap path, in
- *    a contract that cannot be changed after deployment.
+ *  - **Burn in either version.** Burning the quote asset destroys a real asset; burning
+ *    the launched token on the swap path is a reentrant swap. Engine **v2** does express
+ *    a *deferred* buyback: a large sell arms one, a later transaction executes it.
  *
  *  - **LP incentives as a recipient.** There is a clean way to do this (charge the LP
  *    share as an actual v4 LP fee and take only the remainder as a delta) and it
@@ -160,7 +157,14 @@ export type FeeLadder =
 export type Recipient =
   | { readonly kind: "CREATOR" }
   | { readonly kind: "TREASURY" }
-  | { readonly kind: "ADDRESS"; readonly address: Address };
+  | { readonly kind: "ADDRESS"; readonly address: Address }
+  /** Engine v2. Paid to the time-weighted largest holder of each epoch. */
+  | { readonly kind: "LARGEST_HOLDER"; readonly periodSeconds: number }
+  /**
+   * Engine v2. Accrues to a buyback pot, armed when a sell meets `trigger`.
+   * Executed in a later transaction, never inside the triggering swap.
+   */
+  | { readonly kind: "BUYBACK"; readonly trigger: SizeAmount };
 
 /** One leg of the split. Shares are percentages of the collected fee. */
 export interface DistributionShare {
@@ -182,11 +186,23 @@ export interface MaxTradeSize {
   readonly amount: SizeAmount;
 }
 
-export type Protection = MaxTradeSize;
+/**
+ * Engine v2. How much one wallet may buy, and for how long after launch that holds.
+ *
+ * `windowSeconds` of 0 is a permanent limit. The limit is per address, not per person,
+ * and a market that has one is only tradable through `AgenRouter`.
+ */
+export interface WalletBuyLimit {
+  readonly kind: "WALLET_BUY_LIMIT";
+  readonly amount: SizeAmount;
+  readonly windowSeconds: number;
+}
+
+export type Protection = MaxTradeSize | WalletBuyLimit;
 
 /** The economics of a programmable market, as a model is permitted to state them. */
 export interface AgenMarketSpec {
-  readonly engineVersion: 1;
+  readonly engineVersion: 1 | 2;
   /** The rate before any stage or tier applies. Required: never defaulted. */
   readonly baseRate: SidedRate;
   readonly ladder: FeeLadder | null;
@@ -295,7 +311,7 @@ export type FeeCurrency = "QUOTE" | "TOKEN";
  * them is not reading this.
  */
 export interface CanonicalConfig {
-  readonly engineVersion: 1;
+  readonly engineVersion: 1 | 2;
   readonly referenceSupply: bigint;
   readonly quoteAsset: QuoteAssetBinding;
   /** Display only, outside the commitment. See `MarketBinding.launchedTokenSymbol`. */
@@ -313,4 +329,23 @@ export interface CanonicalConfig {
   readonly distribution: readonly CanonicalShare[];
   readonly maxBuyTokens: bigint | null;
   readonly maxSellTokens: bigint | null;
+  /** Engine v2. Tokens one wallet may buy while the window is open. `null` — no limit. */
+  readonly walletMaxBuyTokens: bigint | null;
+  /** Engine v2. Seconds after launch the wallet limit holds. 0 with a limit means forever. */
+  readonly walletWindowSeconds: number;
+  /** Engine v2. Length of a largest-holder epoch. 0 — no largest-holder recipient. */
+  readonly epochPeriodSeconds: number;
+  /** Engine v2. A sell of this many tokens or more arms a buyback. `null` — none. */
+  readonly buybackTriggerTokens: bigint | null;
 }
+
+/** The v2 fields a v1 market leaves empty. Spread onto a config so the type is whole. */
+export const NO_V2_RULES = {
+  walletMaxBuyTokens: null,
+  walletWindowSeconds: 0,
+  epochPeriodSeconds: 0,
+  buybackTriggerTokens: null,
+} as const satisfies Pick<
+  CanonicalConfig,
+  "walletMaxBuyTokens" | "walletWindowSeconds" | "epochPeriodSeconds" | "buybackTriggerTokens"
+>;

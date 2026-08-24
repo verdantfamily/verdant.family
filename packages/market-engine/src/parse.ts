@@ -366,7 +366,7 @@ function ladder(value: unknown, path: string, faults: Faults): FeeLadder | null 
   return null;
 }
 
-const RECIPIENT_KINDS: readonly string[] = ["CREATOR", "TREASURY", "ADDRESS"];
+const RECIPIENT_KINDS: readonly string[] = ["CREATOR", "TREASURY", "ADDRESS", "LARGEST_HOLDER", "BUYBACK"];
 
 function recipient(value: unknown, path: string, faults: Faults): Recipient {
   // A null `address` is dropped rather than refused, for the reason `withoutNulls` gives: a
@@ -395,6 +395,21 @@ function recipient(value: unknown, path: string, faults: Faults): Recipient {
     return { kind: "ADDRESS", address };
   }
 
+  if (kind === "LARGEST_HOLDER") {
+    requireKnownKeys(object, ["kind", "periodSeconds"], path, faults);
+    const period = object["periodSeconds"];
+    if (typeof period !== "number" || !Number.isInteger(period) || period <= 0) {
+      faults.malformed(`${path}.periodSeconds`, `"${String(period)}" is not a whole number of seconds.`);
+      return { kind: "TREASURY" };
+    }
+    return { kind: "LARGEST_HOLDER", periodSeconds: period };
+  }
+
+  if (kind === "BUYBACK") {
+    requireKnownKeys(object, ["kind", "trigger"], path, faults);
+    return { kind: "BUYBACK", trigger: sizeAmount(object["trigger"], `${path}.trigger`, faults) };
+  }
+
   faults.unknownVariant(`${path}.kind`, kind, RECIPIENT_KINDS);
   return { kind: "TREASURY" };
 }
@@ -413,17 +428,31 @@ function share(value: unknown, path: string, faults: Faults): DistributionShare 
   };
 }
 
-const PROTECTION_KINDS: readonly string[] = ["MAX_TRADE_SIZE"];
+const PROTECTION_KINDS: readonly string[] = ["MAX_TRADE_SIZE", "WALLET_BUY_LIMIT"];
 const PROTECTION_SIDES: readonly string[] = ["BUY", "SELL", "BOTH"];
 
 function protection(value: unknown, path: string, faults: Faults): Protection {
-  const object = objectAt(value);
+  const object = withoutNulls(objectAt(value));
   if (object === null) {
     faults.malformed(path, "a protection must be an object.");
     return { kind: "MAX_TRADE_SIZE", side: "BOTH", amount: { kind: "ABSOLUTE_TOKENS", tokens: "0" } };
   }
 
   const kind = object["kind"];
+  if (kind === "WALLET_BUY_LIMIT") {
+    requireKnownKeys(object, ["kind", "amount", "windowSeconds"], path, faults);
+    const window = object["windowSeconds"];
+    if (typeof window !== "number" || !Number.isInteger(window) || window < 0) {
+      faults.malformed(`${path}.windowSeconds`, `"${String(window)}" is not a whole number of seconds.`);
+      return { kind: "WALLET_BUY_LIMIT", amount: { kind: "ABSOLUTE_TOKENS", tokens: "0" }, windowSeconds: 0 };
+    }
+    return {
+      kind: "WALLET_BUY_LIMIT",
+      amount: sizeAmount(object["amount"], `${path}.amount`, faults),
+      windowSeconds: window,
+    };
+  }
+
   if (kind !== "MAX_TRADE_SIZE") {
     faults.unknownVariant(`${path}.kind`, kind, PROTECTION_KINDS);
     return { kind: "MAX_TRADE_SIZE", side: "BOTH", amount: { kind: "ABSOLUTE_TOKENS", tokens: "0" } };
@@ -477,7 +506,8 @@ export function parseSpec(input: unknown): ParseResult {
     faults,
   );
 
-  if (object["engineVersion"] !== 1) {
+  const version = object["engineVersion"];
+  if (version !== 1 && version !== 2) {
     return {
       ok: false,
       problems: [
@@ -485,8 +515,8 @@ export function parseSpec(input: unknown): ParseResult {
           code: "UNSUPPORTED_ENGINE_VERSION",
           path: "engineVersion",
           detail:
-            `this build compiles engine version 1 and the answer says ` +
-            `${JSON.stringify(object["engineVersion"])}. A market is never reinterpreted under a ` +
+            `this build compiles engine versions 1 and 2 and the answer says ` +
+            `${JSON.stringify(version)}. A market is never reinterpreted under a ` +
             `version other than the one it was written for.`,
         },
       ],
@@ -494,7 +524,7 @@ export function parseSpec(input: unknown): ParseResult {
   }
 
   const spec: AgenMarketSpec = {
-    engineVersion: 1,
+    engineVersion: version,
     baseRate: sidedRate(object["baseRate"], "baseRate", faults),
     ladder: ladder(object["ladder"], "ladder", faults),
     sizeTiers: array(object["sizeTiers"], "sizeTiers", faults).map((entry, index) =>

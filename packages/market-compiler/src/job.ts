@@ -144,7 +144,7 @@ export type Stage = (typeof Stage)[keyof typeof Stage];
  * only safe reading of one is the pipeline it was actually built by — a market is never
  * reinterpreted under semantics written after it.
  */
-export type EngineVersion = 0 | 1;
+export type EngineVersion = 0 | 1 | 2;
 
 export function engineVersionOf(job: { readonly engineVersion?: EngineVersion }): EngineVersion {
   return job.engineVersion ?? 0;
@@ -171,7 +171,7 @@ export const ENGINE_STAGE_SEQUENCE: readonly Stage[] = [
 
 /** The stage list a job's own engine version puts it on. */
 export function stageSequenceFor(version: EngineVersion): readonly Stage[] {
-  return version === 1 ? ENGINE_STAGE_SEQUENCE : STAGE_SEQUENCE;
+  return version === 1 || version === 2 ? ENGINE_STAGE_SEQUENCE : STAGE_SEQUENCE;
 }
 
 /** The happy path, in order. Repair stages are detours off it, not steps along it. */

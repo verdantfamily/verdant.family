@@ -544,7 +544,7 @@ export function Flow() {
         configuration, and guessing from absence would render the wrong screen exactly when
         there is least to go on.
       */}
-      {phase === "review" && job !== null && job.engineVersion === 1 ? (
+      {phase === "review" && job !== null && (job.engineVersion === 1 || job.engineVersion === 2) ? (
         <section className="panel-wide">
           {job.stage === "awaiting_clarification" ? (
             <EngineClarify
@@ -582,7 +582,18 @@ export function Flow() {
               }}
             />
           ) : job.failure === null ? (
-            <EngineReviewScreen job={job} />
+            // The description is still in this component's state, so going back to it is a
+            // phase change rather than a reset: the creator lands on what they wrote, with the
+            // job abandoned rather than edited. An engine build has no edit route to apply an
+            // instruction to — the configuration is interpreted whole — so re-describing is the
+            // only honest way to change one.
+            <EngineReviewScreen
+              job={job}
+              onEdit={() => {
+                setJobId(null);
+                setPhase("describe");
+              }}
+            />
           ) : (
             <>
               <Progress job={job} />
@@ -603,7 +614,7 @@ export function Flow() {
         </section>
       ) : null}
 
-      {phase === "review" && job !== null && job.engineVersion !== 1 ? (
+      {phase === "review" && job !== null && job.engineVersion !== 1 && job.engineVersion !== 2 ? (
         <section className="panel-wide">
           {job.failure === null ? (
             <Review

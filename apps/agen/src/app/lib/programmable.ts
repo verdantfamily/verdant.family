@@ -106,10 +106,44 @@ export function engineAddressesOrNull(): {
   readonly deployer: `0x${string}`;
   readonly registry: `0x${string}`;
 } | null {
-  const factory = process.env["AGEN_ENGINE_FACTORY"];
-  const hook = process.env["AGEN_ENGINE_HOOK"];
-  const deployer = process.env["AGEN_ENGINE_DEPLOYER"];
-  const registry = process.env["AGEN_ENGINE_REGISTRY"];
+  return readEngineAddresses(
+    "AGEN_ENGINE_FACTORY",
+    "AGEN_ENGINE_HOOK",
+    "AGEN_ENGINE_DEPLOYER",
+    "AGEN_ENGINE_REGISTRY",
+  );
+}
+
+/** Engine v2's parallel stack. Absent until `DeployAgenEngineV2` has been broadcast. */
+export function engineV2AddressesOrNull(): {
+  readonly factory: `0x${string}`;
+  readonly hook: `0x${string}`;
+  readonly deployer: `0x${string}`;
+  readonly registry: `0x${string}`;
+} | null {
+  return readEngineAddresses(
+    "AGEN_ENGINE_V2_FACTORY",
+    "AGEN_ENGINE_V2_HOOK",
+    "AGEN_ENGINE_V2_DEPLOYER",
+    "AGEN_ENGINE_V2_REGISTRY",
+  );
+}
+
+function readEngineAddresses(
+  factoryKey: string,
+  hookKey: string,
+  deployerKey: string,
+  registryKey: string,
+): {
+  readonly factory: `0x${string}`;
+  readonly hook: `0x${string}`;
+  readonly deployer: `0x${string}`;
+  readonly registry: `0x${string}`;
+} | null {
+  const factory = process.env[factoryKey];
+  const hook = process.env[hookKey];
+  const deployer = process.env[deployerKey];
+  const registry = process.env[registryKey];
 
   if (factory === undefined || hook === undefined || deployer === undefined || registry === undefined) {
     return null;

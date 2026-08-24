@@ -166,7 +166,7 @@ describe("parseSpec", () => {
 
   describe("engine version", () => {
     it("refuses a version this build does not compile", () => {
-      expect(codes({ ...flat("1"), engineVersion: 2 })).toContain("UNSUPPORTED_ENGINE_VERSION");
+      expect(codes({ ...flat("1"), engineVersion: 3 })).toContain("UNSUPPORTED_ENGINE_VERSION");
     });
 
     it("refuses a missing version rather than assuming 1", () => {

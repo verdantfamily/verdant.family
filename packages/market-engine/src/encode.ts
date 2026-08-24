@@ -41,7 +41,8 @@ import {
   stringToHex,
 } from "viem";
 
-import type { CanonicalConfig, Recipient } from "./spec.js";
+import type { CanonicalConfig, Recipient, SizeAmount } from "./spec.js";
+import { NO_V2_RULES } from "./spec.js";
 
 /**
  * The domain this commitment lives in.
@@ -51,6 +52,9 @@ import type { CanonicalConfig, Recipient } from "./spec.js";
  */
 export const AGEN_ENGINE_CONFIG_V1_DOMAIN: Hex = keccak256(stringToHex("agen.engine.config.v1"));
 
+/** Distinct from v1 so a v1 commitment can never be replayed against v2. */
+export const AGEN_ENGINE_CONFIG_V2_DOMAIN: Hex = keccak256(stringToHex("agen.engine.config.v2"));
+
 /** `null` axis is 0, so a single-stage market encodes distinctly from a laddered one. */
 const AXIS_CODE = { NONE: 0, TIME: 1, QUOTE_VOLUME: 2 } as const;
 
@@ -58,7 +62,13 @@ const AXIS_CODE = { NONE: 0, TIME: 1, QUOTE_VOLUME: 2 } as const;
 const REAL_AXIS_CODE = { TIME: AXIS_CODE.TIME, QUOTE_VOLUME: AXIS_CODE.QUOTE_VOLUME } as const;
 
 /** Recipient discriminants, as the Solidity enum orders them. */
-const RECIPIENT_CODE = { CREATOR: 0, TREASURY: 1, ADDRESS: 2 } as const;
+const RECIPIENT_CODE = {
+  CREATOR: 0,
+  TREASURY: 1,
+  ADDRESS: 2,
+  LARGEST_HOLDER: 3,
+  BUYBACK: 4,
+} as const;
 
 /** Which leg the fee comes out of. In the hash, because it decides what a creator is paid in. */
 const FEE_CURRENCY_CODE = { QUOTE: 0, TOKEN: 1 } as const;
@@ -204,6 +214,10 @@ function recipientFields(recipient: Recipient): { kind: number; recipient: Addre
       return { kind: RECIPIENT_CODE.TREASURY, recipient: ZERO_ADDRESS };
     case "ADDRESS":
       return { kind: RECIPIENT_CODE.ADDRESS, recipient: recipient.address };
+    case "LARGEST_HOLDER":
+      return { kind: RECIPIENT_CODE.LARGEST_HOLDER, recipient: ZERO_ADDRESS };
+    case "BUYBACK":
+      return { kind: RECIPIENT_CODE.BUYBACK, recipient: ZERO_ADDRESS };
     default: {
       const exhaustive: never = recipient;
       return exhaustive;
@@ -224,7 +238,48 @@ function recipientFields(recipient: Recipient): { kind: number; recipient: Addre
  * when it wires the vault. Encoding a resolved address here would make the same market
  * hash differently for two creators.
  */
+/**
+ * Engine v2's tuple: v1's fields, then the wallet limit, the epoch, and the buyback trigger.
+ *
+ * Appended rather than rewritten so a v2 market with none of those still hashes differently
+ * from the v1 market with the same economics — they run on different code.
+ */
+export const CONFIG_V2_ABI = [
+  {
+    type: "tuple",
+    name: "config",
+    components: [
+      ...CONFIG_ABI[0].components,
+      {
+        type: "tuple",
+        name: "walletLimit",
+        components: [
+          { type: "uint128", name: "maxBuyTokens" },
+          { type: "uint32", name: "windowSeconds" },
+        ],
+      },
+      { type: "uint32", name: "epochPeriodSeconds" },
+      { type: "uint128", name: "buybackTriggerTokens" },
+    ],
+  },
+] as const;
+
+export function configFieldsV2(config: CanonicalConfig) {
+  return {
+    ...configFields(config),
+    walletLimit: {
+      maxBuyTokens: config.walletMaxBuyTokens ?? 0n,
+      windowSeconds: config.walletWindowSeconds,
+    },
+    epochPeriodSeconds: config.epochPeriodSeconds,
+    buybackTriggerTokens: config.buybackTriggerTokens ?? 0n,
+  };
+}
+
 export function encodeConfig(config: CanonicalConfig): Hex {
+  if (config.engineVersion === 2) {
+    return encodeAbiParameters(CONFIG_V2_ABI, [configFieldsV2(config)]);
+  }
   return encodeAbiParameters(CONFIG_ABI, [configFields(config)]);
 }
 
@@ -265,17 +320,67 @@ export interface ConfigLabels {
  * wrongly, and describing a live market's fees wrongly is worse than saying nothing.
  */
 export function decodeConfig(encoded: Hex, labels: ConfigLabels): CanonicalConfig {
-  const [fields] = decodeAbiParameters(CONFIG_ABI, encoded);
+  const version = versionOf(encoded);
 
-  if (fields.engineVersion !== 1) {
+  if (version === 2) {
+    const [fields] = decodeAbiParameters(CONFIG_V2_ABI, encoded);
+    const trigger = fields.buybackTriggerTokens;
+    return {
+      ...fromV1Fields(fields, labels, 2),
+      walletMaxBuyTokens: fields.walletLimit.maxBuyTokens === 0n ? null : fields.walletLimit.maxBuyTokens,
+      walletWindowSeconds: fields.walletLimit.windowSeconds,
+      epochPeriodSeconds: fields.epochPeriodSeconds,
+      buybackTriggerTokens: trigger === 0n ? null : trigger,
+      distribution: fields.distribution.map((share) => ({
+        recipient: recipientOf(share.kind, share.recipient, {
+          periodSeconds: fields.epochPeriodSeconds,
+          triggerTokens: trigger,
+          referenceSupply: fields.referenceSupply,
+        }),
+        sharePpm: share.sharePpm,
+      })),
+    };
+  }
+
+  if (version !== 1) {
     throw new Error(
-      `this configuration is for engine version ${String(fields.engineVersion)} and this build ` +
-        `implements version 1. Reinterpreting it under a newer engine would change what it means.`,
+      `this configuration is for engine version ${String(version)} and this build ` +
+        `implements versions 1 and 2. Reinterpreting it under a newer engine would change what it means.`,
     );
   }
 
+  const [fields] = decodeAbiParameters(CONFIG_ABI, encoded);
+  return { ...fromV1Fields(fields, labels, 1), ...NO_V2_RULES };
+}
+
+/** The first word of the tuple is `engineVersion`. Cheap, and enough to pick an ABI. */
+function versionOf(encoded: Hex): number {
+  const [peeked] = decodeAbiParameters([{ type: "uint8" }], `0x${encoded.slice(66)}` as Hex);
+  return Number(peeked);
+}
+
+function fromV1Fields(
+  fields: {
+    readonly engineVersion: number;
+    readonly referenceSupply: bigint;
+    readonly quoteAsset: Address;
+    readonly feeCurrency: number;
+    readonly ladderAxis: number;
+    readonly stages: readonly { threshold: bigint; buyFeePpm: number; sellFeePpm: number }[];
+    readonly buyTiers: readonly { thresholdTokens: bigint; feePpm: number }[];
+    readonly sellTiers: readonly { thresholdTokens: bigint; feePpm: number }[];
+    readonly distribution: readonly { kind: number; recipient: Address; sharePpm: number }[];
+    readonly maxBuyTokens: bigint;
+    readonly maxSellTokens: bigint;
+  },
+  labels: ConfigLabels,
+  engineVersion: 1 | 2,
+): Omit<
+  CanonicalConfig,
+  "walletMaxBuyTokens" | "walletWindowSeconds" | "epochPeriodSeconds" | "buybackTriggerTokens"
+> {
   return {
-    engineVersion: 1,
+    engineVersion,
     referenceSupply: fields.referenceSupply,
     quoteAsset: {
       address: fields.quoteAsset,
@@ -305,8 +410,6 @@ export function decodeConfig(encoded: Hex, labels: ConfigLabels): CanonicalConfi
       recipient: recipientOf(share.kind, share.recipient),
       sharePpm: share.sharePpm,
     })),
-    // Zero is the encoding of "no limit", which is why a market may not configure a maximum
-    // trade of nothing — `compile.ts` refuses it, so the two readings cannot collide.
     maxBuyTokens: fields.maxBuyTokens === 0n ? null : fields.maxBuyTokens,
     maxSellTokens: fields.maxSellTokens === 0n ? null : fields.maxSellTokens,
   };
@@ -325,7 +428,15 @@ function nameOf<T extends Record<string, number>>(
   throw new Error(`${String(value)} is not a ${what} this engine defines`);
 }
 
-function recipientOf(kind: number, address: Address): Recipient {
+function recipientOf(
+  kind: number,
+  address: Address,
+  v2: { readonly periodSeconds: number; readonly triggerTokens: bigint; readonly referenceSupply: bigint } = {
+    periodSeconds: 0,
+    triggerTokens: 0n,
+    referenceSupply: 0n,
+  },
+): Recipient {
   switch (kind) {
     case RECIPIENT_CODE.CREATOR:
       return { kind: "CREATOR" };
@@ -333,9 +444,24 @@ function recipientOf(kind: number, address: Address): Recipient {
       return { kind: "TREASURY" };
     case RECIPIENT_CODE.ADDRESS:
       return { kind: "ADDRESS", address };
+    case RECIPIENT_CODE.LARGEST_HOLDER:
+      return { kind: "LARGEST_HOLDER", periodSeconds: v2.periodSeconds };
+    case RECIPIENT_CODE.BUYBACK:
+      return {
+        kind: "BUYBACK",
+        trigger: triggerOf(v2.triggerTokens, v2.referenceSupply),
+      };
     default:
       throw new Error(`${String(kind)} is not a recipient kind this engine defines`);
   }
+}
+
+function triggerOf(tokens: bigint, supply: bigint): SizeAmount {
+  if (supply > 0n && (tokens * 1_000_000n) % supply === 0n) {
+    const percent = Number((tokens * 1_000_000n) / supply) / 10_000;
+    return { kind: "PERCENT_REFERENCE_SUPPLY", percent: String(percent) };
+  }
+  return { kind: "ABSOLUTE_TOKENS", tokens: tokens.toString() };
 }
 
 /** Which engine, on which chain, at which version. */
@@ -343,7 +469,7 @@ export interface EngineIdentity {
   readonly chainId: number;
   /** The `AgenEngineHook` that will execute this configuration. */
   readonly engine: Address;
-  readonly engineVersion: 1;
+  readonly engineVersion: 1 | 2;
 }
 
 const COMMITMENT_ABI = [
@@ -367,7 +493,7 @@ const COMMITMENT_ABI = [
 export function implementationHash(config: CanonicalConfig, identity: EngineIdentity): Hex {
   return keccak256(
     encodeAbiParameters(COMMITMENT_ABI, [
-      AGEN_ENGINE_CONFIG_V1_DOMAIN,
+      config.engineVersion === 2 ? AGEN_ENGINE_CONFIG_V2_DOMAIN : AGEN_ENGINE_CONFIG_V1_DOMAIN,
       BigInt(identity.chainId),
       identity.engine,
       BigInt(identity.engineVersion),

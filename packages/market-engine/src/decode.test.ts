@@ -173,9 +173,9 @@ describe("refusing what it does not understand", () => {
 
     // The tuple is dynamic, so the first word is its offset and `engineVersion` is the second —
     // a left-padded uint8 whose value is the last character of that word.
-    const bumped = `${encoded.slice(0, 129)}2${encoded.slice(130)}` as `0x${string}`;
+    const bumped = `${encoded.slice(0, 129)}3${encoded.slice(130)}` as `0x${string}`;
 
-    expect(() => decodeConfig(bumped, labelsOf(config))).toThrow(/engine version 2/);
+    expect(() => decodeConfig(bumped, labelsOf(config))).toThrow(/engine version 3/);
   });
 
   it("refuses bytes that are not a configuration", () => {

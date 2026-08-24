@@ -27,9 +27,11 @@
 
 import {
   CONFIG_ABI,
+  CONFIG_V2_ABI,
   type CanonicalConfig,
   type Recipient,
   configFields,
+  configFieldsV2,
   configHash as hashOf,
   implementationHash,
   isNativeQuote,
@@ -86,7 +88,7 @@ export interface PreparedRecipient {
  * nobody could have checked.
  */
 export interface PreparedLaunch {
-  readonly engineVersion: 1;
+  readonly engineVersion: 1 | 2;
   readonly chainId: number;
 
   readonly factory: Address;
@@ -202,6 +204,37 @@ export const DEPLOY_MARKET_ABI = [
   },
 ] as const;
 
+const MANIFEST_V2_ABI = [
+  {
+    type: "tuple",
+    name: "manifest",
+    components: [
+      { type: "string", name: "name" },
+      { type: "string", name: "symbol" },
+      { type: "uint256", name: "supply" },
+      { type: "string", name: "metadataURI" },
+      { type: "bool", name: "metadataMutable" },
+      { type: "bytes32", name: "tokenSalt" },
+      { type: "address", name: "quoteAsset" },
+      { type: "int24", name: "initialTick" },
+      { ...CONFIG_V2_ABI[0], name: "config" },
+      { type: "address", name: "feeReceiver" },
+      { type: "bytes32", name: "specificationHash" },
+      { type: "bytes32", name: "implementationHash" },
+    ],
+  },
+] as const;
+
+export const DEPLOY_MARKET_V2_ABI = [
+  {
+    type: "function",
+    name: "deployMarket",
+    stateMutability: "nonpayable",
+    inputs: MANIFEST_V2_ABI,
+    outputs: [{ type: "uint256", name: "index" }],
+  },
+] as const;
+
 /** The vault's salt, mirroring `AgenEngineFactory.vaultSalt`. */
 function vaultSalt(tokenSalt: Hex): Hex {
   return keccak256(`0x${stringToHex("agen.engine.vault").slice(2)}${tokenSalt.slice(2)}`);
@@ -262,37 +295,60 @@ export function prepareLaunch(request: PrepareRequest): PreparedLaunch {
     );
   }
 
+  const version = config.engineVersion === 2 ? 2 : 1;
   const commitment = implementationHash(config, {
     chainId: addresses.chainId,
     engine: addresses.hook,
-    engineVersion: 1,
+    engineVersion: version,
   });
 
-  const fields = configFields(config);
+  /*
+   * The two versions are encoded in separate branches rather than through one call with a
+   * chosen ABI, because they genuinely are two different functions.
+   *
+   * The manifests nest different configuration tuples, so `deployMarket` has a different
+   * signature — and therefore a different selector — on each factory. Letting the tuple and
+   * the ABI be independent variables is how the v1 selector bug happened: the encoding
+   * agreed with itself and pointed at a function that did not exist. Branching once, with
+   * both halves named together, means a mismatch cannot be expressed.
+   */
+  const manifest = {
+    name: parameters.name,
+    symbol: parameters.symbol,
+    supply: parameters.supply,
+    metadataURI: parameters.metadataURI,
+    metadataMutable: parameters.metadataMutable,
+    tokenSalt: parameters.tokenSalt,
+    quoteAsset: config.quoteAsset.address,
+    initialTick: parameters.initialTick,
+    feeReceiver: parameters.feeReceiver,
+    specificationHash: parameters.specificationHash,
+    implementationHash: commitment,
+  } as const;
 
-  const data = encodeFunctionData({
-    abi: DEPLOY_MARKET_ABI,
-    functionName: "deployMarket",
-    args: [
-      {
-        name: parameters.name,
-        symbol: parameters.symbol,
-        supply: parameters.supply,
-        metadataURI: parameters.metadataURI,
-        metadataMutable: parameters.metadataMutable,
-        tokenSalt: parameters.tokenSalt,
-        quoteAsset: config.quoteAsset.address,
-        initialTick: parameters.initialTick,
-        config: fields,
-        feeReceiver: parameters.feeReceiver,
-        specificationHash: parameters.specificationHash,
-        implementationHash: commitment,
-      },
-    ],
-  });
+  let data: Hex;
+  let encoded: Hex;
+
+  if (version === 2) {
+    const fields = configFieldsV2(config);
+    encoded = encodeAbiParameters(CONFIG_V2_ABI, [fields]);
+    data = encodeFunctionData({
+      abi: DEPLOY_MARKET_V2_ABI,
+      functionName: "deployMarket",
+      args: [{ ...manifest, config: fields }],
+    });
+  } else {
+    const fields = configFields(config);
+    encoded = encodeAbiParameters(CONFIG_ABI, [fields]);
+    data = encodeFunctionData({
+      abi: DEPLOY_MARKET_ABI,
+      functionName: "deployMarket",
+      args: [{ ...manifest, config: fields }],
+    });
+  }
 
   return {
-    engineVersion: 1,
+    engineVersion: version,
     chainId: addresses.chainId,
     factory: addresses.factory,
     hook: addresses.hook,
@@ -314,7 +370,7 @@ export function prepareLaunch(request: PrepareRequest): PreparedLaunch {
     initialTick: parameters.initialTick,
     feeReceiver: parameters.feeReceiver,
 
-    encodedConfig: encodeAbiParameters(CONFIG_ABI, [fields]),
+    encodedConfig: encoded,
     configHash: hashOf(config),
     implementationHash: commitment,
     specificationHash: parameters.specificationHash,

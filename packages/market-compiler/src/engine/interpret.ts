@@ -40,7 +40,7 @@ export const ENVELOPE_SCHEMA: JsonSchema = {
           additionalProperties: false,
           required: ["engineVersion", "baseRate", "ladder", "sizeTiers", "distribution", "protections"],
           properties: {
-            engineVersion: { type: "integer", enum: [1] },
+            engineVersion: { type: "integer", enum: [1, 2] },
             baseRate: {
               type: "object",
               additionalProperties: false,
@@ -150,10 +150,28 @@ export const ENVELOPE_SCHEMA: JsonSchema = {
                   recipient: {
                     type: "object",
                     additionalProperties: false,
-                    required: ["kind", "address"],
+                    required: ["kind", "address", "periodSeconds", "trigger"],
                     properties: {
-                      kind: { type: "string", enum: ["CREATOR", "TREASURY", "ADDRESS"] },
+                      kind: {
+                        type: "string",
+                        enum: ["CREATOR", "TREASURY", "ADDRESS", "LARGEST_HOLDER", "BUYBACK"],
+                      },
                       address: { type: ["string", "null"] },
+                      periodSeconds: { type: ["integer", "null"] },
+                      trigger: {
+                        anyOf: [
+                          { type: "null" },
+                          {
+                            type: "object",
+                            additionalProperties: false,
+                            required: ["kind", "percent"],
+                            properties: {
+                              kind: { type: "string", enum: ["PERCENT_REFERENCE_SUPPLY"] },
+                              percent: { type: "string" },
+                            },
+                          },
+                        ],
+                      },
                     },
                   },
                   share: { type: "string" },
@@ -165,11 +183,10 @@ export const ENVELOPE_SCHEMA: JsonSchema = {
               items: {
                 type: "object",
                 additionalProperties: false,
-                required: ["kind", "side", "amount"],
+                required: ["kind", "side", "amount", "windowSeconds"],
                 properties: {
-                  kind: { type: "string", enum: ["MAX_TRADE_SIZE"] },
-                  side: { type: "string", enum: ["BUY", "SELL", "BOTH"] },
-                  // Percentages only, for the reason given on `measure` above.
+                  kind: { type: "string", enum: ["MAX_TRADE_SIZE", "WALLET_BUY_LIMIT"] },
+                  side: { type: ["string", "null"], enum: ["BUY", "SELL", "BOTH", null] },
                   amount: {
                     type: "object",
                     additionalProperties: false,
@@ -179,6 +196,7 @@ export const ENVELOPE_SCHEMA: JsonSchema = {
                       percent: { type: "string" },
                     },
                   },
+                  windowSeconds: { type: ["integer", "null"] },
                 },
               },
             },
@@ -216,14 +234,15 @@ export const ENVELOPE_SCHEMA: JsonSchema = {
  * produce a market missing a requirement its creator asked for and believed they had.
  */
 const UNSUPPORTED_MECHANICS = [
-  "anything about a specific wallet or trader — cooldowns, per-wallet limits, per-wallet " +
-    "rates, first-buyer discounts. Uniswap reports the router rather than the person, so a " +
-    "rule like this binds trades routed through Agen and is bypassed by a direct swap.",
+  "per-wallet *rates*, cooldowns, or first-buyer discounts. Engine v2 can cap how much one " +
+    "wallet buys (WALLET_BUY_LIMIT). It cannot charge a different rate per wallet or enforce " +
+    "a cooldown.",
   "anything that depends on the sequence of earlier trades — consecutive-buy streaks, " +
     "'every tenth trade', 'if the last trade was a sell'. The engine decides a rate from " +
     "trade size, elapsed time and cumulative volume, never from history.",
-  "burning fees, buying back the token with fees, or paying fees to liquidity providers as " +
-    "an incentive. The engine credits recipients and never swaps or destroys.",
+  "burning fees, or paying fees to liquidity providers as an incentive. Engine v2 can send " +
+    "a share to BUYBACK (deferred, after a large sell) and to LARGEST_HOLDER (each epoch). " +
+    "It does not burn.",
   "a size tier that is only live during part of the market's life. Tiers apply at all times.",
   "dollar-denominated anything. There is no price feed on this chain, so a volume threshold " +
     "has to be stated in the quote asset.",
@@ -374,10 +393,20 @@ function instructions(request: InterpretRequest): string {
       "is a rate of base-plus-four that you should compute and state as one number.",
     "",
     `\`distribution\` has at most ${String(MAX_RECIPIENTS)} entries. CREATOR is whoever ` +
-      "launches. TREASURY is Agen. ADDRESS is a specific address the creator gave.",
+      "launches. TREASURY is Agen. ADDRESS is a specific address the creator gave. " +
+      "LARGEST_HOLDER is the time-weighted largest holder of each epoch — set periodSeconds " +
+      "(3600 for hourly) and null the address and trigger. BUYBACK is a deferred buyback " +
+      "armed by a large sell — set trigger as a share of supply and null the address and " +
+      "periodSeconds. Using LARGEST_HOLDER, BUYBACK or WALLET_BUY_LIMIT requires " +
+      "engineVersion 2.",
     "",
-    "`protections` currently holds only MAX_TRADE_SIZE, a ceiling above which a trade reverts. " +
-      "Only include one if the creator asked for a hard cap.",
+    "`protections` is MAX_TRADE_SIZE (a ceiling; one trade above it reverts) or " +
+      "WALLET_BUY_LIMIT (how much one wallet may buy; windowSeconds is 0 for forever, " +
+      "43200 for the first 12 hours). WALLET_BUY_LIMIT is per address, not per person, and " +
+      "makes the market routed-only. For WALLET_BUY_LIMIT set side to null.",
+    "",
+    "'Large sell' or 'large buy' without a size is 1% of supply. Record that in " +
+      "`assumptions`. 'Every hour' is periodSeconds 3600.",
     "",
     "## What not to do",
     "",

@@ -536,7 +536,7 @@ async function approveEngineBuild(
     address: creator,
     message: engineApprovalMessage({
       jobId: job.id,
-      engineVersion: 1,
+      engineVersion: job.engineVersion === 2 ? 2 : 1,
       configHash: engine.configHash,
       implementationHash: engine.implementationHash,
       creator,
@@ -650,7 +650,7 @@ export interface PublicJob {
    * because "has a specification" and "has an engine configuration" are both true of nothing
    * and a job mid-build has neither.
    */
-  readonly engineVersion: 0 | 1;
+  readonly engineVersion: 0 | 1 | 2;
   /**
    * The deterministic engine's artefacts, or `null` on an engine-0 job.
    *

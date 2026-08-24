@@ -65,6 +65,7 @@ import {
   ENGINE_NOT_DEPLOYED,
   ENGINE_V1_ENABLED,
   engineAddressesOrNull,
+  engineV2AddressesOrNull,
   engineTokenSalt,
 } from "./programmable";
 
@@ -518,6 +519,7 @@ async function runEngineJob({
       : [{ id: answer.id, answer: answer.answer }],
   );
 
+  const v2 = engineV2AddressesOrNull();
   const { job: finished } = await runEngineBuild(
     {
       prompt: job.prompt,
@@ -530,6 +532,7 @@ async function runEngineJob({
       provider,
       store: jobStore(),
       addresses: engine.addresses,
+      ...(v2 === null ? {} : { addressesV2: { chainId: CHAIN_ID, ...v2 } }),
       parameters: engine.parameters,
       proveLaunchable: launchProver(),
       resume: job,

@@ -53,6 +53,7 @@ import type {
   SizeAmount,
   SizeMeasure,
 } from "./spec.js";
+import { NO_V2_RULES } from "./spec.js";
 import { MAX_FEE_PPM, PPM_ONE, formatPercent, percentToPpm, supplyPercentToTokens } from "./units.js";
 
 export type CompileResult =
@@ -353,6 +354,10 @@ function recipientOrder(recipient: Recipient): string {
       return "2:treasury";
     case "ADDRESS":
       return `3:${recipient.address.toLowerCase()}`;
+    case "LARGEST_HOLDER":
+      return "4:largest-holder";
+    case "BUYBACK":
+      return "5:buyback";
     default: {
       const exhaustive: never = recipient;
       return exhaustive;
@@ -459,6 +464,8 @@ function ceilingsOf(
   let sell: bigint | null = null;
 
   spec.protections.forEach((protection, index) => {
+    if (protection.kind !== "MAX_TRADE_SIZE") return;
+
     const path = `protections[${String(index)}]`;
     const tokens = amountOf(protection.amount, binding, `${path}.amount`, faults);
 
@@ -543,6 +550,16 @@ export function compile(spec: AgenMarketSpec, binding: MarketBinding): CompileRe
     sellTiers.some((tier) => tier.feePpm > 0);
 
   const distribution = distributionOf(spec, anyFee, faults);
+  const v2 = v2RulesOf(spec, binding, faults);
+
+  if (spec.engineVersion === 1 && v2.needed) {
+    faults.add(
+      "UNSUPPORTED_ENGINE_VERSION",
+      "engineVersion",
+      `this market uses wallet limits, a largest-holder payout or a buyback, which engine v1 ` +
+        `cannot express. Ask for engine version 2.`,
+    );
+  }
 
   if (faults.failed) return { ok: false, problems: faults.problems };
 
@@ -558,7 +575,7 @@ export function compile(spec: AgenMarketSpec, binding: MarketBinding): CompileRe
   return {
     ok: true,
     config: {
-      engineVersion: 1,
+      engineVersion: spec.engineVersion,
       referenceSupply: binding.referenceSupply,
       quoteAsset: binding.quoteAsset,
       launchedTokenSymbol: binding.launchedTokenSymbol,
@@ -570,6 +587,114 @@ export function compile(spec: AgenMarketSpec, binding: MarketBinding): CompileRe
       distribution,
       maxBuyTokens: ceilings.buy,
       maxSellTokens: ceilings.sell,
+      ...v2.fields,
     },
+  };
+}
+
+/**
+ * The v2-only rules, or a refusal if they cannot hold together.
+ *
+ * Extracted rather than inlined so a v1 market that happens to mention none of them
+ * still compiles to the empty v2 fields — the type is whole either way, and encode
+ * decides from `engineVersion` which bytes to write.
+ */
+function v2RulesOf(
+  spec: AgenMarketSpec,
+  binding: MarketBinding,
+  faults: Faults,
+): {
+  readonly needed: boolean;
+  readonly fields: Pick<
+    CanonicalConfig,
+    "walletMaxBuyTokens" | "walletWindowSeconds" | "epochPeriodSeconds" | "buybackTriggerTokens"
+  >;
+} {
+  const wallets = spec.protections.filter((protection) => protection.kind === "WALLET_BUY_LIMIT");
+  const holders = spec.distribution.filter((share) => share.recipient.kind === "LARGEST_HOLDER");
+  const buybacks = spec.distribution.filter((share) => share.recipient.kind === "BUYBACK");
+
+  const needed = wallets.length > 0 || holders.length > 0 || buybacks.length > 0;
+
+  let walletMaxBuyTokens: bigint | null = null;
+  let walletWindowSeconds = 0;
+  if (wallets.length > 1) {
+    faults.add(
+      "CONFLICTING_RULES",
+      "protections",
+      `this market names ${String(wallets.length)} wallet buy limits. One wallet has one allowance.`,
+    );
+  } else if (wallets[0] !== undefined) {
+    const limit = wallets[0];
+    walletMaxBuyTokens = amountOf(limit.amount, binding, "protections.walletBuyLimit.amount", faults);
+    walletWindowSeconds = limit.windowSeconds;
+    if (walletMaxBuyTokens <= 0n) {
+      faults.add(
+        "INVALID_THRESHOLD",
+        "protections.walletBuyLimit",
+        `a wallet may buy ${walletMaxBuyTokens.toString()} tokens, which is not a limit.`,
+      );
+    }
+    if (walletMaxBuyTokens >= binding.referenceSupply) {
+      faults.add(
+        "INVALID_THRESHOLD",
+        "protections.walletBuyLimit",
+        `a wallet may buy ${walletMaxBuyTokens.toString()} tokens, which is the whole supply or more. ` +
+          `A limit that cannot refuse a trade is not a limit.`,
+      );
+    }
+    if (walletWindowSeconds < 0 || walletWindowSeconds > MAX_TIME_HORIZON_SECONDS) {
+      faults.add(
+        "INVALID_THRESHOLD",
+        "protections.walletBuyLimit.windowSeconds",
+        `a wallet window of ${String(walletWindowSeconds)} seconds is outside the engine's horizon.`,
+      );
+    }
+  }
+
+  let epochPeriodSeconds = 0;
+  for (const share of holders) {
+    if (share.recipient.kind !== "LARGEST_HOLDER") continue;
+    const period = share.recipient.periodSeconds;
+    if (period < 60 || period > MAX_TIME_HORIZON_SECONDS) {
+      faults.add(
+        "INVALID_THRESHOLD",
+        "distribution.largestHolder.periodSeconds",
+        `an epoch of ${String(period)} seconds is not a period the engine will run. ` +
+          `The shortest is one minute and the longest is the same horizon a time ladder gets.`,
+      );
+    }
+    if (epochPeriodSeconds !== 0 && epochPeriodSeconds !== period) {
+      faults.add(
+        "CONFLICTING_RULES",
+        "distribution.largestHolder",
+        `two largest-holder shares name different periods.`,
+      );
+    }
+    epochPeriodSeconds = period;
+  }
+
+  let buybackTriggerTokens: bigint | null = null;
+  for (const share of buybacks) {
+    if (share.recipient.kind !== "BUYBACK") continue;
+    const tokens = amountOf(share.recipient.trigger, binding, "distribution.buyback.trigger", faults);
+    if (tokens <= 0n) {
+      faults.add(
+        "INVALID_THRESHOLD",
+        "distribution.buyback.trigger",
+        `a buyback that arms on ${tokens.toString()} tokens would arm on every sell.`,
+      );
+    }
+    if (buybackTriggerTokens !== null && buybackTriggerTokens !== tokens) {
+      faults.add("CONFLICTING_RULES", "distribution.buyback", `two buybacks name different triggers.`);
+    }
+    buybackTriggerTokens = tokens;
+  }
+
+  if (!needed) return { needed: false, fields: NO_V2_RULES };
+
+  return {
+    needed: true,
+    fields: { walletMaxBuyTokens, walletWindowSeconds, epochPeriodSeconds, buybackTriggerTokens },
   };
 }

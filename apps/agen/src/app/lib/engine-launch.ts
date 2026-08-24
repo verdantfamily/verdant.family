@@ -35,7 +35,7 @@ import { jobStore } from "./builds";
 import { CHAIN_ID } from "./chain";
 import { AGEN_LAUNCH } from "@verdant/config";
 import { absoluteUrl } from "./instant";
-import { engineAddressesOrNull, engineTokenSalt, ENGINE_NOT_DEPLOYED } from "./programmable";
+import { engineAddressesOrNull, engineV2AddressesOrNull, engineTokenSalt, ENGINE_NOT_DEPLOYED } from "./programmable";
 
 export class EngineLaunchError extends Error {
   constructor(
@@ -64,7 +64,7 @@ function address(value: string, field: string): Address {
  * consumer to read the copy rather than the calldata.
  */
 export interface PreparedEngineLaunch {
-  readonly engineVersion: 1;
+  readonly engineVersion: 1 | 2;
   readonly chainId: number;
   readonly to: Address;
   readonly data: Hex;
@@ -102,13 +102,21 @@ export async function prepareEngineLaunch(
     throw new EngineLaunchError("This build is not ready to launch.", 409);
   }
 
-  const addresses = engineAddressesOrNull();
-  if (addresses === null) throw new EngineLaunchError(ENGINE_NOT_DEPLOYED, 503);
+  const version = job.engineVersion === 2 ? 2 : 1;
+  const addresses = version === 2 ? engineV2AddressesOrNull() : engineAddressesOrNull();
+  if (addresses === null) {
+    throw new EngineLaunchError(
+      version === 2
+        ? "Agen's engine v2 is not deployed on this network yet, so this market cannot be launched."
+        : ENGINE_NOT_DEPLOYED,
+      503,
+    );
+  }
 
   const creator = address(request.creator, "The connected wallet");
   const feeReceiver = address(request.feeReceiver, "The fee receiver");
 
-  await requireApproval(job, creator, engine.configHash, engine.implementationHash);
+  await requireApproval(job, creator, version, engine.configHash, engine.implementationHash);
 
   /*
    * Back to a configuration, from the bytes the commitment was taken over.
@@ -157,7 +165,7 @@ export async function prepareEngineLaunch(
   }
 
   return {
-    engineVersion: 1,
+    engineVersion: version,
     chainId: prepared.chainId,
     to: prepared.call.to,
     data: prepared.call.data,
@@ -174,6 +182,8 @@ export async function prepareEngineLaunch(
 async function requireApproval(
   job: GenerationJob,
   creator: Address,
+  /** The engine the approval was signed for. Part of the preimage, so it cannot be guessed. */
+  engineVersion: 1 | 2,
   configHash: Hex,
   implementationHash: Hex,
 ): Promise<void> {
@@ -197,7 +207,7 @@ async function requireApproval(
     address: creator,
     message: engineApprovalMessage({
       jobId: job.id,
-      engineVersion: 1,
+      engineVersion,
       configHash,
       implementationHash,
       creator,

@@ -3,10 +3,18 @@ pragma solidity 0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 
+import {AgenBuybackPot} from "../../../src/agen/engine/AgenBuybackPot.sol";
 import {AgenEngineDeployer} from "../../../src/agen/engine/AgenEngineDeployer.sol";
+import {AgenEngineDeployerV2} from "../../../src/agen/engine/AgenEngineDeployerV2.sol";
 import {AgenEngineFactory} from "../../../src/agen/engine/AgenEngineFactory.sol";
+import {AgenEngineFactoryV2} from "../../../src/agen/engine/AgenEngineFactoryV2.sol";
 import {AgenEngineHook} from "../../../src/agen/engine/AgenEngineHook.sol";
+import {AgenEngineHookV2} from "../../../src/agen/engine/AgenEngineHookV2.sol";
+import {AgenEnginePotDeployerV2} from "../../../src/agen/engine/AgenEnginePotDeployerV2.sol";
+import {AgenRuleValidatorV2} from "../../../src/agen/engine/AgenRuleValidatorV2.sol";
 import {AgenEngineVault} from "../../../src/agen/engine/AgenEngineVault.sol";
+import {AgenLargestHolderPot} from "../../../src/agen/engine/AgenLargestHolderPot.sol";
+import {VerdantNotifyingToken} from "../../../src/agen/engine/VerdantNotifyingToken.sol";
 
 /// @title Every engine contract fits on chain
 ///
@@ -113,6 +121,67 @@ contract EngineSizesTest is Test {
         _assertFits("AgenEngineVault", "AgenEngineVault.sol:AgenEngineVault", type(AgenEngineVault).creationCode);
     }
 
+    // --- engine v2 ------------------------------------------------------------
+    //
+    // Added after v2's factory was measured at 25 417 bytes by an Anvil broadcast, having
+    // passed 1 227 tests. It built both pots with `new`, so it carried their creation code,
+    // exactly as v1's factory once carried the token's. The pots moved to the deployer and
+    // the whole stack is measured here — which is what should have caught it, and now does.
+
+    function test_the_v2_factory_fits() public view {
+        _assertFits(
+            "AgenEngineFactoryV2",
+            "AgenEngineFactoryV2.sol:AgenEngineFactoryV2",
+            type(AgenEngineFactoryV2).creationCode
+        );
+    }
+
+    /// @dev v2's tightest, and tighter than v1's: it carries a larger token and both pots.
+    function test_the_v2_deployer_fits() public view {
+        _assertFits(
+            "AgenEngineDeployerV2",
+            "AgenEngineDeployerV2.sol:AgenEngineDeployerV2",
+            type(AgenEngineDeployerV2).creationCode
+        );
+    }
+
+    function test_the_v2_pot_deployer_fits() public view {
+        _assertFits(
+            "AgenEnginePotDeployerV2",
+            "AgenEnginePotDeployerV2.sol:AgenEnginePotDeployerV2",
+            type(AgenEnginePotDeployerV2).creationCode
+        );
+    }
+
+    /// @dev The one that broke, and the reason `AgenRuleValidatorV2` exists. Inlining both
+    /// validators put it at 24 363 — deployable by 213 bytes and inside the budget.
+    function test_the_v2_hook_fits() public view {
+        _assertFits("AgenEngineHookV2", "AgenEngineHookV2.sol:AgenEngineHookV2", type(AgenEngineHookV2).creationCode);
+    }
+
+    function test_the_v2_validator_fits() public view {
+        _assertFits(
+            "AgenRuleValidatorV2", "AgenRuleValidatorV2.sol:AgenRuleValidatorV2", type(AgenRuleValidatorV2).creationCode
+        );
+    }
+
+    function test_the_notifying_token_fits() public view {
+        _assertFits(
+            "VerdantNotifyingToken",
+            "VerdantNotifyingToken.sol:VerdantNotifyingToken",
+            type(VerdantNotifyingToken).creationCode
+        );
+    }
+
+    function test_the_pots_fit() public view {
+        _assertFits(
+            "AgenLargestHolderPot",
+            "AgenLargestHolderPot.sol:AgenLargestHolderPot",
+            type(AgenLargestHolderPot).creationCode
+        );
+        _assertFits("AgenBuybackPot", "AgenBuybackPot.sol:AgenBuybackPot", type(AgenBuybackPot).creationCode);
+    }
+
     /// @notice That the measurement above is measuring something.
     ///
     /// @dev A guard against the way `_assertFits` could go quiet: if `vm.getDeployedCode` ever
@@ -124,11 +193,16 @@ contract EngineSizesTest is Test {
     /// The floor is deliberately loose. It is not a size assertion; it is an "is this reading
     /// a real contract" assertion, and a real contract is kilobytes.
     function test_the_sizes_are_measured_rather_than_assumed() public view {
-        string[4] memory artefacts = [
+        string[9] memory artefacts = [
             "AgenEngineFactory.sol:AgenEngineFactory",
             "AgenEngineDeployer.sol:AgenEngineDeployer",
             "AgenEngineHook.sol:AgenEngineHook",
-            "AgenEngineVault.sol:AgenEngineVault"
+            "AgenEngineVault.sol:AgenEngineVault",
+            "AgenEngineFactoryV2.sol:AgenEngineFactoryV2",
+            "AgenEngineDeployerV2.sol:AgenEngineDeployerV2",
+            "AgenEngineHookV2.sol:AgenEngineHookV2",
+            "VerdantNotifyingToken.sol:VerdantNotifyingToken",
+            "AgenLargestHolderPot.sol:AgenLargestHolderPot"
         ];
 
         for (uint256 i = 0; i < artefacts.length; i++) {

@@ -99,6 +99,8 @@ interface CommonOptions {
   readonly provider: ModelProvider;
   readonly store: JobStore;
   readonly addresses: EngineAddresses;
+  /** Engine v2's own hook/factory/registry, when that stack has been deployed. */
+  readonly addressesV2?: EngineAddresses;
   /** Everything about the launch that is not economics. */
   readonly parameters: Omit<LaunchParameters, "name" | "symbol" | "supply" | "specificationHash">;
   /** Omitted where the vault's address is not yet knowable. See `PrepareRequest`. */
@@ -248,7 +250,7 @@ async function run(
         )
       : {
           ...options.resume,
-          engineVersion: 1 as const,
+          engineVersion: (options.resume.engineVersion === 2 ? 2 : 1) as 1 | 2,
           stage: Stage.PromptReceived,
           stages: [],
           engine: null,
@@ -395,14 +397,18 @@ async function run(
   // because the artefacts it produces are the ones everything downstream reads, and a
   // creator watching the build should see the step where their market acquired an identity.
 
+  const version = config.engineVersion;
+  const addresses = version === 2 && options.addressesV2 !== undefined ? options.addressesV2 : options.addresses;
+
+  await save({ ...job, engineVersion: version });
   await save(begin(Stage.Canonicalizing));
 
   const encoded = encodeConfig(config);
   const identity = configHash(config);
   const commitment = implementationHash(config, {
-    chainId: options.addresses.chainId,
-    engine: options.addresses.hook,
-    engineVersion: 1,
+    chainId: addresses.chainId,
+    engine: addresses.hook,
+    engineVersion: version,
   });
 
   let carried: EngineArtefacts = {
@@ -447,6 +453,16 @@ async function run(
   await save(begin(Stage.ApprovalReady));
   await save({ ...finish("succeeded", `commitment ${commitment.slice(0, 10)}`), engine: carried });
 
+  if (version === 2 && options.addressesV2 === undefined) {
+    return {
+      job: await save({
+        ...job,
+        stage: Stage.ApprovalReady,
+        engine: carried,
+      }),
+    };
+  }
+
   // --- deployment preparation ----------------------------------------------
 
   await save(begin(Stage.DeploymentPreparing));
@@ -462,7 +478,7 @@ async function run(
         supply: request.binding.referenceSupply,
         specificationHash: identity,
       },
-      addresses: options.addresses,
+      addresses,
       ...(options.vaultInitCodeHash === undefined
         ? {}
         : { vaultInitCodeHash: options.vaultInitCodeHash }),
@@ -485,7 +501,7 @@ async function run(
    * real execution path on which a job reaches `deployment_ready` having established only
    * that its bytes were well-formed.
    */
-  if (options.proveLaunchable !== undefined) {
+  if (options.proveLaunchable !== undefined && version !== 2) {
     try {
       await options.proveLaunchable(prepared, config);
     } catch (error) {

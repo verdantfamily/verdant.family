@@ -155,13 +155,18 @@ ponder.on("AgenFactory:MarketDeployed", async ({ event, context }) => {
   // Every contract the market is made of, including the locker the factory deployed
   // rather than generated. An interface listing a market's contracts without it would
   // be describing an incomplete market.
+  // Idempotent for the same reason as the engine's copy: a replayed block must not
+  // reject inside the handler, which Ponder turns into a fatal unhandledRejection.
   for (const component of components) {
-    await context.db.insert(agenComponent).values({
-      id: component.addr,
-      poolId,
-      role: component.role,
-      codeHash: component.codeHash,
-    });
+    await context.db
+      .insert(agenComponent)
+      .values({
+        id: component.addr,
+        poolId,
+        role: component.role,
+        codeHash: component.codeHash,
+      })
+      .onConflictDoNothing();
   }
 });
 

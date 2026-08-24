@@ -1009,12 +1009,27 @@ export const agenPendingFee = onchainTable(
   }),
 );
 
-/** Every contract a generated market is made of, so an interface can list them. */
+/**
+ * Every contract a generated market is made of, so an interface can list them.
+ *
+ * Keyed by market *and* address, not by address alone.
+ *
+ * The address looked unique across markets while every component was deployed per
+ * market, and it stopped being unique the moment the engine shipped: `AgenEngineHook`
+ * is a singleton, one deployed hook that every engine market shares. So the first
+ * engine market wrote the hook's row and the second one collided with it — a
+ * duplicate-key rejection inside a handler, which Ponder surfaces as an
+ * unhandledRejection and which takes the whole indexer down rather than skipping a
+ * row. The feed answered 502 to everything until this key changed.
+ *
+ * A component belongs to a market. Sharing one contract between two markets is a
+ * fact about the engine, not a conflict, and the key now says so.
+ */
 export const agenComponent = onchainTable(
   "agen_component",
   (t) => ({
-    /** The contract's own address, which is unique across markets. */
-    id: t.hex().primaryKey(),
+    /** The contract's own address. Shared across markets for singleton components. */
+    id: t.hex().notNull(),
     poolId: t.hex().notNull(),
     /** `AgenMarketRegistry`'s role constant. 0 token, 1 hook, 6 locker, 255 other. */
     role: t.integer().notNull(),
@@ -1022,6 +1037,7 @@ export const agenComponent = onchainTable(
     codeHash: t.hex().notNull(),
   }),
   (table) => ({
+    pk: primaryKey({ columns: [table.poolId, table.id] }),
     poolIdx: index().on(table.poolId),
   }),
 );

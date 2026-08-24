@@ -239,13 +239,23 @@ ponder.on("AgenEngineFactory:EngineMarketDeployed", async ({ event, context }) =
 
   // The vault is among these, under `ROLE_VAULT`, which is how a market page finds the account
   // its fees accumulate in without this table having to be the authority on roles.
+  /*
+   * Idempotent because a handler can run twice for one event — a restart part-way
+   * through a block replays it — and because a component list is the registry's, not
+   * ours, so a repeated address in one market is its prerogative rather than our
+   * invariant. A duplicate here used to reject inside the handler and take the whole
+   * process down; a row that is already correct is not worth an outage.
+   */
   for (const component of components) {
-    await context.db.insert(agenComponent).values({
-      id: component.addr,
-      poolId,
-      role: component.role,
-      codeHash: component.codeHash,
-    });
+    await context.db
+      .insert(agenComponent)
+      .values({
+        id: component.addr,
+        poolId,
+        role: component.role,
+        codeHash: component.codeHash,
+      })
+      .onConflictDoNothing();
   }
 });
 

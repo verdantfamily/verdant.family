@@ -86,6 +86,19 @@ export interface MarketRef {
   /** The v4 pool id: `keccak256(abi.encode(poolKey))`. Joins the indexer's `agen_market`. */
   readonly poolId: Hex;
   readonly token: Hex;
+  /**
+   * Who launched this market, lowercased. Optional, and absent is a real answer.
+   *
+   * The fact that decides who may name a Program: the right belongs to whoever launched the
+   * earliest market running its economics. That question cannot be answered from `Program.author`,
+   * which records whoever was observed first rather than whoever was earliest by block, and the two
+   * differ exactly when it matters — when two people launched identical economics.
+   *
+   * Optional rather than required because a market observed before this field existed genuinely has
+   * no answer, and because the honest response to an unknown author is to refuse a claim rather than
+   * to fall back to a value that means something else.
+   */
+  readonly creator?: Hex;
   /** `AgenMarketRegistry`'s index, which is also creation order. */
   readonly marketIndex: number;
   readonly engineVersion: SchemaVersion;

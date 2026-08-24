@@ -88,6 +88,10 @@ export async function saveProgram(db: RegistryDatabase, write: ProgramWrite): Pr
         poolId: market.poolId,
         configHash: market.configHash,
         token: market.token,
+        // Absent on a `MarketRef` built before this field existed, and null is the right record of
+        // that: an unknown author makes a claim undeterminable, which `claims.ts` refuses rather
+        // than resolves.
+        creator: market.creator ?? null,
         marketIndex: market.marketIndex,
         engineVersion: market.engineVersion,
         implementationHash: market.implementationHash,
@@ -172,6 +176,14 @@ async function marketsFor(
       chainId: row.chainId,
       poolId: row.poolId as Hex,
       token: row.token as Hex,
+      /*
+       * Spread rather than set, so a null column reads back as an absent field.
+       *
+       * `MarketRef.creator` is optional, and a row that has no creator must round-trip to a
+       * `MarketRef` that has no creator — not to one carrying an explicit `null`, which is a
+       * different value and would fail the equality M1's round-trip test asserts.
+       */
+      ...(row.creator === null ? {} : { creator: row.creator as Hex }),
       marketIndex: row.marketIndex,
       engineVersion: row.engineVersion as SchemaVersion,
       configHash: row.configHash as Hex,

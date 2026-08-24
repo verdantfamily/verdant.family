@@ -110,3 +110,24 @@ export {
   type ReconcileOptions,
   type ReconcileResult,
 } from "./reconcile.js";
+
+export {
+  CLAIM_MAX_LIFETIME_SECONDS,
+  claimProgram,
+  configHashForSlug,
+  eligibleAuthor,
+  readProgramClaim,
+  readProgramClaims,
+  renameProgram,
+  type ClaimContext,
+  type ClaimOutcome,
+  type ClaimRefusal,
+  type ClaimRequest,
+  type ClaimedProgram,
+  type Eligibility,
+} from "./claims.js";
+
+export {
+  programClaimNonces,
+  programSlugHistory,
+} from "./schema.js";

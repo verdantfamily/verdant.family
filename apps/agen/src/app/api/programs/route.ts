@@ -20,8 +20,17 @@
  */
 
 import { NextResponse } from "next/server";
-import { countPrograms, listPrograms, readProgram, registryConfigured, registryClient } from "@verdant/registry-db";
-import type { Program } from "@verdant/registry";
+import {
+  countPrograms,
+  listPrograms,
+  readProgram,
+  readProgramClaims,
+  registryConfigured,
+  registryClient,
+} from "@verdant/registry-db";
+import type { Hex } from "@verdant/registry";
+
+import { presentProgram } from "../../lib/registry/present";
 
 /** `pg` opens TCP sockets, which the edge runtime does not have. */
 export const runtime = "nodejs";
@@ -29,29 +38,6 @@ export const dynamic = "force-dynamic";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
-
-/**
- * A Program as JSON.
- *
- * Every field is already a string or a number in `@verdant/registry`'s types — the large integers
- * live inside `dedupeKey`, which is text — so there is no `bigint` to serialise and no place for a
- * rounding error to enter. `marketCount` is derived here rather than stored, because a count that
- * is maintained is a count that drifts and counting rows is what a database is for.
- */
-function present(program: Program) {
-  return {
-    configHash: program.configHash,
-    schemaVersion: program.schemaVersion,
-    dedupeKey: program.dedupeKey,
-    author: { address: program.author.address },
-    /** Null until a later milestone gives Programs names. Outside the commitment either way. */
-    name: program.name,
-    firstObservedAt: program.firstObservedAt,
-    firstObservedIn: program.firstObservedIn,
-    marketCount: program.markets.length,
-    markets: program.markets,
-  };
-}
 
 function bounded(raw: string | null): number {
   const parsed = Number(raw ?? DEFAULT_LIMIT);
@@ -85,11 +71,15 @@ export async function GET(request: Request): Promise<NextResponse> {
     const configHash = url.searchParams.get("configHash");
 
     if (configHash !== null) {
-      const program = await readProgram(client.db, configHash as `0x${string}`);
+      const program = await readProgram(client.db, configHash as Hex);
       if (program === null) {
         return NextResponse.json({ error: "no such program" }, { status: 404 });
       }
-      return NextResponse.json(present(program));
+
+      const claims = await readProgramClaims(client.db, [program.configHash]);
+      return NextResponse.json(
+        presentProgram(program, claims.get(program.configHash.toLowerCase()) ?? null),
+      );
     }
 
     const limit = bounded(url.searchParams.get("limit"));
@@ -100,8 +90,18 @@ export async function GET(request: Request): Promise<NextResponse> {
       countPrograms(client.db),
     ]);
 
+    // One query for the whole page rather than one per row. Claimed and unclaimed Programs are
+    // listed together and look the same apart from their labels; there is no filter for "named
+    // only", because a registry that hid the unnamed would be hiding most of itself.
+    const claims = await readProgramClaims(
+      client.db,
+      programs.map((program) => program.configHash),
+    );
+
     return NextResponse.json({
-      programs: programs.map(present),
+      programs: programs.map((program) =>
+        presentProgram(program, claims.get(program.configHash.toLowerCase()) ?? null),
+      ),
       total,
       limit,
       offset,

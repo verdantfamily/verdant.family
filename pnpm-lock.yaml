@@ -390,6 +390,9 @@ importers:
       pg:
         specifier: ^8.22.0
         version: 8.22.0
+      viem:
+        specifier: ^2.40.0
+        version: 2.55.10(typescript@5.9.3)(zod@4.4.3)
     devDependencies:
       '@electric-sql/pglite':
         specifier: ^0.2.13

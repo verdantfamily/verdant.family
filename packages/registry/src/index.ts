@@ -42,3 +42,20 @@ export type {
   NormalizedTier,
 } from "./normalize.js";
 export { dedupeKeyFor, normalizeForDedupe } from "./normalize.js";
+
+export type { ProgramClaimAction, ProgramClaimTerms } from "./claim-message.js";
+export { programClaimMessage } from "./claim-message.js";
+
+export type { NamingProblem, NamingRefusal } from "./naming.js";
+export {
+  DESCRIPTION_MAX_LENGTH,
+  NAME_MAX_LENGTH,
+  NAME_MIN_LENGTH,
+  RESERVED_SLUGS,
+  SLUG_MAX_LENGTH,
+  SLUG_MIN_LENGTH,
+  slugify,
+  validateProgramDescription,
+  validateProgramName,
+  validateProgramSlug,
+} from "./naming.js";

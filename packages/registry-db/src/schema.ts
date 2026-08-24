@@ -65,14 +65,38 @@ export const programs = pgTable(
     authorAddress: text("author_address").notNull(),
 
     /**
-     * A label, and null until some surface sets one.
+     * A label, and null until its author claims it.
      *
-     * Nullable and unpopulated on purpose. Names are outside the commitment — two markets
-     * differing only in what their token is called are the same Program — so a name can never be
-     * load-bearing, and there is nowhere to get one from yet.
+     * Nullable, and an unclaimed Program is a perfectly valid one — most of them are. Names are
+     * outside the commitment, so two markets differing only in what their token is called are the
+     * same Program and a name can never be load-bearing. Nothing generates a placeholder: a Program
+     * with no name reads as `null` everywhere rather than as "Program 0x1d0a…", because a made-up
+     * name is indistinguishable from a chosen one once it is on a screen.
      */
     name: text("name"),
     description: text("description"),
+
+    /**
+     * The name in a URL. Unique across every Program, and across every slug ever retired.
+     *
+     * Uniqueness is the database's job rather than a check in application code, because two people
+     * claiming one name at the same moment is exactly the case a check-then-write loses. The
+     * constraint decides; the caller turns a violation into a sentence.
+     */
+    slug: text("slug").unique(),
+
+    /**
+     * Who claimed it, lowercased. Null on an unclaimed Program.
+     *
+     * The address that authored the earliest market running these economics, proven by a signature
+     * over `programClaimMessage`. Not the same value as `author_address` above, and the difference
+     * matters: that one is written first-write-wins by `saveProgram` and is display provenance,
+     * while this one is the outcome of an eligibility rule and is the only thing that authorises a
+     * rename. `claims.ts` never reads `author_address`, and a test asserts it cannot.
+     */
+    claimedBy: text("claimed_by"),
+    /** Unix seconds, when the claim was accepted. A rename does not move it. */
+    claimedAt: bigint("claimed_at", { mode: "number" }),
 
     /** Unix seconds, from the launch that first carried these economics. */
     firstObservedAt: bigint("first_observed_at", { mode: "number" }).notNull(),
@@ -162,6 +186,21 @@ export const programMarkets = pgTable(
       .references(() => programs.configHash, { onDelete: "cascade" }),
 
     token: text("token").notNull(),
+
+    /**
+     * Who launched this market. Lowercased, and nullable.
+     *
+     * The fact the claim rule is built on: the right to name a Program belongs to whoever launched
+     * the earliest market running its economics, and that question cannot be answered from
+     * `programs.author_address`, which is whichever market happened to be written first.
+     *
+     * Nullable because rows written before this column existed have no answer, and because the
+     * honest response to an unknown author is to refuse a claim rather than to guess one. There is
+     * deliberately no default and no backfill from `author_address`: the two are different
+     * questions and conflating them is precisely the divergence the claim rule exists to avoid.
+     */
+    creator: text("creator"),
+
     /** `AgenMarketRegistry`'s index, which is also creation order. */
     marketIndex: integer("market_index").notNull(),
     engineVersion: integer("engine_version").notNull(),
@@ -383,6 +422,83 @@ export const launchAttempts = pgTable(
     check(
       "launch_attempts_lineage_complete_check",
       sql`(${table.lineageParentConfigHash} is null) = (${table.lineageKind} is null)`,
+    ),
+  ],
+);
+
+/**
+ * Slugs that used to name a Program and never will again.
+ *
+ * ## The decision this table is
+ *
+ * A renamed Program's old slug **404s**. It does not redirect, and it does not become available.
+ *
+ * Redirecting was the alternative and it is wrong for the reason decision 1 exists: identity is the
+ * hash, and a slug is a label. A redirect makes an abandoned label keep working, which is the same
+ * as saying it still names the Program — and then there are two names for one thing, one of which
+ * its owner deliberately stopped using. Anything that needs a permanent address already has one:
+ * `/api/programs/0x…` resolves for ever and cannot be renamed, because it is the identity.
+ *
+ * Freeing the slug was the other alternative and it is worse. If `cascade` could be claimed by
+ * somebody else after its owner moved to `ladder`, every link, screenshot and post pointing at
+ * `cascade` would silently start resolving to a different author's Program. That is a phishing
+ * surface handed out by a rename feature, and it would be nobody's job to notice.
+ *
+ * So a retired slug is kept, unavailable, for ever. The cost is a row per rename and a name that
+ * cannot be recycled; the alternative costs somebody their audience.
+ */
+export const programSlugHistory = pgTable(
+  "program_slug_history",
+  {
+    /** The retired slug. Primary key, so it can never be handed to anybody again. */
+    slug: text("slug").primaryKey(),
+    /**
+     * Which Program used to hold it.
+     *
+     * Kept so its own owner may take it back — moving from `cascade` to `ladder` and changing their
+     * mind is not a hijack, and refusing it would be a rename feature that punishes reconsidering.
+     * A cascade delete rather than a dangling reference: if a Program is gone, its retired names are
+     * a fact about nothing.
+     */
+    configHash: text("config_hash")
+      .notNull()
+      .references(() => programs.configHash, { onDelete: "cascade" }),
+    retiredAt: bigint("retired_at", { mode: "number" }).notNull(),
+  },
+  (table) => [index("program_slug_history_config_hash_idx").on(table.configHash)],
+);
+
+/**
+ * Signatures that have already been used.
+ *
+ * An expiry bounds how long a leaked message is dangerous; it does not stop the message being used
+ * twice inside that window, and idempotence does not either. The attack idempotence misses: an owner
+ * claims "Cascade", renames to "Ladder", and anybody holding the original claim message can replay
+ * it to drag the label back — a valid signature over a name its author has abandoned.
+ *
+ * So a nonce is single-use. A second presentation is either an idempotent retry, when the state it
+ * asks for is the state that already exists, or a replay, when it is not. The row is what tells
+ * those apart.
+ *
+ * No foreign key to `programs`, and not for M2's reason — the Program certainly exists by the time a
+ * claim succeeds. It is that a nonce is a record of a signature having been spent, and that fact
+ * should outlive any row it happened to be about.
+ */
+export const programClaimNonces = pgTable(
+  "program_claim_nonces",
+  {
+    nonce: text("nonce").primaryKey(),
+    configHash: text("config_hash").notNull(),
+    /** Who signed it, recovered from the signature rather than supplied. Lowercased. */
+    address: text("address").notNull(),
+    action: text("action").notNull(),
+    usedAt: bigint("used_at", { mode: "number" }).notNull(),
+  },
+  (table) => [
+    index("program_claim_nonces_config_hash_idx").on(table.configHash),
+    check(
+      "program_claim_nonces_action_check",
+      sql`${table.action} in ('claim', 'rename')`,
     ),
   ],
 );

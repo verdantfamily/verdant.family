@@ -15,6 +15,13 @@
       "when": 1787595692330,
       "tag": "0001_launch_attempts",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787601295426,
+      "tag": "0002_program_claims",
+      "breakpoints": true
     }
   ]
 }

@@ -153,6 +153,9 @@ export function programOf(
     chainId,
     poolId: market.poolId.toLowerCase() as Hex,
     token: market.token.toLowerCase() as Hex,
+    // Per market, and not the same fact as `Program.author` below. That one is whoever was observed
+    // first; this one is who launched *this* market, which is what the claim rule reads.
+    creator: market.creator.toLowerCase() as Hex,
     marketIndex: market.index,
     engineVersion: market.engine.version as SchemaVersion,
     configHash: identity.configHash,

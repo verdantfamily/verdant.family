@@ -24,10 +24,11 @@
     "migrations:check": "drizzle-kit check"
   },
   "dependencies": {
-    "@verdant/registry": "workspace:*",
     "@verdant/market-engine": "workspace:*",
+    "@verdant/registry": "workspace:*",
     "drizzle-orm": "^0.41.0",
-    "pg": "^8.22.0"
+    "pg": "^8.22.0",
+    "viem": "^2.40.0"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.2.13",

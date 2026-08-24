@@ -23,6 +23,7 @@ test, CI gate or lint configuration was modified.
 - [Follow-ups](#follow-ups)
 - [Missing](#missing)
 - [M2 — a launch writes itself down](#m2-a-launch-writes-itself-down)
+- [M3 — a program gets a name](#m3-a-program-gets-a-name)
 
 ## Deployed contracts
 
@@ -764,3 +765,127 @@ reader checking that scope should not find a number that does not survive a grep
 The audit also separated two steps this document had run together: `engine/pipeline.ts` *builds* the
 probe calldata, and [`engine-prove.ts`](../../apps/agen/src/app/lib/engine-prove.ts) is what executes
 it through `eth_call`.
+
+## M3 — a program gets a name
+
+Programs were unnamed and unowned: `name` and `description` were nullable columns nothing wrote, and
+authorship was an address. M3 lets the author of a Program claim it and give it a label.
+
+A label, and only a label. Identity is `configHash` and nothing in this milestone can move it —
+claiming and renaming touch `name`, `slug`, `description`, `claimed_by` and `claimed_at`, and the
+tests compare the identity columns, the lineage rows and the market rows byte for byte across both.
+No UI: routes and persistence only.
+
+- [Two notions of author, and which one decides](#two-notions-of-author-and-which-one-decides)
+- [The claim rule](#the-claim-rule)
+- [What a signature covers](#what-a-signature-covers)
+- [Retired slugs 404](#retired-slugs-404)
+- [What M3 closes](#what-m3-closes)
+
+### Two notions of author, and which one decides
+
+There are now two columns that look like "who made this", and conflating them is the mistake this
+section exists to prevent.
+
+| Column | Written by | Means | Authoritative for |
+| --- | --- | --- | --- |
+| `programs.author_address` | `saveProgram`, first-write-wins | Whoever was *observed* launching this Program first | Display only |
+| `program_markets.creator` | `programOf`, per market | Who launched *that* market | **Claiming** |
+
+`author_address` is `onConflictDoNothing`, so it records whichever market happened to be written
+first — which is iteration order, not chain order. `program_markets.creator` is new in this milestone
+and is per market, so "the earliest market by block" is answerable from it and is not answerable from
+the other.
+
+They agree on the live population, because each of the two Programs there has exactly one market.
+Acceptance test 11 asserts that rather than assuming it: after a backfill, `author_address` equals the
+creator of the earliest market by block for every Program. **It passes — the two do not diverge
+today.** They diverge exactly when two people launch identical economics, which is the case the claim
+rule exists for and which has not happened yet on 4663.
+
+**`author_address` is display-only from here on.** [`claims.ts`](../../packages/registry-db/src/claims.ts)
+never reads it, and [`claim-purity.test.ts`](../../packages/registry-db/src/claim-purity.test.ts)
+asserts that as a property of the source: the claim path may not name the column or the field, must
+read `programMarkets.creator`, must order by `launchBlock`, and may not apply `??` or `||` to a
+creator. A behavioural test would leave a `?? author_address` "kindness" passing for every Program
+whose two authors happen to agree — which is all of them, today.
+
+### The claim rule
+
+The right to name a Program belongs to the address that launched the **earliest market by block**
+running its economics. `pool_id` breaks a tie inside one block: arbitrary, but stable, because an
+eligibility rule that answered differently between two runs would be no rule.
+
+Why earliest-by-block rather than anything else: `deployMarket` is permissionless and a canonical
+configuration is public — it is on the review screen and in the build's own record — so two people
+launching byte-identical economics is expected rather than exceptional. Somebody has to own the
+label, first is the only ordering the chain supplies that nobody can manipulate after the fact, and
+the loser keeps everything they actually had. A later author's market is untouched by losing the
+Program; it was never theirs to lose.
+
+**If the earliest market's creator is null, every claim is refused** with `AUTHOR_UNKNOWN`. Rows
+written before the column existed have no author, and the honest answer to "who may claim this" is
+then "nobody, yet". There is deliberately no fallback to `author_address`.
+
+### What a signature covers
+
+A claim is a signature over [`programClaimMessage`](../../packages/registry/src/claim-message.ts),
+recovered server-side. No session, no cookie, and no address in the request body — the signer is
+recovered and compared to the eligible author, so there is nothing for a caller to assert about who
+they are. This milestone adds no authentication middleware and no user table; the signature *is* the
+authentication, scoped to one Program and one act, and it expires.
+
+The message binds the action, the `configHash`, the chain id, the name, the slug, the description, a
+nonce and an expiry. Decision 3 required the first four; the slug and description are bound because a
+signature covering only part of a request leaves the rest changeable by whoever relays it.
+
+The chain id matters more than it looks: `configHash` is chain-independent by construction, so without
+it a claim proven against any deployment would be a claim against every deployment.
+
+The nonce is not redundant with the expiry. The expiry bounds how long a leaked message is dangerous;
+the nonce is what stops a still-valid one being replayed. The attack it closes is specific — an owner
+claims "Cascade", renames to "Ladder", and anybody holding the original claim message replays it to
+drag the label back. So a used signature is an idempotent no-op when it asks for the state that
+already exists, and `REPLAYED` when it does not.
+
+Validation is in [`naming.ts`](../../packages/registry/src/naming.ts), pure and beside the identity
+functions. Slugs are lowercase words joined by single hyphens, 3 to 48 characters, never only digits
+and never `0x…`; names are 1 to 64 characters and must contain a letter. `RESERVED_SLUGS` covers
+routes and route-shaped words, the product's own names, words asserting an endorsement the platform
+does not grant — `official`, `verified` — and strings that read as absence.
+
+### Retired slugs 404
+
+**A renamed Program's old slug stops resolving. It does not redirect, and it is never given to
+anybody else.**
+
+Not a redirect, because identity is the hash and a slug is a label. A redirect keeps an abandoned
+label working, which is the same as saying it still names the Program — and then a Program has two
+names, one of which its owner deliberately stopped using. Anything needing a permanent address
+already has one: `/api/programs/0x…` resolves for ever and cannot be renamed, because it *is* the
+identity.
+
+Not freed either, which a bare 404 would miss. If `cascade` were claimable once its owner moved to
+`ladder`, every link, screenshot and post pointing at `cascade` would silently begin resolving to a
+different author's Program — a phishing surface produced by a rename feature, and nobody's job to
+notice. Retired slugs are kept in
+[`program_slug_history`](../../packages/registry-db/drizzle/0002_program_claims.sql), unavailable for
+ever, with one exception: a Program may take back a slug it retired itself, since changing your mind
+is not a hijack.
+
+The cost is a row per rename and a name that cannot be recycled. The alternative costs somebody their
+audience.
+
+### What M3 closes
+
+| M0 item | Status |
+| --- | --- |
+| 3 — Authorship beyond an address | **Partly closed, and deliberately no further.** An address can now *prove* it authored a Program and attach a name to it. Handles, display names, avatars and profiles remain absent and out of scope: `ProgramAuthor.handle` and `displayName` are still null, and this milestone adds no user table. |
+| 4 — Program names and descriptions | **Closed.** `name`, `slug` and `description` are set by the author, under signature, and are never generated. An unclaimed Program reads back with `name: null` — no placeholder is invented anywhere, because a generated name is indistinguishable from a chosen one once it is on a screen. |
+
+Items **5**, **6** and **7** were closed in M2. **9** (cross-chain identity) is untouched. **8** was
+closed in M1.
+
+One correction to M0's framing of item 3, which called authorship "the only author fact on chain".
+That is still true of the chain, and there are now two off-chain facts derived from it — see
+[Two notions of author](#two-notions-of-author-and-which-one-decides). Neither is a profile.

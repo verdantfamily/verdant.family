@@ -30,16 +30,24 @@ import "server-only";
  */
 
 import { xClient, type XClient } from "./client";
-import { botUsername } from "./config";
+import { botUserId, botUsername } from "./config";
 import { XError } from "./errors";
 import { handleMention, resolveIndeterminate, type MentionOutcome } from "./engine";
 import { needsSource, parseCommand } from "./command";
 import { isSelf } from "./guards";
 import { xStore, type XStore } from "./store";
-import type { XMention, XPost } from "./types";
+import type { XAuthor, XDirectMessage, XMention, XPost } from "./types";
 
 /** How many mentions one pass will look at. Sized to a cron minute, not to a backlog. */
 const DEFAULT_BATCH = 20;
+
+/**
+ * When a DM read was 429'd, do not ask again until this unix second.
+ *
+ * Retrying inside the window is how the inbox went deaf: each retry is another 429, and X
+ * can push the reset further out. Mentions keep polling; only the DM read stands down.
+ */
+let dmBackoffUntil = 0;
 
 /**
  * Pair a mention with the post it is about.
@@ -76,7 +84,12 @@ export async function mentionFromPost(
 /** Whether this post is addressed to the bot at all, before anything is spent finding out. */
 export function addressesBot(post: XPost): boolean {
   if (isSelf(post)) return false;
-  return parseCommand(post.text, botUsername()).mentionsBot;
+  const parsed = parseCommand(post.text, botUsername());
+  if (parsed.mentionsBot) return true;
+  // A reply in the chain often drops the handle. Name + ticker, or a launch phrase, is
+  // still for the bot that asked.
+  if (post.inReplyToPostId === null) return false;
+  return parsed.looksLikeLaunch || (parsed.explicitName !== null && parsed.explicitTicker !== null);
 }
 
 export interface PollResult {
@@ -110,7 +123,7 @@ export async function pollOnce(options: PollOptions = {}): Promise<PollResult> {
   const resolved = await resolveIndeterminate(store);
 
   const since = store.sinceId();
-  const posts = await client.mentions(since, limit);
+  const posts = await incomingPosts(client, since, limit);
 
   const outcomes: MentionOutcome[] = [];
   let cursor: string | null = null;
@@ -130,6 +143,15 @@ export async function pollOnce(options: PollOptions = {}): Promise<PollResult> {
     outcomes.push(outcome);
     if (outcome.outcome === "launched") launched += 1;
 
+    // One line per handled post, so a "no reply" report is answerable from the logs rather than
+    // reconstructed from a deleted tweet. It carries the id, the outcome, the refusal code if
+    // any, and whether a reply actually landed — the four facts every triage of this has needed.
+    console.info(
+      `[x] handled ${post.id} @${post.author?.username ?? "?"} -> ${outcome.outcome}` +
+        `${outcome.code === null ? "" : ` (${outcome.code})`}` +
+        `${outcome.replyPostId === null ? " no-reply" : ` reply=${outcome.replyPostId}`}`,
+    );
+
     // The cursor stops at the first thing that should be tried again, and does not move past
     // it. Everything after this post is left unread rather than skipped.
     if (outcome.retryable) break;
@@ -138,8 +160,12 @@ export async function pollOnce(options: PollOptions = {}): Promise<PollResult> {
 
   if (cursor !== null) store.advanceCursor(cursor);
 
+  const inbox = await pollDirectMessages(store, client, limit);
+  outcomes.push(...inbox.outcomes);
+  launched += inbox.launched;
+
   return {
-    seen: posts.length,
+    seen: posts.length + inbox.seen,
     handled: outcomes.length,
     launched,
     outcomes,
@@ -149,24 +175,168 @@ export async function pollOnce(options: PollOptions = {}): Promise<PollResult> {
 }
 
 /**
- * Move the cursor to the newest mention that already exists, without handling any of them.
+ * Everything newer than the cursor that might be addressed to the bot, oldest first.
+ *
+ * The mentions timeline is the obvious source and the wrong one to trust alone. X does not
+ * guarantee it is complete: a real `@useagen buy …` has arrived at recent search seconds after
+ * posting while never appearing in `GET /2/users/:id/mentions` at all. A bot that reads only the
+ * mentions timeline therefore drops buys silently — which is exactly the failure that had people
+ * tweeting into the void. So this reads both and merges them.
+ *
+ * Search is the recovery path, not the primary one: `@useagen -from:useagen` finds anything that
+ * names the bot and was not posted by it, including the standalone posts and the ones the mentions
+ * timeline lost. Both are filtered to strictly-newer-than the cursor and de-duplicated by id, so a
+ * post that shows up in both is handled once, and the union is sorted oldest-first so the cursor
+ * advances monotonically.
+ *
+ * Search failing is not allowed to take mentions down with it. It is a best-effort widening of
+ * what mentions already returned, so a search outage degrades to mentions-only rather than to
+ * silence.
+ */
+export async function incomingPosts(
+  client: XClient,
+  sinceId: string | null,
+  limit: number,
+): Promise<readonly XPost[]> {
+  const mentions = await client.mentions(sinceId, limit);
+
+  let found: readonly XPost[] = [];
+  try {
+    found = await client.search(`@${botUsername()} -from:${botUsername()}`, limit);
+  } catch {
+    // A search outage leaves the mentions timeline as the only source, which is the old
+    // behaviour. It must not turn a readable mentions timeline into a failed pass.
+    found = [];
+  }
+
+  const byId = new Map<string, XPost>();
+  for (const post of [...mentions, ...found]) {
+    if (sinceId !== null && !snowflakeAfter(post.id, sinceId)) continue;
+    byId.set(post.id, post);
+  }
+
+  return [...byId.values()].sort((a, b) => (snowflakeAfter(a.id, b.id) ? 1 : -1));
+}
+
+/**
+ * Move the cursor to the newest post that already exists, without handling any of them.
  *
  * A redeploy used to open the mentions timeline and treat everything still in the window
  * as new work. That is how a buy from ten minutes ago got answered again after a restart.
  * The timeline that is already there is finished business. Only posts newer than this
  * cursor are a request this process is responsible for.
+ *
+ * Reads the same two sources as a live pass. Skipping only what the mentions timeline shows
+ * would leave a post that lives in search behind the cursor, and the next pass would answer it
+ * as if it were new — the replay this function exists to prevent.
  */
 export async function skipExistingMentions(options: PollOptions = {}): Promise<string | null> {
   const store = options.store ?? xStore();
   const client = options.client ?? xClient();
 
-  const posts = await client.mentions(null, 5);
+  const posts = await incomingPosts(client, null, 50);
   let newest = store.sinceId();
   for (const post of posts) {
     if (newest === null || snowflakeAfter(post.id, newest)) newest = post.id;
   }
+  // Never start behind "now". A mentions read that came back empty and a search that
+  // returned five old hits used to park the cursor in the past, and the next pass then
+  // answered everything newer than 2024. The timeline that already exists is finished.
+  const floor = snowflakeAt(Date.now() - 120_000);
+  if (newest === null || snowflakeAfter(floor, newest)) newest = floor;
   if (newest !== null) store.advanceCursor(newest);
   return newest;
+}
+
+/** Twitter's snowflake epoch. A post id is this plus milliseconds, shifted 22 bits. */
+const TWITTER_EPOCH_MS = 1_288_834_974_657;
+
+export function snowflakeAt(unixMs: number): string {
+  const ms = Math.max(TWITTER_EPOCH_MS, Math.floor(unixMs));
+  return (BigInt(ms - TWITTER_EPOCH_MS) << 22n).toString();
+}
+
+export function mentionFromDm(message: XDirectMessage): XMention {
+  return {
+    via: "dm",
+    command: {
+      id: `dm:${message.id}`,
+      text: message.text,
+      author: message.sender,
+      createdAt: null,
+      inReplyToPostId: null,
+      quotedPostId: null,
+      media: [],
+      links: [],
+      language: null,
+    },
+    source: null,
+    quoted: null,
+    thread: [],
+  };
+}
+
+async function pollDirectMessages(
+  store: XStore,
+  client: XClient,
+  limit: number,
+): Promise<{
+  readonly seen: number;
+  readonly launched: number;
+  readonly outcomes: MentionOutcome[];
+}> {
+  if (typeof client.dmEvents !== "function") {
+    return { seen: 0, launched: 0, outcomes: [] };
+  }
+
+  const now = Date.now() / 1000;
+  if (dmBackoffUntil > now) return { seen: 0, launched: 0, outcomes: [] };
+
+  let events: readonly XDirectMessage[] = [];
+  try {
+    events = await client.dmEvents(limit);
+  } catch (error) {
+    const until = resetAtFrom(error);
+    if (until !== null) {
+      dmBackoffUntil = until;
+      console.warn(`[x] dm rate limited until ${String(until)}`);
+    } else {
+      console.warn(
+        `[x] dm poll failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200),
+      );
+    }
+    return { seen: 0, launched: 0, outcomes: [] };
+  }
+
+  // Unclaimed events, not "newer than the cursor". A redeploy used to skip the whole inbox
+  // the same way it skips the mention timeline, which is how a DM sitting there at boot
+  // never got an answer. Mentions already handled are a no-op via the claim.
+  const incoming = [...events].sort((left, right) => (snowflakeAfter(left.id, right.id) ? 1 : -1));
+
+  const outcomes: MentionOutcome[] = [];
+  let cursor: string | null = null;
+  let launched = 0;
+
+  for (const event of incoming) {
+    if (store.mentionExists(`dm:${event.id}`)) {
+      cursor = event.id;
+      continue;
+    }
+    const mention = mentionFromDm(event);
+    const outcome = await handleMention(mention, { store, client });
+    outcomes.push(outcome);
+    if (outcome.outcome === "launched") launched += 1;
+    console.info(
+      `[x] handled dm:${event.id} @${event.sender.username} -> ${outcome.outcome}` +
+        `${outcome.code === null ? "" : ` (${outcome.code})`}` +
+        `${outcome.replyPostId === null ? " no-reply" : ` reply=${outcome.replyPostId}`}`,
+    );
+    if (outcome.retryable) break;
+    cursor = event.id;
+  }
+
+  if (cursor !== null) store.advanceDmCursor(cursor);
+  return { seen: incoming.length, launched, outcomes };
 }
 
 function snowflakeAfter(left: string, right: string): boolean {
@@ -177,6 +347,14 @@ function snowflakeAfter(left: string, right: string): boolean {
   }
 }
 
+function resetAtFrom(error: unknown): number | null {
+  if (!(error instanceof XError)) return null;
+  const raw = error.details.resetAt;
+  const value = typeof raw === "string" || typeof raw === "number" ? Number(raw) : NaN;
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return value > 1e12 ? value / 1000 : value;
+}
+
 /**
  * Handle one mention named by id.
  *
@@ -184,6 +362,16 @@ function snowflakeAfter(left: string, right: string): boolean {
  * put it through the exact production path rather than a reconstruction of it. The mention claim
  * makes doing so safe on a post that already launched.
  */
+/** Handle one inbound DM the webhook named. Same claim as a polled DM. */
+export async function ingestDirectMessage(
+  message: XDirectMessage,
+  options: PollOptions = {},
+): Promise<MentionOutcome | null> {
+  const store = options.store ?? xStore();
+  const client = options.client ?? xClient();
+  return handleMention(mentionFromDm(message), { store, client });
+}
+
 export async function ingestPostId(
   id: string,
   options: PollOptions = {},
@@ -194,6 +382,8 @@ export async function ingestPostId(
   const post = await client.post(id);
   if (post === null) return null;
   if (!addressesBot(post)) return null;
+  // A redeploy must not honour a webhook replay of last week's mentions.
+  if (!snowflakeAfter(post.id, snowflakeAt(Date.now() - 120_000))) return null;
 
   const mention = await mentionFromPost(post, client);
   return handleMention(mention, { store, client });
@@ -232,4 +422,93 @@ export function postIdsFrom(payload: unknown): readonly string[] {
 
   visit(payload, 0);
   return [...found];
+}
+
+/**
+ * Direct messages named in a webhook body.
+ *
+ * X has shipped more than one envelope for this. Account Activity uses
+ * `direct_message_events`; the Activity API uses `event_type: dm.received`. Both are read
+ * here, shallowly, because the payload is only a notification — the claim on `dm:<id>` is
+ * what stops a redelivery spending twice.
+ */
+export function dmsFrom(payload: unknown): readonly XDirectMessage[] {
+  const found: XDirectMessage[] = [];
+  const seen = new Set<string>();
+  const self = botUserId();
+
+  const take = (id: string, text: string, sender: XAuthor): void => {
+    if (seen.has(id)) return;
+    if (self !== null && sender.id === self) return;
+    seen.add(id);
+    found.push({ id, text, sender });
+  };
+
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > 6 || value === null || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      for (const entry of value) visit(entry, depth + 1);
+      return;
+    }
+
+    const record = value as Record<string, unknown>;
+
+    // Account Activity v1.1
+    const created = record.message_create;
+    if (typeof record.id === "string" && /^\d{15,25}$/.test(record.id) && created !== null && typeof created === "object") {
+      const create = created as Record<string, unknown>;
+      const data = create.message_data;
+      const text =
+        typeof data === "object" && data !== null && typeof (data as { text?: unknown }).text === "string"
+          ? (data as { text: string }).text
+          : typeof record.text === "string"
+            ? record.text
+            : null;
+      const senderId = typeof create.sender_id === "string" ? create.sender_id : null;
+      if (text !== null && senderId !== null) {
+        take(record.id, text, authorFrom(senderId, record));
+      }
+    }
+
+    // Activity API: { event_type: "dm.received", data: { id, text, sender_id } }
+    const eventType = typeof record.event_type === "string" ? record.event_type : "";
+    if (eventType === "dm.received" || eventType === "dm.sent") {
+      const data = (record.data ?? record.payload ?? record) as Record<string, unknown>;
+      const id = typeof data.id === "string" ? data.id : typeof record.id === "string" ? record.id : null;
+      const text = typeof data.text === "string" ? data.text : null;
+      const senderId =
+        typeof data.sender_id === "string"
+          ? data.sender_id
+          : typeof data.senderId === "string"
+            ? data.senderId
+            : null;
+      if (id !== null && /^\d{15,25}$/.test(id) && text !== null && senderId !== null) {
+        take(id, text, authorFrom(senderId, data));
+      }
+    }
+
+    for (const entry of Object.values(record)) visit(entry, depth + 1);
+  };
+
+  visit(payload, 0);
+  return found;
+}
+
+function authorFrom(id: string, record: Record<string, unknown>): XAuthor {
+  const nested = record.sender;
+  const user = nested !== null && typeof nested === "object" ? (nested as Record<string, unknown>) : record;
+  const username =
+    (typeof user.username === "string" && user.username) ||
+    (typeof user.screen_name === "string" && user.screen_name) ||
+    id;
+  const name = typeof user.name === "string" ? user.name : "";
+  return {
+    id,
+    username: username.replace(/^@/, "").toLowerCase(),
+    name,
+    avatarUrl: null,
+    followers: null,
+    createdAt: null,
+    verified: false,
+  };
 }

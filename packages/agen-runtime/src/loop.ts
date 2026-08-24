@@ -257,7 +257,7 @@ export async function run<Deps>(request: RunRequest<Deps>): Promise<RuntimeAnswe
         return emptyAnswer({
           kind: "reply",
           reply: trimReply(
-            "say launch this if you want a market. i'm not going to do that from a maybe.",
+            "if you want it launched, say the name and ticker. i'm not guessing.",
             maxReplyChars,
           ),
           transcript,

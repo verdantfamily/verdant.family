@@ -190,7 +190,10 @@ export function limits(): XLimits {
     // loss if every protection above it fails at once.
     gasPerDayWei: wei("X_MAX_GAS_PER_DAY_WEI", 500_000_000_000_000_000n),
     perUserCooldownSeconds: integer("X_USER_COOLDOWN_SECONDS", 60),
-    mentionsPerUserPerMinute: integer("X_MAX_MENTIONS_PER_USER_PER_MINUTE", 5),
+    // 0 means no per-user mention cap: anyone may tag the bot as often as they like. The
+    // things a mention can *cost* Agen — a sponsored launch — are still bounded by the per-day,
+    // cooldown, gas-budget and account-age guards, which is what this cap used to duplicate.
+    mentionsPerUserPerMinute: integer("X_MAX_MENTIONS_PER_USER_PER_MINUTE", 0),
     minAccountAgeDays: integer("X_MIN_ACCOUNT_AGE_DAYS", 7),
     minFollowers: integer("X_MIN_FOLLOWERS", 0),
   };

@@ -26,7 +26,7 @@ import type { ModelProvider } from "@verdant/market-compiler";
 import { agenRegistry, type AgenDeps, type PortAccount } from "../agen/tools";
 import { providerOrNull } from "../builds";
 import { xClient, type XClient } from "./client";
-import { normaliseName, normaliseTicker, parseCommand } from "./command";
+import { collectLaunchIdentity, normaliseName, normaliseTicker, parseCommand } from "./command";
 import { botUsername } from "./config";
 import { contextFromMention } from "./context";
 import { XError } from "./errors";
@@ -200,7 +200,17 @@ export async function routeMention(
   provider: ModelProvider | null = providerOrNull(),
   extras: RouteExtras = {},
 ): Promise<RoutedMention> {
-  const parsed = parseCommand(mention.command.text, botUsername());
+  const handle = botUsername();
+  const parsed = parseCommand(mention.command.text, handle);
+  const stated = collectLaunchIdentity(
+    [
+      mention.command.text,
+      mention.source?.text ?? "",
+      mention.quoted?.text ?? "",
+      ...(mention.thread ?? []).map((post) => post.text),
+    ],
+    handle,
+  );
   const model = extras.provider ?? provider;
 
   if (model === null) {
@@ -211,17 +221,23 @@ export async function routeMention(
 
   let answer: RuntimeAnswer;
   try {
+    const inDm = mention.via === "dm";
+    const named = stated.name !== null || stated.ticker !== null;
     answer = await run({
       context: contextFromMention(mention),
       tools: agenRegistry(),
       deps: depsFrom(extras.client ?? xClient()),
       provider: model,
-      execution: parsed.looksLikeLaunch,
+      // A named token is a complete request wherever they said it. "launch this" in a DM
+      // with nothing to launch is a conversation, not a spend.
+      execution: parsed.looksLikeLaunch && (!inDm || named),
       // The ceiling, not the plan. The runtime reads the depth cue out of the person's own words
       // and spends within this: `thoughts?` finishes in a turn or two, `investigate this` may use
       // the lot. Twelve is what a poll can afford before the mention claim goes stale.
       maxTurns: 12,
-      maxReplyChars: 240,
+      // A public reply is a tweet. A DM is a conversation, and 240 characters is a tweet
+      // pretending to be a chat.
+      maxReplyChars: inDm ? 800 : 240,
       // A launch reply is one post by definition, and the copy is fixed. Only an answer can be a
       // thread, and only when the question asked for research.
       maxParts: parsed.looksLikeLaunch ? 1 : 3,
@@ -243,8 +259,8 @@ export async function routeMention(
       token === null
         ? null
         : {
-            name: parsed.explicitName ?? token.name,
-            ticker: parsed.explicitTicker ?? token.ticker,
+            name: stated.name ?? token.name,
+            ticker: stated.ticker ?? token.ticker,
             description: token.description,
             confidence: token.confidence,
           },
@@ -260,6 +276,6 @@ export async function routeMention(
     // The runtime's push-back marker is in the transcript but is not a tool that ran, so it is left
     // out of the record of what was consulted.
     tools: answer.transcript.map((entry) => entry.tool).filter((tool) => tool !== NO_SOURCE),
-    explicit: { name: parsed.explicitName, ticker: parsed.explicitTicker },
+    explicit: { name: stated.name, ticker: stated.ticker },
   };
 }

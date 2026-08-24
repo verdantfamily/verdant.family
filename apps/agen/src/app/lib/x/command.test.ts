@@ -8,13 +8,25 @@
  * against themselves.
  */
 
+import { createHmac } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 import { getAddress, parseEther } from "viem";
 
-import { needsSource, normaliseName, normaliseTicker, parseCommand } from "./command";
+import {
+  collectLaunchIdentity,
+  needsSource,
+  nameFromTicker,
+  normaliseName,
+  normaliseTicker,
+  parseCommand,
+  tickerFromName,
+  wantsBotImage,
+} from "./command";
 import { seatLabel } from "./seat";
 import { launchReply, marketUrl } from "./reply";
-import { postIdsFrom } from "./ingest";
+import { dmsFrom, postIdsFrom } from "./ingest";
+import { authoriseWebhook } from "./ingress";
 import { sourceIsUsable } from "./generate";
 import {
   SESSION_COOKIE,
@@ -76,6 +88,10 @@ describe("parseCommand", () => {
       "@useagen why did you launch this",
       "@useagen how do I launch a token",
       "@useagen explain this token",
+      "@useagen can i launch it here?",
+      "@useagen can i launch it here in chat?",
+      "i wanted to launch a token",
+      "all good, i wanted to launch a token",
     ]) {
       expect(parseCommand(text, BOT).looksLikeLaunch, text).toBe(false);
     }
@@ -118,9 +134,73 @@ describe("parseCommand", () => {
     expect(parseCommand("@useagen launch this $DOG", BOT).explicitName).toBe(null);
   });
 
+  it("reads a name-only launch and a ticker-only launch", () => {
+    expect(parseCommand("@useagen launch Dog", BOT).explicitName).toBe("Dog");
+    expect(parseCommand("@useagen launch $cat", BOT).explicitTicker).toBe("CAT");
+    expect(parseCommand("@useagen create a token with the ticker UseAgen", BOT).explicitTicker).toBe(
+      "USEAGEN",
+    );
+  });
+
+  it("reads a pasted Name: / Ticker: list as a launch", () => {
+    const loud = parseCommand(
+      "Create a token with these:\nName: ROBINHOOD LOUD\nTIcker: LOUD\nCHAIN: RobinHood\n@useagen",
+      BOT,
+    );
+    expect(loud.looksLikeLaunch).toBe(true);
+    expect(loud.explicitName).toBe("ROBINHOOD LOUD");
+    expect(loud.explicitTicker).toBe("LOUD");
+
+    const mooner = parseCommand("Creat a token with these:\nName: MOONER\nTICKER: MOONER\n\n@useagen", BOT);
+    expect(mooner.looksLikeLaunch).toBe(true);
+    expect(mooner.explicitName).toBe("MOONER");
+    expect(mooner.explicitTicker).toBe("MOONER");
+
+    const canopy = parseCommand("Name - Canopy Games\nTicker - CNPYG", BOT);
+    expect(canopy.looksLikeLaunch).toBe(true);
+    expect(canopy.explicitName).toBe("Canopy Games");
+    expect(canopy.explicitTicker).toBe("CNPYG");
+  });
+
+  it("does not treat 'launch standard' as a token called Standard", () => {
+    expect(parseCommand("@useagen launch standard", BOT).explicitName).toBe(null);
+    expect(parseCommand("Ok that's fine launch standard. Use the same image as your pfp", BOT).explicitName).toBe(
+      null,
+    );
+    expect(
+      parseCommand("Ok that's fine launch standard. Use the same image as your pfp", BOT).looksLikeLaunch,
+    ).toBe(true);
+  });
+
   it("knows when it is not being addressed", () => {
     expect(parseCommand("agen launched a token today", BOT).mentionsBot).toBe(false);
     expect(parseCommand("@useagenda launch this", BOT).mentionsBot).toBe(false);
+  });
+
+  it("fills the missing name or ticker from the one they stated", () => {
+    expect(tickerFromName("Dog")).toBe("DOG");
+    expect(nameFromTicker("CAT")).toBe("Cat");
+    expect(
+      collectLaunchIdentity(["@useagen launch Dog"], BOT),
+    ).toEqual({ name: "Dog", ticker: "DOG" });
+    expect(
+      collectLaunchIdentity(["@useagen launch $cat"], BOT),
+    ).toEqual({ name: "Cat", ticker: "CAT" });
+    expect(
+      collectLaunchIdentity(
+        [
+          "Ok that's fine launch standard. Use the same image as your pfp",
+          "Ok create a token with the ticker UseAgen. I want you to distribute half of the fees to the holders.",
+        ],
+        BOT,
+      ),
+    ).toEqual({ name: "Useagen", ticker: "USEAGEN" });
+  });
+
+  it("hears a request to use the bot's picture", () => {
+    expect(wantsBotImage("Use the same image as your pfp")).toBe(true);
+    expect(wantsBotImage("use your avatar")).toBe(true);
+    expect(wantsBotImage("launch Dog")).toBe(false);
   });
 });
 
@@ -486,5 +566,96 @@ describe("reading ids out of a delivery payload", () => {
     expect(postIdsFrom(null)).toEqual([]);
     expect(postIdsFrom("nope")).toEqual([]);
     expect(postIdsFrom({ deeply: { nested: { nothing: true } } })).toEqual([]);
+  });
+});
+
+describe("reading DMs out of a delivery payload", () => {
+  const previousBot = process.env.X_BOT_USER_ID;
+
+  it("reads Account Activity message_create and Activity API dm.received", () => {
+    process.env.X_BOT_USER_ID = "2090215793262747648";
+    const accountActivity = dmsFrom({
+      for_user_id: "2090215793262747648",
+      direct_message_events: [
+        {
+          id: "2090570000000000001",
+          type: "message_create",
+          message_create: {
+            sender_id: "2086384381631901696",
+            message_data: { text: "buy 0.01 eth of that" },
+          },
+          sender: { username: "0xmazzy", name: "mazzy" },
+        },
+        {
+          id: "2090570000000000002",
+          type: "message_create",
+          message_create: {
+            sender_id: "2090215793262747648",
+            message_data: { text: "Sent you a DM." },
+          },
+        },
+      ],
+    });
+    const activityApi = dmsFrom({
+      event_type: "dm.received",
+      data: {
+        id: "2090570000000000003",
+        text: "wallet",
+        sender_id: "2086384381631901696",
+        sender: { username: "0xmazzy" },
+      },
+    });
+
+    expect(accountActivity).toEqual([
+      {
+        id: "2090570000000000001",
+        text: "buy 0.01 eth of that",
+        sender: expect.objectContaining({ id: "2086384381631901696", username: "0xmazzy" }),
+      },
+    ]);
+    expect(activityApi).toEqual([
+      {
+        id: "2090570000000000003",
+        text: "wallet",
+        sender: expect.objectContaining({ id: "2086384381631901696", username: "0xmazzy" }),
+      },
+    ]);
+    if (previousBot === undefined) delete process.env.X_BOT_USER_ID;
+    else process.env.X_BOT_USER_ID = previousBot;
+  });
+});
+
+describe("authorising a webhook POST", () => {
+  it("accepts X's HMAC of the raw body", () => {
+    process.env.X_API_KEY = "key";
+    process.env.X_API_SECRET = "consumer-secret";
+    process.env.X_ACCESS_TOKEN = "token";
+    process.env.X_ACCESS_SECRET = "token-secret";
+    process.env.X_INGRESS_SECRET = "ingress-secret-32-bytes-long!!!!";
+    const raw = JSON.stringify({ event_type: "dm.received" });
+    const signature = `sha256=${createHmac("sha256", "consumer-secret").update(raw).digest("base64")}`;
+    const request = new Request("https://agen.space/api/x/webhook", {
+      method: "POST",
+      headers: { "x-twitter-webhooks-signature": signature },
+      body: raw,
+    });
+
+    expect(() => authoriseWebhook(request, raw)).not.toThrow();
+  });
+
+  it("refuses a body that is not signed by X and is not the ingress secret", () => {
+    process.env.X_API_KEY = "key";
+    process.env.X_API_SECRET = "consumer-secret";
+    process.env.X_ACCESS_TOKEN = "token";
+    process.env.X_ACCESS_SECRET = "token-secret";
+    process.env.X_INGRESS_SECRET = "ingress-secret-32-bytes-long!!!!";
+    const raw = JSON.stringify({ event_type: "dm.received" });
+    const request = new Request("https://agen.space/api/x/webhook", {
+      method: "POST",
+      headers: { "x-twitter-webhooks-signature": "sha256=not-from-x" },
+      body: raw,
+    });
+
+    expect(() => authoriseWebhook(request, raw)).toThrow(/not signed by X/);
   });
 });

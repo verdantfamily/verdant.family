@@ -97,11 +97,31 @@ export function tradeReply(result: XTradeResult): string {
  * ether is not mainnet ether, and a deposit sent to the wrong one is gone.
  */
 export function topUpReply(wallet: string, _balanceWei = 0n): string {
+  // The address goes in a DM, not a public tweet. X refuses raw 0x addresses on a newly
+  // authenticated bot's timeline — which is how an unfunded-buy reply vanished while the
+  // mention was handled. A DM is a conversation about their own wallet, so the address
+  // belongs there.
   return [
     "You don't have enough funds. Please deposit ETH (Robinhood Chain) to start trading.",
     "",
     wallet,
   ].join("\n");
+}
+
+/** Public ack when the real answer went to the inbox. */
+export function sentDmReply(): string {
+  return "Sent you a DM.";
+}
+
+/**
+ * When a DM reached the model and the model still had nothing to say.
+ *
+ * Public mentions may stay silent. A DM may not: they opened a chat, and an empty inbox
+ * after that is the bot looking dead. This is the floor, not the voice — the model should
+ * have answered; this is what they get if it did not.
+ */
+export function chatFallbackReply(): string {
+  return "what's up";
 }
 
 /**
@@ -192,9 +212,7 @@ function sentenceFor(code: XErrorCode): string | null {
       // reassurance that turned out to be wrong is worse than asking somebody to look.
       return "I couldn't confirm that trade. Check your wallet before trying it again.";
     case "NO_SOURCE_POST":
-      // Both ways of asking, because the person who hit this has done neither and there is no
-      // way to tell which one they meant.
-      return "Tell me what to launch — 'launch Internet Dog $IDOG' — or tag me under the post you want launched.";
+      return "name it — launch internet dog $IDOG — or tag me under the post.";
     case "SOURCE_UNAVAILABLE":
       return "Can't read the post above this one, so there's nothing to launch.";
     case "SOURCE_TOO_THIN":

@@ -16,6 +16,7 @@ import { fail, ok } from "../../../lib/x/http";
 import { ingestPostId, pollOnce } from "../../../lib/x/ingest";
 import { authorise } from "../../../lib/x/ingress";
 import { xStore } from "../../../lib/x/store";
+import { spendableWei } from "../../../lib/x/wallet";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,6 +26,26 @@ async function run(request: Request): Promise<Response> {
     authorise(request);
 
     const url = new URL(request.url);
+
+    // A support read, behind the same secret as the rest of this route: the deposit address of
+    // an X account's trading wallet, and what it holds. Read-only — it never creates a wallet —
+    // so an account with no wallet yet answers null rather than being given one. This exists
+    // because the address is only otherwise learnable from a reply the bot posts, and a person
+    // who deletes the tweet before that lands has no way back to it.
+    const walletId = url.searchParams.get("wallet")?.trim() ?? "";
+    if (/^\d{1,25}$/.test(walletId)) {
+      const row = xStore().walletFor(walletId);
+      if (row === null) return ok({ xUserId: walletId, wallet: null });
+      const funds = await spendableWei(row.address);
+      return ok({
+        xUserId: walletId,
+        wallet: row.address,
+        balanceWei: funds.balanceWei.toString(),
+        spendableWei: funds.spendableWei.toString(),
+        gasReserveWei: funds.gasReserveWei.toString(),
+      });
+    }
+
     const id = url.searchParams.get("id")?.trim() ?? "";
     if (/^\d{15,25}$/.test(id)) {
       const store = xStore();

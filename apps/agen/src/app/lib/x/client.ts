@@ -36,7 +36,7 @@ import {
   type XOauthCredentials,
 } from "./config";
 import { XError } from "./errors";
-import type { XAccount, XAuthor, XMedia, XPost } from "./types";
+import type { XAccount, XAuthor, XDirectMessage, XMedia, XPost } from "./types";
 
 const API = "https://api.x.com";
 
@@ -63,6 +63,16 @@ export interface XClient {
   search(query: string, limit: number): Promise<readonly XPost[]>;
   /** Reply to `inReplyToPostId`. Returns the new post's id. */
   reply(text: string, inReplyToPostId: string): Promise<string>;
+  /**
+   * Send a direct message. Returns the new event id.
+   *
+   * Trading lives here: a deposit address in a public reply is refused by X on a newly
+   * authenticated bot, and a fill is somebody's own money, not a thread. Optional on the
+   * interface so a test client that only launches does not have to pretend it can DM.
+   */
+  dm?(userId: string, text: string): Promise<string>;
+  /** Recent inbound DMs, newest first. Empty when the call is not available. */
+  dmEvents?(limit: number): Promise<readonly XDirectMessage[]>;
   /** Fetch an image's bytes, for storing as a token's logo. */
   media(url: string): Promise<ArrayBuffer>;
 
@@ -390,7 +400,7 @@ async function request(
   if (!response.ok) {
     // The body is X's, and it can quote the request back — including a user's text. Only
     // the status is kept, so a log line cannot become a place third-party prose lands.
-    throw new XError("X_UNAVAILABLE", `X refused ${what}.`, {
+    throw new XError("X_UNAVAILABLE", `X refused ${what} (${String(response.status)}).`, {
       // 5xx is X having a bad minute; 4xx is this request being wrong, and repeating it
       // produces the same answer while spending the window it was refused for.
       retryable: response.status >= 500,
@@ -682,6 +692,87 @@ class HttpXClient implements XClient {
       throw new XError("X_UNAVAILABLE", "X accepted the reply without saying where it is.");
     }
     return id;
+  }
+
+  async dm(userId: string, body: string): Promise<string> {
+    const credentials = writeCredentials();
+    if (credentials === null) {
+      throw new XError("CONFIG_MISSING", "The bot has no write credentials, so it cannot DM.");
+    }
+    if (!/^\d+$/.test(userId)) {
+      throw new XError("VALIDATION_FAILED", "That is not an X user id.");
+    }
+
+    const url = `${API}/2/dm_conversations/with/${userId}/messages`;
+    const answer = (await request(url, {
+      what: "sending a DM",
+      method: "POST",
+      headers: {
+        authorization: oauth1Header("POST", url, credentials),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ text: body }),
+    })) as { data?: { dm_event_id?: unknown; id?: unknown } };
+
+    const id = text(answer.data?.dm_event_id) ?? text(answer.data?.id);
+    if (id === null) {
+      throw new XError("X_UNAVAILABLE", "X accepted the DM without saying where it is.");
+    }
+    return id;
+  }
+
+  async dmEvents(limit: number): Promise<readonly XDirectMessage[]> {
+    const credentials = writeCredentials();
+    if (credentials === null) {
+      throw new XError("CONFIG_MISSING", "The bot has no write credentials, so it cannot read DMs.");
+    }
+
+    const url = new URL(`${API}/2/dm_events`);
+    url.searchParams.set("event_types", "MessageCreate");
+    url.searchParams.set("max_results", String(Math.min(Math.max(limit, 1), 100)));
+    url.searchParams.set("dm_event.fields", "id,text,event_type,sender_id,created_at");
+    url.searchParams.set("expansions", "sender_id");
+    url.searchParams.set("user.fields", USER_FIELDS);
+
+    const body = (await request(url.toString(), {
+      what: "reading DMs",
+      headers: { authorization: oauth1Header("GET", url.toString(), credentials) },
+    })) as {
+      data?: readonly {
+        readonly id?: unknown;
+        readonly text?: unknown;
+        readonly sender_id?: unknown;
+        readonly event_type?: unknown;
+      }[];
+      includes?: { readonly users?: readonly RawUser[] };
+    };
+
+    const users = new Map<string, XAuthor>();
+    for (const raw of body.includes?.users ?? []) {
+      const parsed = author(raw);
+      if (parsed.id !== "") users.set(parsed.id, parsed);
+    }
+
+    const self = botUserId();
+    const events: XDirectMessage[] = [];
+    for (const raw of body.data ?? []) {
+      const id = text(raw.id);
+      const senderId = text(raw.sender_id);
+      const message = text(raw.text);
+      if (id === null || senderId === null || message === null) continue;
+      if (self !== null && senderId === self) continue;
+      const sender = users.get(senderId) ?? {
+        id: senderId,
+        username: senderId,
+        name: "",
+        avatarUrl: null,
+        followers: null,
+        createdAt: null,
+        verified: false,
+      };
+      events.push({ id, text: message, sender });
+    }
+    return events;
   }
 
   async media(url: string): Promise<ArrayBuffer> {

@@ -95,7 +95,7 @@ const LAUNCH_PHRASES: readonly RegExp[] = [
   /\bmake (this|it|that) (in)?to? ?a? ?(token|coin)\b/i,
   /\bmake (this|it|that) a (token|coin)\b/i,
   /\bturn (this|it|that) into a (token|coin)\b/i,
-  /\bcreate a (token|coin)\b/i,
+  /\bcreat(?:e)? a (token|coin)\b/i,
   /\bsend it\b/i,
   /\bdeploy (this|it|that)\b/i,
 ];
@@ -114,6 +114,10 @@ const ASKS_ABOUT: readonly RegExp[] = [
   /\bexplain\b/i,
   /\bwho (is|are)\b/i,
   /\bwhen\b/i,
+  // Capability, not a command. "can you launch this?" is still a request; "can i launch
+  // it here?" is asking whether the chat can do it.
+  /\bcan i launch\b/i,
+  /\bshould i launch\b/i,
 ];
 
 /**
@@ -172,8 +176,9 @@ function findTicker(body: string): string | null {
   const explicit = /(?:^|\s)\$([A-Za-z][A-Za-z0-9]{0,10})\b/.exec(body);
   if (explicit !== null) return normaliseTicker(explicit[1]!);
 
-  // "ticker DOG", "symbol DOG" — stated without the sigil.
-  const named = /\b(?:ticker|symbol)\s+(?:is\s+)?\$?([A-Za-z][A-Za-z0-9]{0,10})\b/i.exec(body);
+  // "Ticker: LOUD", "Ticker - CNPYG", "ticker LOUD", "ticker is LOUD"
+  const named =
+    /\b(?:ticker|symbol)\s*(?:[-–—:]|is\b)?\s*\$?([A-Za-z][A-Za-z0-9]{0,10})\b/i.exec(body);
   return named === null ? null : normaliseTicker(named[1]!);
 }
 
@@ -186,6 +191,14 @@ function findTicker(body: string): string | null {
  * swallowed the ticker would be wrong in a way nobody could correct afterwards.
  */
 function findName(body: string): string | null {
+  // "Name: ROBINHOOD LOUD" / "Name - Canopy Games" — the form people paste when they list fields.
+  const labeled =
+    /\bname\s*[-–—:]\s*(.+?)(?=\s*(?:ticker|symbol|chain)\s*[-–—:]|[.\n]|$)/i.exec(body);
+  if (labeled !== null) {
+    const found = normaliseName(labeled[1]!.trim());
+    if (found !== null) return found;
+  }
+
   const called = /\b(?:call|name)\s+(?:it|this|that)\s+(.+?)(?=\s*\$|[.,!?\n]|$)/i.exec(body);
   if (called !== null) {
     const found = normaliseName(called[1]!);
@@ -208,7 +221,9 @@ function findName(body: string): string | null {
   }
 
   // "launch this as Internet Dog" — an `as` clause with no cashtag is naming, not tickering.
-  const asClause = /\b(?:launch|make|tokeni[sz]e)\b[^$]*?\bas\s+(?!\$)(.+?)(?=[.,!?\n]|$)/i.exec(
+  // Stops at a sentence end so "launch standard. use the same image as your pfp" cannot
+  // read "your pfp" as the name.
+  const asClause = /\b(?:launch|make|tokeni[sz]e)\b[^$.!?]*?\bas\s+(?!\$)(.+?)(?=[.,!?\n]|$)/i.exec(
     body,
   );
   if (asClause !== null) {
@@ -216,7 +231,84 @@ function findName(body: string): string | null {
     if (found !== null) return found;
   }
 
+  // "launch Dog" — a name with no ticker. The other half is filled in by tickerFromName.
+  // "this" / "standard" / "a token" are not names.
+  const alone =
+    /\b(?:launch|tokeni[sz]e)\s+(?!this\b|it\b|that\b|standard\b|a\b|an\b|the\b|now\b|please\b|\$)(.+?)(?=\s*\$|\s+(?:with|and|but|using|use|for|please|pls|from)|[.,!?\n]|$)/i.exec(
+      body,
+    );
+  if (alone !== null) {
+    const found = normaliseName(alone[1]!);
+    if (found !== null) return found;
+  }
+
   return null;
+}
+
+/**
+ * A ticker made out of a name, when they only said the name.
+ *
+ * "launch Dog" has already named the token. Inventing a different ticker would be the bot
+ * refusing a complete request. Letters and numbers only, upper case, cut to the contract bound.
+ */
+export function tickerFromName(name: string): string | null {
+  const squeezed = name.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  if (squeezed === "") return null;
+  return normaliseTicker(squeezed.slice(0, BOUNDS.token.symbolLength.max));
+}
+
+/**
+ * A name made out of a ticker, when they only said the ticker.
+ *
+ * `Cat` rather than `CAT`: a name is prose and a ticker is a symbol.
+ */
+export function nameFromTicker(ticker: string): string | null {
+  const cleaned = ticker.replace(/^\$/, "");
+  if (cleaned === "") return null;
+  return normaliseName(cleaned.charAt(0) + cleaned.slice(1).toLowerCase());
+}
+
+/** They asked to use this account's picture as the logo. */
+export function wantsBotImage(text: string): boolean {
+  return (
+    /\b(?:your|ur)\s+(?:pfp|avatar|profile(?:\s*(?:pic|picture|photo|image))?)\b/i.test(text) ||
+    /\b(?:same|the)\s+(?:image|pic|picture|photo)\s+as\s+your\b/i.test(text) ||
+    /\buseagen'?s\s+(?:pfp|avatar|picture|photo)\b/i.test(text)
+  );
+}
+
+/**
+ * "ok launch", "that's fine launch standard", "go ahead" — a go on a token already named
+ * in the thread, not a token called Standard.
+ */
+export function isLaunchGoAhead(body: string): boolean {
+  if (/\b(?:launch standard|go ahead|do it|lfg)\b/i.test(body)) return true;
+  if (/\bok(?:ay)?\b.{0,48}\blaunch\b/i.test(body)) return true;
+  if (/\bthat'?s fine\b.{0,48}\blaunch\b/i.test(body)) return true;
+  return false;
+}
+
+/**
+ * Name and ticker stated across one or more posts, with the missing half filled in.
+ *
+ * Command first, then whatever they already said in the thread. One of the two is enough:
+ * the other is derived from it rather than asked for.
+ */
+export function collectLaunchIdentity(
+  texts: readonly string[],
+  handle: string,
+): { readonly name: string | null; readonly ticker: string | null } {
+  let name: string | null = null;
+  let ticker: string | null = null;
+  for (const text of texts) {
+    const parsed = parseCommand(text, handle);
+    name ??= parsed.explicitName;
+    ticker ??= parsed.explicitTicker;
+    if (name !== null && ticker !== null) break;
+  }
+  if (name === null && ticker !== null) name = nameFromTicker(ticker);
+  if (ticker === null && name !== null) ticker = tickerFromName(name);
+  return { name, ticker };
 }
 
 /**
@@ -435,7 +527,17 @@ export function parseCommand(text: string, handle: string, context = ""): Parsed
 
   const asks = ASKS_ABOUT.some((pattern) => pattern.test(body));
   const commands = LAUNCH_PHRASES.some((pattern) => pattern.test(body));
-  const looksLikeLaunch = commands && !asks;
+  // "i wanted to launch a token" is intent, not a command. A launch hint needs a target —
+  // this/it/that, a name or ticker, or the sentence actually starting with the verb.
+  const targeted =
+    findTicker(body) !== null ||
+    findName(body) !== null ||
+    /\bcreat(?:e)? a (?:token|coin)\b/i.test(body) ||
+    /\b(?:this|it|that)\b/i.test(body) ||
+    /^(?:please\s+)?(?:just\s+)?(?:launch|tokeni[sz]e|send it|deploy)\b/i.test(body);
+  const listed = findTicker(body) !== null && findName(body) !== null;
+  const looksLikeLaunch =
+    ((commands && targeted) || listed || isLaunchGoAhead(body)) && !asks;
 
   return {
     body,

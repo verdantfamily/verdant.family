@@ -48,7 +48,8 @@ import {
   type Derived,
   type InstantDraft,
 } from "../instant";
-import { normaliseName, normaliseTicker } from "./command";
+import { nameFromTicker, normaliseName, normaliseTicker, tickerFromName, wantsBotImage } from "./command";
+import { botUsername } from "./config";
 import { xClient, type XClient } from "./client";
 import { XError } from "./errors";
 import { launchSubject } from "./guards";
@@ -137,6 +138,19 @@ export function subjectIsUsable(
 async function findLogo(mention: XMention, client: XClient): Promise<string> {
   const candidates: string[] = [];
 
+  const askedForOurs =
+    wantsBotImage(mention.command.text) || wantsBotImage(mention.source?.text ?? "");
+  if (askedForOurs && typeof client.account === "function") {
+    try {
+      const ours = await client.account(botUsername());
+      if (ours?.avatarUrl !== null && ours?.avatarUrl !== undefined) {
+        candidates.push(ours.avatarUrl);
+      }
+    } catch {
+      // Looking up our own picture is a preference. The rest of the list still runs.
+    }
+  }
+
   for (const item of mention.source?.media ?? []) {
     if (item.url !== null) candidates.push(item.url);
   }
@@ -186,8 +200,7 @@ async function findLogo(mention: XMention, client: XClient): Promise<string> {
  * shows both and shouting in one of them looks like a mistake.
  */
 function nameFrom(ticker: string | null): string | null {
-  if (ticker === null) return null;
-  return normaliseName(ticker.charAt(0) + ticker.slice(1).toLowerCase());
+  return ticker === null ? null : nameFromTicker(ticker);
 }
 
 /**
@@ -240,13 +253,13 @@ export async function prepareLaunch(
   // again is two microseconds against an irreversible transaction: this is the last function
   // between a model's string and a token's name, and it should not be the one that assumes
   // somebody upstream checked.
-  const ticker = normaliseTicker(routed.token.ticker);
-  // A missing name falls back to the ticker; a name that was proposed and cannot be honoured does
-  // not. The two are different failures: nothing was named in the first, and in the second
-  // something was, so launching under a different name would be launching something adjacent to
-  // what was asked for.
+  let ticker = normaliseTicker(routed.token.ticker);
+  // One of the two is enough. A missing name is the ticker in prose; a missing ticker is the
+  // name squeezed into a symbol. A name that *was* proposed and does not fit is still a
+  // refusal — substituting a different one would launch something adjacent to the request.
   const proposed = routed.token.name.trim();
   const name = proposed === "" ? nameFrom(ticker) : normaliseName(proposed);
+  if (ticker === null && name !== null) ticker = tickerFromName(name);
 
   if (name === null || ticker === null) {
     throw new XError("GENERATION_FAILED", "I could not come up with a valid name and ticker.", {

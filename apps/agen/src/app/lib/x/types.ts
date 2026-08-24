@@ -59,6 +59,13 @@ export interface XMedia {
   readonly altText: string | null;
 }
 
+/** One inbound DM, already reduced to what the engine needs. */
+export interface XDirectMessage {
+  readonly id: string;
+  readonly text: string;
+  readonly sender: XAuthor;
+}
+
 export interface XPost {
   readonly id: string;
   readonly text: string;
@@ -84,6 +91,14 @@ export interface XPost {
 export interface XMention {
   /** The post containing the mention. The idempotency key for everything downstream. */
   readonly command: XPost;
+  /**
+   * Where this request arrived.
+   *
+   * Tweets stay public for launches and answers. Money — a buy, a sell, a wallet, a top-up —
+   * is a DM, because X refuses raw deposit addresses on a new bot's timeline and because a
+   * trade is a conversation about somebody's own ether, not a thread.
+   */
+  readonly via?: "tweet" | "dm";
   readonly source: XPost | null;
   /** A quoted post on the command or the source, when one was fetched. */
   readonly quoted?: XPost | null;

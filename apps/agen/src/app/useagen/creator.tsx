@@ -67,6 +67,10 @@ interface View {
     readonly earnedWei: string;
     readonly claimableWei: string;
   };
+  readonly wallet: {
+    readonly address: string;
+    readonly ethWei: string;
+  } | null;
 }
 
 /** Four significant figures of ether, the same as the wallet-side claims list. */
@@ -163,6 +167,14 @@ export function Creator() {
         <h2>Your launches</h2>
         <span className="ax-tag">@{view.identity.xUsername}</span>
       </div>
+
+      {view.wallet !== null ? (
+        <p className="ax-claim-note">
+          Trading wallet on Robinhood Chain: <code>{view.wallet.address}</code>
+          <br />
+          {ether(view.wallet.ethWei)} {chain.nativeCurrency.symbol} · send ETH here, then buy from X.
+        </p>
+      ) : null}
 
       {view.launches.length === 0 ? (
         <p className="ax-claim-note">

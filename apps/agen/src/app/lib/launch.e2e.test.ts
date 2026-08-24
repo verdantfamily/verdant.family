@@ -113,7 +113,15 @@ async function clearedBuilds(): Promise<readonly GenerationJob[]> {
       .then((raw) => JSON.parse(raw) as GenerationJob)
       .catch(() => null);
 
-    if (job === null || job.stage !== "deployment_ready" || job.manifest === null) continue;
+    if (
+      job === null ||
+      job.stage !== "deployment_ready" ||
+      job.manifest === null ||
+      job.semanticCoverage?.complete !== true ||
+      job.approval?.approvedBy.toLowerCase() !== creator.address.toLowerCase()
+    ) {
+      continue;
+    }
 
     // The compiled bundle has to still be there; jobs outlive their artefacts.
     const built = await readFile(resolve(GENERATED_ROOT, job.id, "artifacts", "build.json"), "utf8")

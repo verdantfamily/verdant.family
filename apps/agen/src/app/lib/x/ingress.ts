@@ -13,9 +13,9 @@ import "server-only";
  * wrong and a tedious thing to discover.
  */
 
-import { timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
-import { ingressSecret } from "./config";
+import { ingressSecret, writeCredentials } from "./config";
 import { XError } from "./errors";
 
 /** The presented secret matches the configured one. Length-checked first, as `timingSafeEqual` requires. */
@@ -39,4 +39,38 @@ export function authorise(request: Request): void {
   if (left.length !== right.length || !timingSafeEqual(left, right)) {
     throw new XError("UNAUTHENTICATED", "That is not the ingress secret.");
   }
+}
+
+/**
+ * A webhook POST is either us (ingress secret) or X (HMAC of the raw body).
+ *
+ * X will never send `Authorization: Bearer $X_INGRESS_SECRET`. Requiring that is how a
+ * webhook can show Valid in the portal — CRC is a GET — and still drop every event. The
+ * signature is HMAC-SHA256 of the raw body, keyed with the app consumer secret, prefixed
+ * `sha256=`, in `x-twitter-webhooks-signature`.
+ */
+export function authoriseWebhook(request: Request, rawBody: string): void {
+  const signature =
+    request.headers.get("x-twitter-webhooks-signature") ??
+    request.headers.get("x-webhook-signature");
+  const credentials = writeCredentials();
+  if (signature !== null && credentials !== null && signedByX(rawBody, signature, credentials.apiSecret)) {
+    return;
+  }
+
+  try {
+    authorise(request);
+  } catch (error) {
+    if (error instanceof XError && error.code === "UNAUTHENTICATED") {
+      throw new XError("UNAUTHENTICATED", "That webhook was not signed by X and is not the ingress secret.");
+    }
+    throw error;
+  }
+}
+
+function signedByX(rawBody: string, header: string, consumerSecret: string): boolean {
+  const expected = `sha256=${createHmac("sha256", consumerSecret).update(rawBody).digest("base64")}`;
+  const left = Buffer.from(header);
+  const right = Buffer.from(expected);
+  return left.length === right.length && timingSafeEqual(left, right);
 }

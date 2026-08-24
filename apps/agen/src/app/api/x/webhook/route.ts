@@ -25,8 +25,8 @@ import { createHmac, createHash } from "node:crypto";
 import { ingressSecret, writeCredentials } from "../../../lib/x/config";
 import { XError } from "../../../lib/x/errors";
 import { fail, ok } from "../../../lib/x/http";
-import { ingestPostId, postIdsFrom } from "../../../lib/x/ingest";
-import { authorise } from "../../../lib/x/ingress";
+import { ingestDirectMessage, ingestPostId, dmsFrom, postIdsFrom } from "../../../lib/x/ingest";
+import { authoriseWebhook } from "../../../lib/x/ingress";
 import { xStore } from "../../../lib/x/store";
 
 export const runtime = "nodejs";
@@ -61,9 +61,8 @@ export async function GET(request: Request): Promise<Response> {
 
 export async function POST(request: Request): Promise<Response> {
   try {
-    authorise(request);
-
     const raw = await request.text();
+    authoriseWebhook(request, raw);
     const store = xStore();
 
     // The envelope, by content hash. A redelivery of the same bytes stops here.
@@ -79,14 +78,28 @@ export async function POST(request: Request): Promise<Response> {
       throw new XError("VALIDATION_FAILED", "That delivery was not JSON.");
     }
 
-    const ids = postIdsFrom(payload).slice(0, MAX_PER_DELIVERY);
+    const messages = dmsFrom(payload).slice(0, MAX_PER_DELIVERY);
     const outcomes = [];
-    for (const id of ids) {
-      const outcome = await ingestPostId(id, { store });
-      if (outcome !== null) outcomes.push({ id, ...outcome });
+    for (const message of messages) {
+      const outcome = await ingestDirectMessage(message, { store });
+      if (outcome !== null) {
+        console.info(`[x] webhook dm:${message.id} @${message.sender.username} -> ${outcome.outcome}`);
+        outcomes.push({ id: message.id, via: "dm", ...outcome });
+      }
     }
 
-    return ok({ duplicate: false, seen: ids.length, handled: outcomes.length, outcomes });
+    const ids = postIdsFrom(payload).slice(0, MAX_PER_DELIVERY);
+    for (const id of ids) {
+      const outcome = await ingestPostId(id, { store });
+      if (outcome !== null) outcomes.push({ id, via: "tweet", ...outcome });
+    }
+
+    return ok({
+      duplicate: false,
+      seen: messages.length + ids.length,
+      handled: outcomes.length,
+      outcomes,
+    });
   } catch (error) {
     return fail(error);
   }

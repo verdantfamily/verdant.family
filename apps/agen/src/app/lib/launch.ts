@@ -38,7 +38,9 @@ import type {
   GenerationJob,
 } from "@verdant/market-compiler";
 import {
+  approvalMessage,
   assembleManifest,
+  hashSpecification,
   initialTickProblem,
   ManifestError,
   marketSaltFor,
@@ -47,7 +49,7 @@ import {
 } from "@verdant/market-compiler";
 import { agen } from "@verdant/sdk";
 import { AGEN_LAUNCH } from "@verdant/config";
-import { getAddress, isAddress, type Address, type Hex } from "viem";
+import { getAddress, isAddress, verifyMessage, type Address, type Hex } from "viem";
 
 import { AGEN_ADDRESSES, AGEN_ROUTER, EXTERNAL } from "./chain";
 import { GENERATED_ROOT, jobStore } from "./builds";
@@ -176,7 +178,6 @@ export async function prepareLaunch(request: LaunchRequest): Promise<PreparedLau
   if (job.plan === null) {
     throw new LaunchError("This build has no architecture to deploy.", 409);
   }
-
   /**
    * A build cleared before the deployment specification existed.
    *
@@ -194,9 +195,53 @@ export async function prepareLaunch(request: LaunchRequest): Promise<PreparedLau
       409,
     );
   }
+  if (
+    job.specification === null ||
+    job.intent === null ||
+    job.intent === undefined ||
+    job.semanticCoverage?.complete !== true
+  ) {
+    throw new LaunchError(
+      "This build does not carry complete semantic proof, so it cannot be launched.",
+      409,
+    );
+  }
 
   const creator = address(request.creator, "The connected wallet");
   const feeReceiver = address(request.feeReceiver, "The fee receiver");
+
+  const approval = job.approval;
+  const intentHash = hashSpecification(job.intent);
+  const approvalMatches =
+    approval !== null &&
+    approval !== undefined &&
+    approval.specificationVersion === job.specification.version &&
+    approval.specificationHash === job.manifest.specificationHash &&
+    approval.implementationHash === job.manifest.implementationHash &&
+    approval.intentHash === intentHash &&
+    approval.approvedBy.toLowerCase() === creator.toLowerCase();
+  if (!approvalMatches) {
+    throw new LaunchError(
+      "Review and approve this exact specification and implementation with the connected wallet before launching.",
+      409,
+    );
+  }
+
+  const approved = await verifyMessage({
+    address: creator,
+    message: approvalMessage({
+      jobId: job.id,
+      specificationVersion: job.specification.version,
+      specificationHash: job.manifest.specificationHash,
+      implementationHash: job.manifest.implementationHash,
+      intentHash,
+      creator,
+    }),
+    signature: approval.signature,
+  }).catch(() => false);
+  if (!approved) {
+    throw new LaunchError("The stored approval does not verify for this exact build.", 409);
+  }
 
   /**
    * The launch buys nothing. The creator's opening buy is a second transaction.

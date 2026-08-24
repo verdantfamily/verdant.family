@@ -227,7 +227,6 @@ function remainingFor(job: PublicJob, nowSeconds: number): string {
 }
 
 export function Progress({ job }: { readonly job: PublicJob }) {
-  const failedAt = job.failure?.stage;
   const preparing = job.queue !== null;
 
   const planned = job.plan?.components.length ?? null;
@@ -341,7 +340,7 @@ export function Progress({ job }: { readonly job: PublicJob }) {
         <Clarify job={job} />
       </div>
 
-      {job.failure === null ? null : <Failed failure={job.failure} failedAt={failedAt} />}
+      {job.failure === null ? null : <Failed failure={job.failure} />}
     </div>
   );
 }
@@ -349,22 +348,12 @@ export function Progress({ job }: { readonly job: PublicJob }) {
 /**
  * A build that did not finish, explained rather than reported.
  *
- * The failure code, the stage and the compiler's own words all used to be the first three
- * things on this screen. They are all still here and none of them is first: what a
- * creator needs from a red screen is what happened, whether it was their fault, and what
- * to do — in that order, in sentences. The evidence sits underneath for the one reader in
- * fifty who wants it, which is the right ratio for a phrase like "ManagerLocked".
+ * Compiler output used to sit behind a disclosure. Creators opened it, and a
+ * reserved keyword became the thing they thought was wrong with their token.
+ * The failure record still holds the diagnostics; this screen does not.
  */
-function Failed({
-  failure,
-  failedAt,
-}: {
-  readonly failure: NonNullable<PublicJob["failure"]>;
-  readonly failedAt: string | undefined;
-}) {
+function Failed({ failure }: { readonly failure: NonNullable<PublicJob["failure"]> }) {
   const blocker = blockerFor(failure);
-  const diagnostics = failure.diagnostics ?? [];
-  const failingTests = failure.failingTests ?? [];
 
   return (
     <div className="failure">
@@ -375,39 +364,6 @@ function Failed({
       {/* Only where a person genuinely has to decide something. A question under a
           failure Agen caused itself reads as blame. */}
       {blocker.ask === null ? null : <p className="failure-ask">{blocker.ask}</p>}
-
-      <details className="failure-diagnostics">
-        <summary>Technical details</summary>
-        <pre>
-          {[
-            failure.code.toLowerCase().replaceAll("_", " "),
-            ...(failedAt === undefined ? [] : [`stopped at ${failedAt.replaceAll("_", " ")}`]),
-            "",
-            failure.detail,
-            ...(diagnostics.length === 0
-              ? []
-              : [
-                  "",
-                  ...diagnostics
-                    .slice(0, 6)
-                    .map(
-                      (diagnostic) =>
-                        `${diagnostic.file ?? ""}${
-                          diagnostic.line === null ? "" : `:${String(diagnostic.line)}`
-                        } ${diagnostic.message}`,
-                    ),
-                ]),
-            ...(failingTests.length === 0
-              ? []
-              : [
-                  "",
-                  ...failingTests.map(
-                    (test) => `${test.name}\n  ${test.reason ?? "no reason given"}`,
-                  ),
-                ]),
-          ].join("\n")}
-        </pre>
-      </details>
     </div>
   );
 }

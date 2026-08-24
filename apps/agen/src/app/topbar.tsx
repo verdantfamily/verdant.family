@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { Wallet } from "./wallet";
 
@@ -10,6 +11,7 @@ const LINKS: readonly { readonly href: string; readonly label: string; readonly 
   { href: "/", label: "Explore", key: "explore" },
   { href: "/agents", label: "Agents", key: "agents" },
   { href: "/launch", label: "Create", key: "create" },
+  { href: "/useagen", label: "UseAgen", key: "useagen" },
   { href: "/metrics", label: "Metrics", key: "metrics" },
   { href: "/profile", label: "Profile", key: "profile" },
 ];
@@ -23,19 +25,41 @@ const LINKS: readonly { readonly href: string; readonly label: string; readonly 
  *
  * ## Below the fold of a phone
  *
- * Five links, a mark and an address do not fit across 390 pixels, and the arrangements
+ * Six links, a mark and an address do not fit across 390 pixels, and the arrangements
  * that make them fit are all worse than not trying: shrinking the type below its floor,
  * or dropping links until the bar is no longer navigation. So under 780px the links move
  * into a sheet behind a button, and the bar keeps only the mark, the wallet and the way
  * in — which is the one layout that stays legible at every width.
+ *
+ * That sheet is rendered into the body rather than here beside the bar. The bar lives on
+ * the plate, the plate isolates its stacking context to keep its own blurred decoration
+ * behind its type, and inside an isolated context the sheet's `z-index` is only a
+ * position among the plate's children — the sections below the plate went on painting
+ * over an open menu. A menu that covers the page has to be a child of the page.
  */
 export function TopBar({
   active,
 }: {
-  readonly active?: "explore" | "agents" | "create" | "metrics" | "profile" | "docs" | undefined;
+  readonly active?:
+    | "explore"
+    | "agents"
+    | "create"
+    | "useagen"
+    | "metrics"
+    | "profile"
+    | "docs"
+    | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const path = usePathname();
+
+  // There is no body to render the sheet into until the client has it, so the first paint
+  // omits it and the effect below adds it. It carries no content that has to be in the
+  // markup a crawler reads — the same links are already in the bar.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // A route change closes it. Next keeps this component mounted across a client
   // navigation, so without this the sheet would still be covering the page it just
@@ -105,41 +129,52 @@ export function TopBar({
         </div>
       </header>
 
-      {/*
-        Rendered always rather than mounted on open, so the sheet can animate both ways.
-        A panel that only exists while open has nothing to animate out from, and closing
-        it would be a disappearance.
-      */}
-      <div
-        className={open ? "ax-scrim ax-scrim-on" : "ax-scrim"}
-        aria-hidden="true"
-        onClick={() => {
-          setOpen(false);
-        }}
-      />
+      {mounted
+        ? createPortal(
+            <>
+              {/*
+                Rendered always rather than mounted on open, so the sheet can animate both
+                ways. A panel that only exists while open has nothing to animate out from,
+                and closing it would be a disappearance.
+              */}
+              <div
+                className={open ? "ax-scrim ax-scrim-on" : "ax-scrim"}
+                aria-hidden="true"
+                onClick={() => {
+                  setOpen(false);
+                }}
+              />
 
-      <div id="ax-menu" className={open ? "ax-sheet ax-sheet-on" : "ax-sheet"} hidden={!open}>
-        <nav aria-label="sections">
-          {LINKS.map((link, index) => (
-            <Link
-              key={link.key}
-              href={link.href}
-              className={active === link.key ? "on" : ""}
-              style={{ ["--i" as string]: String(index) }}
-            >
-              {link.label}
-            </Link>
-          ))}
-          <a
-            href="https://x.com/agendotspace"
-            target="_blank"
-            rel="noreferrer"
-            style={{ ["--i" as string]: String(LINKS.length) }}
-          >
-            Docs
-          </a>
-        </nav>
-      </div>
+              <div
+                id="ax-menu"
+                className={open ? "ax-sheet ax-sheet-on" : "ax-sheet"}
+                hidden={!open}
+              >
+                <nav aria-label="sections">
+                  {LINKS.map((link, index) => (
+                    <Link
+                      key={link.key}
+                      href={link.href}
+                      className={active === link.key ? "on" : ""}
+                      style={{ ["--i" as string]: String(index) }}
+                    >
+                      {link.label}
+                    </Link>
+                  ))}
+                  <a
+                    href="https://x.com/agendotspace"
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ ["--i" as string]: String(LINKS.length) }}
+                  >
+                    Docs
+                  </a>
+                </nav>
+              </div>
+            </>,
+            document.body,
+          )
+        : null}
     </>
   );
 }

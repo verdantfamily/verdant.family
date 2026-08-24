@@ -4,7 +4,7 @@ import { Bloom } from "../bloom";
 import { SiteFooter } from "../footer";
 import { ethUsd } from "../lib/eth-price";
 import { DASH, count, eth, tokens, usdCompact } from "../lib/format";
-import { fetchInstantMetrics, instantFeedConfigured } from "../lib/instant-feed";
+import { fetchInstantMetrics, fetchInstantSync, instantFeedConfigured } from "../lib/instant-feed";
 import { INSTANT_FEE_PERCENTS } from "../lib/instant";
 
 export const dynamic = "force-dynamic";
@@ -77,7 +77,21 @@ function Stat({
  * than a total that quietly stopped being one.
  */
 export default async function Metrics() {
-  const [metrics, usdPerEth] = await Promise.all([fetchInstantMetrics(), ethUsd()]);
+  const [metrics, usdPerEth, sync] = await Promise.all([
+    fetchInstantMetrics(),
+    ethUsd(),
+    fetchInstantSync(),
+  ]);
+
+  /**
+   * Whether what follows is a total or a subtotal.
+   *
+   * Only a positive "backfilling" counts. A feed that would not say goes on being presented
+   * as complete, because captioning every figure on the page as possibly-partial whenever
+   * one extra request timed out would retract the numbers far more often than they are
+   * actually wrong.
+   */
+  const partial = sync === "backfilling";
 
   /** Ether with a dollar line under it, where a rate was available. */
   const money = (wei: bigint): { value: string; note: string | undefined } => {
@@ -101,7 +115,7 @@ export default async function Metrics() {
 
   return (
     <div className="ax-page">
-      <Bloom active="metrics" centred>
+      <Bloom active="metrics" photo="profilebg" centred>
         <h1>Metrics</h1>
         <p>
           Every figure here is summed from events the chain emitted — fees as each market&rsquo;s
@@ -123,6 +137,17 @@ export default async function Metrics() {
           </section>
         ) : (
           <>
+            {!partial ? null : (
+              <p className="ax-mx-syncing ax-reveal">
+                <strong>These are subtotals, not totals.</strong> The indexer is replaying the
+                chain from Instant&rsquo;s first block, and every figure below is summed over the
+                trades it has written so far. They are rising as it catches up, so a volume or a
+                fee total read now is lower than the real one — not because anything was lost,
+                but because it has not been counted back in yet. Nothing here is missing
+                permanently, and no action is needed.
+              </p>
+            )}
+
             <section className="ax-section ax-reveal">
               <div className="ax-section-head">
                 <h2>Volume</h2>
@@ -131,7 +156,9 @@ export default async function Metrics() {
 
               <div className="ax-mx" style={{ marginTop: "22px" }}>
                 <Stat
-                  label="Total volume"
+                  // Labelled on the card as well as in the banner above, because a headline
+                  // figure gets read, quoted and screenshotted on its own.
+                  label={partial ? "Total volume so far" : "Total volume"}
                   value={volume?.value ?? DASH}
                   note={volume?.note}
                   strong
@@ -162,7 +189,7 @@ export default async function Metrics() {
 
               <div className="ax-mx" style={{ marginTop: "22px" }}>
                 <Stat
-                  label="Fees generated"
+                  label={partial ? "Fees generated so far" : "Fees generated"}
                   value={feesTotal?.value ?? DASH}
                   note={feesTotal?.note}
                   strong

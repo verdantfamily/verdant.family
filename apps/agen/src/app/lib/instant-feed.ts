@@ -85,6 +85,50 @@ async function ask<T>(
   }
 }
 
+/**
+ * Whether the indexer has finished replaying history, or is still doing it.
+ *
+ * `null` for every way the question cannot be answered — no feed configured, a refusal, a
+ * timeout — because a caller that cannot learn the answer must not act as though it heard
+ * "complete".
+ */
+export type InstantFeedSync = "complete" | "backfilling";
+
+/**
+ * How far along the indexer is, which is the difference between a total and a subtotal.
+ *
+ * Every aggregate this module serves is a `SUM` over whatever rows the indexer has written
+ * so far, so a feed that is mid-backfill answers `/instant/metrics` with numbers that are
+ * correct arithmetic over incomplete data. They rise as it catches up. Nothing in the body
+ * says so, which is what makes this worth a second request: a reader looking at a figure
+ * labelled "total volume" cannot tell 82 ETH on a half-replayed database from 82 ETH on a
+ * finished one, and the page would report the launchpad had shrunk.
+ *
+ * The indexer's own `/ready` is the authority — Ponder answers it 200 once historical
+ * indexing is complete and 503 until then — rather than a heuristic here comparing a
+ * block height to a chain tip. A 503 is the *expected* answer during a backfill and is
+ * why this cannot go through `ask`, which collapses every non-2xx into `null`.
+ *
+ * This happens on ordinary deploys, not only on incidents: a change to the schema or the
+ * config gives Ponder a new build id, and a new build id replays from the start block into
+ * a fresh namespace.
+ */
+export async function fetchInstantSync(): Promise<InstantFeedSync | null> {
+  if (!instantFeedConfigured) return null;
+
+  try {
+    const response = await fetch(`${INSTANT_FEED_URL}/ready`, {
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      next: { revalidate: REVALIDATE_SECONDS },
+    });
+
+    if (response.status === 503) return "backfilling";
+    return response.ok ? "complete" : null;
+  } catch {
+    return null;
+  }
+}
+
 interface RawCandles {
   readonly interval: candles.CandleInterval;
   readonly seconds: number;

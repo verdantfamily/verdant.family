@@ -451,6 +451,8 @@ export const EXTERNAL = {
   universalRouter: EXTERNAL_ADDRESSES.universalRouter as Address,
   permit2: EXTERNAL_ADDRESSES.permit2 as Address,
   stateView: EXTERNAL_ADDRESSES.stateView as Address,
+  /** The ERC-721 that holds every v4 position. Liquidity is minted and burned through it. */
+  positionManager: EXTERNAL_ADDRESSES.positionManager as Address,
 } as const;
 
 export function shortAddress(address: string): string {

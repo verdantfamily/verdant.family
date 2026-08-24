@@ -39,7 +39,7 @@ export default function UseAgen() {
 
   return (
     <div className="ax-page">
-      <Bloom centred>
+      <Bloom active="useagen" photo="profilebg" centred>
         <h1>A tweet is enough</h1>
         <p>
           Reply to any post on X with <strong>@{handle} launch this</strong>. Agen reads the post,

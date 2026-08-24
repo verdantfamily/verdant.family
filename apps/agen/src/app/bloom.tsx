@@ -16,8 +16,14 @@ import { TopBar } from "./topbar";
  * that makes a background feel alive rather than looped. It costs no image and no
  * JavaScript.
  *
- * The front page's photograph is deliberately not reused for either: a hero image
- * repeated on four screens stops being an image and becomes wallpaper.
+ * The front page's photograph is deliberately not reused for either: the cover is the one
+ * picture that should mean *this is agen*, and a hero repeated behind every heading stops
+ * being an image and becomes wallpaper.
+ *
+ * The dusk meadow is shared, though, by the three screens about your own side of the
+ * product — your profile, what the markets earned, and launching from X. One photograph
+ * across those is not repetition but a family: arriving at any of them should feel like
+ * having stayed in the same place rather than having been handed to another product.
  */
 export function Bloom({
   active,
@@ -25,7 +31,15 @@ export function Bloom({
   centred = false,
   children,
 }: {
-  readonly active?: "explore" | "agents" | "create" | "metrics" | "profile" | "docs" | undefined;
+  readonly active?:
+    | "explore"
+    | "agents"
+    | "create"
+    | "useagen"
+    | "metrics"
+    | "profile"
+    | "docs"
+    | undefined;
   /** A basename in `public/`, which must exist as `.avif`, `.webp` and `.jpg`. */
   readonly photo?: string | undefined;
   readonly centred?: boolean;

@@ -24,6 +24,22 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: resolve(here, "../.."),
   typescript: { ignoreBuildErrors: false },
   eslint: { ignoreDuringBuilds: false },
+
+  /*
+   * Required at runtime rather than bundled, which is what makes `next dev` work at all.
+   *
+   * The compiler shells out to `forge`, so it imports `node:child_process`. Dev-mode webpack
+   * has no plugin for the `node:` scheme and fails the module outright — and because
+   * `instrumentation.ts` reaches it through `instant-markets` -> `builds.ts`, that failure
+   * happened at server boot and every route answered 500. The production build did not care,
+   * which is the worst version of this: dev was broken while the deployed site was fine, so
+   * nothing about the failure suggested a config problem.
+   *
+   * Listing it here is not a workaround for a bad import. It is the correct description of the
+   * package: it reads and writes the filesystem and spawns a subprocess, so it can only ever
+   * run in Node and there is nothing for a bundler to usefully do with it.
+   */
+  serverExternalPackages: ["@verdant/market-compiler"],
 };
 
 export default nextConfig;

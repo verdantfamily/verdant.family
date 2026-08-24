@@ -106,6 +106,18 @@ export function contextFromMention(mention: XMention): AgenContext {
   const parsed = parseCommand(mention.command.text, botUsername());
   const blocks: ContextBlock[] = [];
 
+  if (mention.via === "dm") {
+    // Public mentions may go unanswered — a bot that replies "i did not understand" to
+    // every @ is the one that gets muted. A DM is a conversation they started. Silence
+    // there is a broken product, not restraint.
+    blocks.push({
+      label: "CHANNEL",
+      body:
+        "Private direct message. This is a 1:1 chat. Always reply. Never silence. You can launch from here if they name the token. Answer the question they asked. Do not paste a how-to. Do not repeat yourself.",
+      trust: "system",
+    });
+  }
+
   blocks.push({
     label: "COMMAND POST",
     body: describePost(mention.command),
@@ -151,8 +163,11 @@ export function contextFromMention(mention: XMention): AgenContext {
 
   const images = imagesFrom(mention);
 
+  const facts = describeRefs(refs);
+  if (mention.via === "dm") facts.channel = "private dm — always reply";
+
   return {
-    surface: "x",
+    surface: mention.via === "dm" ? "x-dm" : "x",
     question: parsed.body,
     asker: {
       handle: mention.command.author.username,
@@ -162,7 +177,7 @@ export function contextFromMention(mention: XMention): AgenContext {
     // Captions stay in the blocks even when the picture itself is attached. The two are different
     // evidence: one is what the author says it shows, the other is what it shows.
     ...(images.length === 0 ? {} : { images }),
-    facts: describeRefs(refs),
+    facts,
   };
 }
 

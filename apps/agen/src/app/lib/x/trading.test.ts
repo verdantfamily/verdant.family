@@ -252,7 +252,6 @@ describe("buying from a post", () => {
     expect(error.code).toBe("WALLET_UNFUNDED");
 
     const wallet = store.walletFor("770077");
-    // The reply the brief asks for, addressed to the wallet the person was just given.
     expect(refusalReply(error)).toBe(
       [
         "You don't have enough funds. Please deposit ETH (Robinhood Chain) to start trading.",

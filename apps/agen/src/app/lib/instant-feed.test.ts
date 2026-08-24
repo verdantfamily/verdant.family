@@ -180,3 +180,80 @@ describe("platform metrics", () => {
     expect(asked).toEqual([`${FEED}/instant/metrics`]);
   });
 });
+
+/**
+ * The readiness probe, which is what stops a subtotal being published as a total.
+ *
+ * Worth its own tests because the interesting case is a status code that every other route
+ * here treats as failure: 503 is `/ready`'s normal answer during a backfill, and reading it
+ * as "cannot tell" rather than "not finished" would put the page straight back to presenting
+ * a half-replayed database as the protocol's history.
+ */
+describe("feed readiness", () => {
+  it("reads 200 as a finished backfill", async () => {
+    respondWith({}, 200);
+    const { fetchInstantSync } = await loadFeed(FEED);
+
+    await expect(fetchInstantSync()).resolves.toBe("complete");
+  });
+
+  it("reads 503 as still backfilling rather than as a refusal", async () => {
+    respondWith("Historical indexing is not complete.", 503);
+    const { fetchInstantSync } = await loadFeed(FEED);
+
+    await expect(fetchInstantSync()).resolves.toBe("backfilling");
+  });
+
+  it("reports any other refusal as unknown, not as complete", async () => {
+    // "Cannot tell" must not collapse into "finished": that is the direction that publishes a
+    // subtotal with no caveat on it.
+    respondWith({ error: "no" }, 500);
+    const { fetchInstantSync } = await loadFeed(FEED);
+
+    await expect(fetchInstantSync()).resolves.toBeNull();
+  });
+
+  it("reports an unreachable feed as unknown rather than throwing into a render", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    );
+    const { fetchInstantSync } = await loadFeed(FEED);
+
+    await expect(fetchInstantSync()).resolves.toBeNull();
+  });
+
+  it("reports no feed as unknown without asking anything", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        asked.push(String(input));
+        return new Response("", { status: 200 });
+      }),
+    );
+    const { fetchInstantSync } = await loadFeed(undefined);
+
+    await expect(fetchInstantSync()).resolves.toBeNull();
+    expect(asked).toEqual([]);
+  });
+
+  it("asks the indexer's own readiness route", async () => {
+    // `/ready` at the root, not under `/instant`: it is Ponder's, not this feed's.
+    const asked: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        asked.push(String(input));
+        return new Response("", { status: 200 });
+      }),
+    );
+    const { fetchInstantSync } = await loadFeed(FEED);
+
+    await fetchInstantSync();
+
+    expect(asked).toEqual([`${FEED}/ready`]);
+  });
+});

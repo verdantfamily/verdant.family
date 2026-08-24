@@ -46,7 +46,15 @@ import { executeSponsoredLaunch, ensureSeat } from "./launch";
 import { publicClient } from "../onchain";
 import { readAgentHoldings } from "../agents/holdings";
 import { agentStore, type AgentStore } from "../agents/store";
-import { launchReply, refusalReply, tradeReply, tradingLiveReply, walletReply } from "./reply";
+import {
+  chatFallbackReply,
+  launchReply,
+  refusalReply,
+  sentDmReply,
+  tradeReply,
+  tradingLiveReply,
+  walletReply,
+} from "./reply";
 import { seatFor } from "./seat";
 import { assertSponsorFunded } from "./sponsor";
 import { xStore, type XStore } from "./store";
@@ -178,25 +186,36 @@ export async function handleMention(
     const enriched = await enrichMention(mention, client);
     const routed = await routeMention(enriched, undefined, { client });
 
-    if (routed.intent === "QUESTION") {
-      const replyPostId = await postAnswer(client, mention.command.id, routed.answers);
-      store.settleMention({
-        commandPostId: mention.command.id,
-        intent: "QUESTION",
-        outcome: "answered",
-        code: null,
-        replyPostId,
-        error: null,
-      });
-      return {
-        outcome: "answered",
-        intent: "QUESTION",
-        launchId: null,
-        token: null,
-        replyPostId,
-        code: null,
-        retryable: false,
-      };
+    if (routed.intent !== "LAUNCH" && (routed.intent === "QUESTION" || mention.via === "dm")) {
+      // A DM is a conversation they started. The public timeline may stay silent when the
+      // model cannot tell what was meant; the inbox may not. If the runtime still produced
+      // nothing, they get the floor reply rather than an empty chat.
+      const answers =
+        routed.answers.length > 0
+          ? routed.answers
+          : mention.via === "dm"
+            ? [chatFallbackReply()]
+            : [];
+      if (answers.length > 0) {
+        const replyPostId = await deliverAnswer(client, mention, answers);
+        store.settleMention({
+          commandPostId: mention.command.id,
+          intent: "QUESTION",
+          outcome: "answered",
+          code: null,
+          replyPostId,
+          error: null,
+        });
+        return {
+          outcome: "answered",
+          intent: "QUESTION",
+          launchId: null,
+          token: null,
+          replyPostId,
+          code: null,
+          retryable: false,
+        };
+      }
     }
 
     if (routed.intent !== "LAUNCH") {
@@ -235,7 +254,7 @@ export async function handleMention(
     if (failure.retryable) {
       store.releaseMention(mention.command.id);
     } else {
-      const spoken = await speak(client, mention.command.id, failure);
+      const spoken = await speakRefusal(client, mention, failure);
       store.settleMention({
         commandPostId: mention.command.id,
         intent: null,
@@ -397,9 +416,9 @@ async function launch(
     });
     store.recordGasSpent(estimateWei, gasWei);
 
-    const replyPostId = await postReply(
+    const replyPostId = await deliverPublic(
       client,
-      mention.command.id,
+      mention,
       launchReply({ ticker: prepared.ticker, token: result.token }),
     );
     store.updateLaunch(launchId, { replyPostId });
@@ -441,7 +460,7 @@ async function launch(
         return outcomeFor(failure, launchId);
       }
 
-      const spoken = await speak(deps.client, mention.command.id, failure);
+      const spoken = await speakRefusal(deps.client, mention, failure);
       store.settleMention({
         commandPostId: mention.command.id,
         intent: "LAUNCH",
@@ -507,7 +526,7 @@ async function trade(
       ...(deps.agents === undefined ? {} : { agents: deps.agents }),
     });
 
-    const replyPostId = await postReply(client, mention.command.id, tradeReply(result));
+    const replyPostId = await speakMoney(client, mention, tradeReply(result));
     store.settleMention({
       commandPostId: mention.command.id,
       intent: "TRADE",
@@ -542,7 +561,7 @@ async function trade(
      * nobody asked for. Somebody who wants to try again can post again, which is one tweet and
      * is theirs to decide.
      */
-    const spoken = await speak(client, mention.command.id, failure);
+    const spoken = await speakRefusal(client, mention, failure);
     store.settleMention({
       commandPostId: mention.command.id,
       intent: "TRADE",
@@ -573,7 +592,7 @@ async function tellTradingLive(
   deps: TradeHandlers,
 ): Promise<MentionOutcome> {
   const { store, client } = deps;
-  const replyPostId = await postReply(client, mention.command.id, tradingLiveReply());
+  const replyPostId = await deliverPublic(client, mention, tradingLiveReply());
   store.settleMention({
     commandPostId: mention.command.id,
     intent: "QUESTION",
@@ -612,7 +631,7 @@ async function tellWallet(
   const wallet = xWalletFor(author.id, author.username, { store, agents });
   const holdings = await readAgentHoldings(agents, wallet.agent);
 
-  const replyPostId = await postReply(client, mention.command.id, walletReply(holdings));
+  const replyPostId = await speakMoney(client, mention, walletReply(holdings));
   store.settleMention({
     commandPostId: mention.command.id,
     intent: "WALLET",
@@ -741,6 +760,113 @@ async function postAnswer(
   return first;
 }
 
+/**
+ * Send a money message the way money is spoken: a DM first.
+ *
+ * A public tweet that asked to buy still gets a public ack — "Sent you a DM." — so the
+ * timeline does not look dead. The address and the fill live in the inbox, where X will
+ * actually accept a 0x address. A DM that cannot be delivered falls back to a public reply
+ * with the addresses stripped, which is worse than the inbox but better than silence.
+ */
+async function speakMoney(
+  client: XClient,
+  mention: XMention,
+  text: string,
+): Promise<string | null> {
+  let dmId: string | null = null;
+  if (typeof client.dm === "function") {
+    try {
+      dmId = await client.dm(mention.command.author.id, text);
+    } catch (cause) {
+      console.warn(
+        `[x] dm failed for ${mention.command.author.id}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    }
+  }
+
+  if (mention.via === "dm") return dmId;
+
+  const publicText = dmId !== null ? sentDmReply() : stripAddresses(text);
+  try {
+    const posted = await postReply(client, mention.command.id, publicText);
+    return posted ?? dmId;
+  } catch {
+    return dmId;
+  }
+}
+
+function stripAddresses(text: string): string {
+  const stripped = text.replace(/\b0x[a-fA-F0-9]{40}\b/gi, "").replace(/\n{3,}/g, "\n\n").trim();
+  return stripped === "" ? sentDmReply() : stripped;
+}
+
+async function speakRefusal(
+  client: XClient,
+  mention: XMention,
+  failure: XError,
+): Promise<string | null> {
+  const text = refusalReply(failure);
+  if (text === null) {
+    console.info(
+      `[x] refusal not spoken for ${mention.command.id}: ${failure.code} (${failure.message})`,
+    );
+    return null;
+  }
+  if (mention.via === "dm" || moneyCode(failure.code)) {
+    return speakMoney(client, mention, text);
+  }
+  return speak(client, mention.command.id, failure);
+}
+
+function moneyCode(code: string): boolean {
+  switch (code) {
+    case "WALLET_UNFUNDED":
+    case "AMOUNT_MISSING":
+    case "TOKEN_NOT_FOUND":
+    case "TOKEN_AMBIGUOUS":
+    case "NOTHING_TO_SELL":
+    case "TRADE_REVERTED":
+    case "TRADE_FAILED":
+    case "TRADING_DISABLED":
+      return true;
+    default:
+      return false;
+  }
+}
+
+async function deliverAnswer(
+  client: XClient,
+  mention: XMention,
+  parts: readonly string[],
+): Promise<string | null> {
+  if (mention.via !== "dm") return postAnswer(client, mention.command.id, parts);
+  if (parts.length === 0 || typeof client.dm !== "function") return null;
+  try {
+    return await client.dm(mention.command.author.id, parts.join("\n\n"));
+  } catch (cause) {
+    console.warn(
+      `[x] dm answer failed for ${mention.command.author.id}: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+    return null;
+  }
+}
+
+async function deliverPublic(
+  client: XClient,
+  mention: XMention,
+  text: string,
+): Promise<string | null> {
+  if (mention.via === "dm") {
+    if (typeof client.dm !== "function") return null;
+    try {
+      return await client.dm(mention.command.author.id, text);
+    } catch {
+      return null;
+    }
+  }
+  return postReply(client, mention.command.id, text);
+}
+
 /** Say why the bot refused, when the reason is one it is willing to say out loud. */
 async function speak(
   client: XClient,
@@ -748,12 +874,22 @@ async function speak(
   failure: XError,
 ): Promise<string | null> {
   const text = refusalReply(failure);
-  if (text === null) return null;
+  if (text === null) {
+    // Not a bug, but worth a line: silence here is a deliberate choice keyed on the error code,
+    // and a "why did it not reply" question is answered by seeing which code was unspeakable.
+    console.info(`[x] refusal not spoken for ${inReplyTo}: ${failure.code} (${failure.message})`);
+    return null;
+  }
   try {
     return await client.reply(text, inReplyTo);
-  } catch {
+  } catch (cause) {
     // The refusal is already recorded; failing to announce it changes nothing about the
     // outcome and must not turn a refusal into an exception the delivery loop has to handle.
+    // It is logged loudly because a swallowed reply failure is precisely how a handled mention
+    // ends up looking ignored.
+    console.warn(
+      `[x] refusal reply failed for ${inReplyTo} (${failure.code}): ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
     return null;
   }
 }

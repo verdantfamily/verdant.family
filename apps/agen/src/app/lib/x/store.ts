@@ -184,6 +184,16 @@ const MIGRATIONS: readonly { readonly version: number; readonly sql: string }[] 
       );
     `,
   },
+  {
+    version: 3,
+    sql: `
+      CREATE TABLE IF NOT EXISTS x_dm_cursor (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        since_id TEXT,
+        polled_at INTEGER
+      );
+    `,
+  },
 ];
 
 /** UTC, like the agent store's, so a day boundary is the same one everywhere. */
@@ -471,6 +481,31 @@ export class XStore {
    * A poll that returned older posts than the cursor — which happens when deliveries
    * interleave — must not rewind it, or the same window is read forever.
    */
+  dmSinceId(): string | null {
+    const row = this.db.prepare("SELECT since_id FROM x_dm_cursor WHERE id = 1").get() as
+      | { since_id: string | null }
+      | undefined;
+    return row?.since_id ?? null;
+  }
+
+  advanceDmCursor(sinceId: string): void {
+    this.db.exec("BEGIN IMMEDIATE;");
+    try {
+      const current = this.dmSinceId();
+      const forward = current === null || bigger(sinceId, current);
+      this.db
+        .prepare(
+          `INSERT INTO x_dm_cursor (id, since_id, polled_at) VALUES (1, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET since_id = excluded.since_id, polled_at = excluded.polled_at`,
+        )
+        .run(forward ? sinceId : current, now());
+      this.db.exec("COMMIT;");
+    } catch (error) {
+      this.db.exec("ROLLBACK;");
+      throw error;
+    }
+  }
+
   advanceCursor(sinceId: string): void {
     this.db.exec("BEGIN IMMEDIATE;");
     try {

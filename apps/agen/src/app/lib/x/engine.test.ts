@@ -195,9 +195,12 @@ interface Recorder {
   /** Picture URLs fetched, for the tests that care which candidate the logo came from.
    * Optional so the many recorders that do not care stay two fields long. */
   readonly media?: string[];
+  readonly dms?: { readonly userId: string; readonly text: string }[];
 }
 
 function client(recorder: Recorder, posts: readonly Post[] = [SOURCE, COMMAND]) {
+  const inbox: { userId: string; text: string }[] = [];
+  (recorder as { dms: typeof inbox }).dms = inbox;
   return {
     mentions: async () => posts.filter((entry) => entry.text.includes("@useagen")),
     post: async (id: string) => {
@@ -209,10 +212,28 @@ function client(recorder: Recorder, posts: readonly Post[] = [SOURCE, COMMAND]) 
       recorder.replies.push({ text, to });
       return "1900000000000000999";
     },
+    dm: async (userId: string, text: string) => {
+      inbox.push({ userId, text });
+      return "dm-1";
+    },
     media: async (url: string) => {
       recorder.media?.push(url);
       return PNG.buffer.slice(PNG.byteOffset, PNG.byteOffset + PNG.byteLength);
     },
+    account: async () => ({
+      id: "2090215793262747648",
+      username: "useagen",
+      name: "useagen",
+      avatarUrl: "https://pbs.x.com/bot-pfp.png",
+      followers: null,
+      createdAt: null,
+      verified: false,
+      description: null,
+      following: null,
+      postCount: null,
+      location: null,
+      url: null,
+    }),
   };
 }
 
@@ -445,7 +466,7 @@ describe("handleMention, launching", () => {
     expect(outcome.outcome).toBe("refused");
     expect(outcome.code).toBe("NO_SOURCE_POST");
     expect(executeSponsoredLaunch).not.toHaveBeenCalled();
-    expect(recorder.replies[0]?.text).toContain("Tell me what to launch");
+    expect(recorder.replies[0]?.text).toMatch(/name it|tag me/i);
   });
 
   it("launches from the post that tagged it when there is no parent", async () => {
@@ -500,6 +521,104 @@ describe("handleMention, launching", () => {
     expect(prepared.ticker).toBe("TEST");
     // Prose case, not the symbol shouted back: the page shows the two side by side.
     expect(prepared.name).toBe("Test");
+  });
+
+  it("launches when they paste Name: and Ticker: and tag the bot", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    withModel({ ...LAUNCH_ANSWER, name: "", ticker: "" });
+
+    const outcome = await handleMention(
+      {
+        command: post({
+          id: "1900000000000000017",
+          text: "Create a token with these:\nName: ROBINHOOD LOUD\nTIcker: LOUD\nCHAIN: RobinHood\n@useagen",
+        }),
+        source: null,
+      },
+      { store, client: client(recorder) as never },
+    );
+
+    expect(outcome.outcome).toBe("launched");
+    const [prepared] = executeSponsoredLaunch.mock.calls[0] as [
+      { readonly name: string; readonly ticker: string },
+    ];
+    expect(prepared.name).toBe("ROBINHOOD LOUD");
+    expect(prepared.ticker).toBe("LOUD");
+  });
+
+  it("launches from a Name/Ticker reply in the thread, even without repeating the handle", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    withModel({ ...LAUNCH_ANSWER, name: "", ticker: "" });
+
+    const asked = post({
+      id: "1900000000000000018",
+      text: "@useagen I would like to launch, what would I need to start",
+    });
+    const command = post({
+      id: "1900000000000000019",
+      text: "Name - Canopy Games\nTicker - CNPYG",
+      inReplyToPostId: asked.id,
+    });
+
+    const outcome = await handleMention({ command, source: asked }, {
+      store,
+      client: client(recorder, [asked, command]) as never,
+    });
+
+    expect(outcome.outcome).toBe("launched");
+    const [prepared] = executeSponsoredLaunch.mock.calls[0] as [
+      { readonly name: string; readonly ticker: string },
+    ];
+    expect(prepared.name).toBe("Canopy Games");
+    expect(prepared.ticker).toBe("CNPYG");
+  });
+
+  it("launches from a name alone, and picks the ticker from it", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    withModel({ ...LAUNCH_ANSWER, name: "", ticker: "" });
+
+    const outcome = await handleMention(
+      { command: post({ id: "1900000000000000014", text: "@useagen launch Dog" }), source: null },
+      { store, client: client(recorder) as never },
+    );
+
+    expect(outcome.outcome).toBe("launched");
+    const [prepared] = executeSponsoredLaunch.mock.calls[0] as [
+      { readonly name: string; readonly ticker: string },
+    ];
+    expect(prepared.name).toBe("Dog");
+    expect(prepared.ticker).toBe("DOG");
+  });
+
+  it("launches the token they already named when they say go and ask for the bot's pfp", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [], media: [] };
+    withModel({ ...LAUNCH_ANSWER, name: "Internet Dog", ticker: "IDOG" });
+
+    const parent = post({
+      id: "1900000000000000015",
+      text: "Ok create a token with the ticker UseAgen. I want you to distribute half of the fees to the holders.",
+    });
+    const command = post({
+      id: "1900000000000000016",
+      text: "Ok that's fine launch standard. Use the same image as your pfp",
+      inReplyToPostId: parent.id,
+    });
+    const outcome = await handleMention({ command, source: parent }, {
+      store,
+      client: client(recorder, [parent, command]) as never,
+    });
+
+    expect(outcome.outcome).toBe("launched");
+    const [prepared] = executeSponsoredLaunch.mock.calls[0] as [
+      { readonly name: string; readonly ticker: string },
+    ];
+    expect(prepared.ticker).toBe("USEAGEN");
+    expect(prepared.name).toBe("Useagen");
+    expect(recorder.media).toContain("https://pbs.x.com/bot-pfp.png");
   });
 
   it("still refuses when there is neither a name nor a ticker to work from", async () => {
@@ -600,6 +719,25 @@ describe("handleMention, launching", () => {
     expect(outcome.outcome).toBe("ignored");
     expect(recorder.replies).toHaveLength(0);
   });
+
+  it("answers a DM even when the model would have stayed silent", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    withModel({ intent: "UNKNOWN", confidence: 0.1 });
+
+    const outcome = await handleMention(
+      {
+        via: "dm",
+        command: post({ id: "dm:101", text: "hey" }),
+        source: null,
+      },
+      { store, client: client(recorder) as never },
+    );
+
+    expect(outcome.outcome).toBe("answered");
+    expect(recorder.dms?.[0]?.text).toMatch(/what's up/i);
+    expect(recorder.replies).toHaveLength(0);
+  });
 });
 
 // --- trading, which spends the poster's own money -----------------------------
@@ -657,8 +795,9 @@ describe("handleMention, trading", () => {
       target: { kind: "address", token: CONTRACT },
     });
 
+    expect(recorder.dms?.[0]?.text).toContain("Bought 5M $TEST");
     expect(recorder.replies[0]?.to).toBe("1900000000000000040");
-    expect(recorder.replies[0]?.text).toContain("Bought 5M $TEST");
+    expect(recorder.replies[0]?.text).toBe("Sent you a DM.");
   });
 
   it("still buys from a standalone tweet when the account has been talking too fast", async () => {
@@ -682,7 +821,7 @@ describe("handleMention, trading", () => {
 
     expect(outcome.outcome).toBe("traded");
     expect(trade).toHaveBeenCalledTimes(1);
-    expect(recorder.replies[0]?.text).toContain("Bought");
+    expect(recorder.dms?.[0]?.text).toContain("Bought");
   });
 
   it("buys 'it' when the reply sits under a market", async () => {
@@ -770,7 +909,8 @@ describe("handleMention, trading", () => {
       fraction: 1,
       target: { kind: "address", token: CONTRACT },
     });
-    expect(recorder.replies[0]?.text).toContain("Sold 5M $TEST");
+    expect(recorder.dms?.[0]?.text).toContain("Sold 5M $TEST");
+    expect(recorder.replies[0]?.text).toBe("Sent you a DM.");
   });
 
   it("does not buy twice when the same post is delivered twice", async () => {
@@ -818,13 +958,14 @@ describe("handleMention, trading", () => {
 
     expect(outcome.outcome).toBe("refused");
     expect(outcome.code).toBe("WALLET_UNFUNDED");
-    expect(recorder.replies[0]?.text).toBe(
+    expect(recorder.dms?.[0]?.text).toBe(
       [
         "You don't have enough funds. Please deposit ETH (Robinhood Chain) to start trading.",
         "",
         wallet.row.address,
       ].join("\n"),
     );
+    expect(recorder.replies[0]?.text).toBe("Sent you a DM.");
   });
 
   it("settles a failed trade rather than letting it be tried again", async () => {
@@ -862,8 +1003,76 @@ describe("handleMention, trading", () => {
 
     expect(outcome.intent).toBe("WALLET");
     const wallet = store.walletFor("770077");
-    expect(recorder.replies[0]?.text).toContain(`Your Agen wallet: ${String(wallet?.address)}`);
-    expect(recorder.replies[0]?.text).toContain("2.5 ETH");
+    expect(recorder.dms?.[0]?.text).toContain(`Your Agen wallet: ${String(wallet?.address)}`);
+    expect(recorder.dms?.[0]?.text).toContain("2.5 ETH");
+    expect(recorder.replies[0]?.text).toBe("Sent you a DM.");
+  });
+
+  it("answers a buy that arrived as a DM, without posting publicly", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    const trade = swap();
+
+    const outcome = await handleMention(
+      {
+        via: "dm",
+        command: post({ id: "dm:99", text: `buy 0.001 ETH of ${CONTRACT}` }),
+        source: null,
+      },
+      { store, client: client(recorder) as never, agents: freshAgents(), trade },
+    );
+
+    expect(outcome.outcome).toBe("traded");
+    expect(recorder.dms?.[0]?.text).toContain("Bought 5M $TEST");
+    expect(recorder.replies).toHaveLength(0);
+  });
+
+  it("launches a named token from a DM", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    withModel(LAUNCH_ANSWER);
+
+    const outcome = await handleMention(
+      {
+        via: "dm",
+        command: post({ id: "dm:100", text: "launch Internet Dog $IDOG" }),
+        source: null,
+      },
+      { store, client: client(recorder) as never },
+    );
+
+    expect(outcome.outcome).toBe("launched");
+    expect(executeSponsoredLaunch).toHaveBeenCalledTimes(1);
+    expect(recorder.dms?.[0]?.text).toContain("$IDOG is live");
+    expect(recorder.replies).toHaveLength(0);
+  });
+
+  it("answers a launch question in a DM instead of pasting a script", async () => {
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    withModel({
+      intent: "QUESTION",
+      name: null,
+      ticker: null,
+      description: null,
+      answer: "yeah. name and ticker and i'll do it here.",
+      confidence: 0.9,
+    });
+
+    const outcome = await handleMention(
+      {
+        via: "dm",
+        command: post({ id: "dm:102", text: "can i launch it here in chat?" }),
+        source: null,
+      },
+      { store, client: client(recorder) as never },
+    );
+
+    expect(outcome.outcome).toBe("answered");
+    expect(executeSponsoredLaunch).not.toHaveBeenCalled();
+    expect(recorder.dms?.[0]?.text).toBe("yeah. name and ticker and i'll do it here.");
+    expect(recorder.dms?.[0]?.text).not.toMatch(/Tell me what to launch/i);
+    expect(recorder.replies).toHaveLength(0);
   });
 
   it("says trading is live when asked who has to enable it", async () => {
@@ -1080,6 +1289,29 @@ describe("polling", () => {
 
     expect(result.launched).toBe(0);
     expect(store.sinceId()).toBe(chatter.id);
+  });
+
+  it("answers a mention the mentions timeline dropped but search still has", async () => {
+    // The live failure: X returned the buy from `/tweets/search/recent` seconds after it was
+    // posted while never listing it under `/users/:id/mentions`. Reading mentions alone left it
+    // unanswered forever. Here the launch post exists only in search, and the pass must still
+    // find it, handle it, and advance the cursor onto it.
+    const store = freshStore();
+    const recorder: Recorder = { replies: [], asked: [] };
+    withModel(LAUNCH_ANSWER);
+
+    const base = client(recorder);
+    const searchOnly = {
+      ...base,
+      mentions: async () => [],
+      search: async () => [COMMAND],
+    };
+
+    const result = await pollOnce({ store, client: searchOnly as never });
+
+    expect(result.launched).toBe(1);
+    expect(result.cursor).toBe(COMMAND.id);
+    expect(store.sinceId()).toBe(COMMAND.id);
   });
 });
 

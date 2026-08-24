@@ -1,0 +1,40 @@
+{
+  "name": "@verdant/registry-db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "drizzle"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "migrations:generate": "drizzle-kit generate",
+    "migrations:check": "drizzle-kit check"
+  },
+  "dependencies": {
+    "@verdant/registry": "workspace:*",
+    "@verdant/market-engine": "workspace:*",
+    "drizzle-orm": "^0.41.0",
+    "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.2.13",
+    "@types/node": "^22.18.0",
+    "@types/pg": "^8.11.10",
+    "drizzle-kit": "^0.31.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

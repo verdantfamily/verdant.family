@@ -20,6 +20,7 @@ test, CI gate or lint configuration was modified.
 - [Live engine markets](#live-engine-markets)
 - [Corrections to stated assumptions](#corrections-to-stated-assumptions)
 - [Decisions](#decisions)
+- [Follow-ups](#follow-ups)
 - [Missing](#missing)
 
 ## Deployed contracts
@@ -182,6 +183,11 @@ on the same chain. The domain separator exists because `implementationHash` occu
 registry slot that engine-0 markets use for the hash of their generated Solidity.
 
 ## Persistence today
+
+> **Superseded by [D2](#d2-the-registry-gets-its-own-postgres) as of M1.** This section records
+> what was true when the audit was taken, on 2026-08-24 before M1. `packages/registry-db` now
+> exists and holds the four Program tables in its own Postgres. Everything below about *Ponder's*
+> store is still accurate, and is the reason the new database is a separate one.
 
 **There is no application-layer persistent store in this repository. None. Not Postgres, not
 Drizzle, not Prisma, not SQLite.** The only database is the one Ponder manages for the
@@ -413,6 +419,101 @@ so spelling them out as empty cannot change the canonical bytes and therefore ca
 identity — which `version-tolerance.test.ts` asserts, along with the general invariant that the
 hash changes exactly when the bytes change. That test also records that the hash half of the
 question is not exercisable on this base rather than manufacturing a case for it.
+
+### D2 — The registry gets its own Postgres
+
+One Postgres for the Program registry, reached with `drizzle-orm` and migrated with
+`drizzle-kit`, in `packages/registry-db`. Separate from both Ponder databases — not a separate
+schema in one of them, a separate database — and reached through `REGISTRY_DATABASE_URL` rather
+than `DATABASE_URL`.
+
+**Why not Ponder's.** Three properties of that store, each disqualifying on its own. Every table
+in it is an `onchainTable`: reorg-tracked, and rebuilt from the start block on a reindex, so
+author-authored rows would not survive one. Ponder owns its own schema and migrations, and has
+already re-keyed a table in this repository when a shared hook turned out not to identify a
+market. And writes happen only inside indexing functions driven by chain events — there is no path
+by which an HTTP request could write a row.
+
+**Why the variable name matters.** Railway sets a `DATABASE_URL` per service. If this package read
+that name, a misconfigured deployment would point the registry at an indexer's database, where its
+migration would create four tables inside a schema Ponder wipes on reindex. The distinct name
+makes the separation a property of the code; `boundaries.test.ts` asserts the unprefixed name never
+appears in it.
+
+**What was accepted to get here.** `drizzle-orm` and `drizzle-kit` as new dependencies, superseding
+M0's no-new-deps constraint for this package only. `drizzle-orm` turned out to be already present
+at 0.41.0 as one of Ponder's own transitives, so only `drizzle-kit` is genuinely new. `@electric-sql/pglite`
+is a third addition, dev-only: CI runs `turbo run test` with no `services:` block, so the migration
+test runs against Postgres compiled to WebAssembly rather than skipping when no server is there. A
+migration test that silently skips is a gate that never fires.
+
+**What is not stored.** No aggregate of anything the indexer observed — no volume, no fees, no
+holder counts. Those belong to the thing that saw the swaps. `marketCount` is derived by counting
+rows at read time rather than maintained, because a maintained count is a second source of truth
+that drifts.
+
+### D3 — Chain facts arrive over HTTP, never from Ponder's tables
+
+`packages/registry-db/src/indexer.ts` is the only door, and it reads
+`GET /agen/markets` — the response shape the indexer publishes deliberately. No import of
+`ponder`, no `ponder:schema`, no table name, asserted statically.
+
+**Why an HTTP boundary rather than a shared database.** Because a response can be validated and a
+table read can only be trusted. Every field the backfill uses is checked present and of the right
+kind before it is believed, so a schema change upstream surfaces as one error naming the field.
+Reading the table directly would surface the same change as an `undefined` flowing into a hash —
+and a wrong `configHash` still looks like a hash. That is the silent failure the boundary exists to
+convert into a loud one.
+
+**Why it does not reuse the app's existing client.**
+[`apps/agen/src/app/lib/feed.ts`](../../apps/agen/src/app/lib/feed.ts) swallows every failure by
+design — "treat every failure as an absence" — and is right to, because a market page wants a dash
+when the indexer is down and a 404 seconds after a launch is normal. A backfill wants the exact
+opposite: an absence it cannot distinguish from a failure produces a registry quietly missing
+Programs, which is unrecoverable without knowing it happened. So the backfill's client throws on
+every failure, retries nothing, and defaults nothing.
+
+**Atomicity, and what "resumable" means.** The whole run is one transaction, so any failure leaves
+the database exactly as it was — there is no state in which a Program exists without the version
+and market rows that explain it. Resumability is therefore a consequence rather than a mechanism:
+nothing is left to resume *to*, and re-running converges because every write is
+`onConflictDoNothing` keyed on the identity the chain gave it. A checkpoint table was considered and
+rejected as more moving parts than the thing it would protect, at a population of two.
+
+### What M0's MISSING list this closes
+
+| M0 item | Status |
+| --- | --- |
+| 1 — An application-layer persistent store | **Closed.** `packages/registry-db`, one Postgres, four tables, one migration with a tested reverse. |
+| 2 — A `configHash` index and a Program-shaped read path | **Closed.** `program_markets_config_hash_idx`, plus `GET /api/programs`. |
+| 8 — Submission-time deduplication | **Closed.** `dedupe_key` is stored and indexed, and `findByDedupeKey` answers "have we seen these economics under any spelling". |
+| 10 — A Program-to-market backfill | **Closed.** `backfillPrograms`, atomic and idempotent, verified against M0's chain-verified fixture. |
+
+Four more are now *structurally* present but deliberately unpopulated, which is not the same as
+closed: **4** (name and description columns exist, nullable and never written), **5** and **7**
+(`program_lineage` ships empty with its `kind` vocabulary constrained), and **9**
+(`program_markets` is keyed by chain, but only 4663 has a deployment). **3** and **6** are untouched
+and remain open.
+
+## Follow-ups
+
+### F1 — Re-verify Program identity against a real engine-v2 market
+
+When engine v2 is deployed and a v2 market exists on chain, Program identity must be checked against
+that market's own `configHash` the way M0's acceptance test 1 checked it for v1: read the market's
+canonical bytes, derive the identity, and assert it equals what the hook derived from its own
+storage.
+
+This is not optional and is not already done. [D1](#d1-the-registry-is-tolerant-of-which-engine-version-exists)
+made the registry *tolerant* of a v2 configuration — it will normalize one without throwing and will
+hash one without complaint — and tolerance is not verification. Nothing in this repository has yet
+confirmed that a v2 configuration's derived hash matches a deployed v2 hook's derivation, because no
+such hook and no such market exist. The engine-v2 branch's own vectors would establish agreement
+with the encoder, which is what `version-tolerance.test.ts` already notes it cannot substitute for.
+
+Concretely: extend `packages/registry/src/identity.test.ts`'s chain-verified block with at least one
+real v2 market, and record in this file how many v2 markets existed when it was done — the same way
+the v1 count of two is recorded above.
 
 ## Missing
 

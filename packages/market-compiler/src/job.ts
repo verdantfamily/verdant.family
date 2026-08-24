@@ -357,6 +357,44 @@ export interface CreatorApproval {
   readonly signature: Hex;
 }
 
+/**
+ * What a creator said their market was derived from, if they said anything.
+ *
+ * ## Why this is on the job and not worked out later
+ *
+ * Because it cannot be worked out later. Nothing on chain records that one configuration came from
+ * another — no event, no registry field, no contract — and by the time a market is indexed the only
+ * party who knew is gone. The surface that accepted the edit is the only place the fact exists, and
+ * the moment it accepted it is the only moment it exists at. So a claim is captured when the build is
+ * started, carried here for the build's whole life, and read when the launch is prepared.
+ *
+ * ## It is a claim, and it stays one
+ *
+ * Nothing verifies it and nothing derives it. A creator may name a parent this deployment has never
+ * seen, and `kind` distinguishes a `REVISION` — the same author changing their own economics — from a
+ * `FORK`, somebody else starting from them. That distinction is authorship rather than shape: the
+ * configurations differ either way, so it is recorded because it was stated and could not be computed
+ * from the two configurations if anybody tried.
+ *
+ * Absent is the ordinary case. A creator describing a market from scratch has no parent, and a build
+ * with no claim produces a launch with no lineage — never a guessed one.
+ *
+ * `parentProgramId` rather than `parentConfigHash`, because a Program *is* its `configHash` and the
+ * field names what a creator picked from a list rather than a hash they computed. The value is the
+ * same 32 bytes either way.
+ *
+ * Structurally typed rather than imported from `@verdant/registry`, which owns `LineageKind`. A
+ * dependency from the compiler on the registry would be a build-time coupling between the thing that
+ * produces markets and the thing that catalogues them, in the direction that makes the compiler
+ * unbuildable without it — for two string literals. The registry's own type is the authority; this
+ * matches it, and `no-inference.test.ts` checks the pair by name.
+ */
+export interface LineageClaim {
+  /** The parent Program's identity, which is its `configHash`. */
+  readonly parentProgramId: Hex;
+  readonly kind: "REVISION" | "FORK";
+}
+
 export interface GenerationJob {
   readonly id: string;
   readonly createdAt: number;
@@ -416,6 +454,21 @@ export interface GenerationJob {
    * existed reads back exactly as it was written and nothing has to migrate on load.
    */
   readonly engineVersion?: EngineVersion;
+
+  /**
+   * What this market was claimed to be derived from. Absent means nothing was claimed.
+   *
+   * Optional rather than defaulted in the type, for the same reason `engineVersion` is: a job
+   * persisted before this field existed reads back exactly as it was written, and nothing has to
+   * migrate on load. Absent and `null` mean the same thing — no claim — and every reader treats them
+   * the same, because a build started from the front page composer and a build started from a
+   * Program's page are both ordinary.
+   *
+   * Written once, at creation, and never rewritten. An edit changes a market's economics and
+   * therefore its identity, but it does not change what the creator originally started from, so
+   * `restartJob` carries this through untouched along with the rest of the record.
+   */
+  readonly lineage?: LineageClaim | null;
 
   /**
    * Everything the deterministic engine produced. `null` on every engine-0 job.
@@ -501,6 +554,7 @@ export function newJob({
   symbol,
   now,
   engineVersion,
+  lineage,
 }: {
   readonly id: string;
   readonly prompt: string;
@@ -515,6 +569,14 @@ export function newJob({
    * finished as the other would have a record that describes neither.
    */
   readonly engineVersion?: EngineVersion;
+  /**
+   * What the creator said this market was derived from. Omitted means nothing was claimed.
+   *
+   * Creation is the only place this can be set, because it is the only moment the fact exists —
+   * see `LineageClaim`. There is deliberately no function anywhere that adds a claim to a job
+   * afterwards: a claim arriving later would be a claim nobody made.
+   */
+  readonly lineage?: LineageClaim | null;
 }): GenerationJob {
   return {
     id,
@@ -522,6 +584,7 @@ export function newJob({
     updatedAt: now,
     stage: Stage.PromptReceived,
     ...(engineVersion === undefined ? {} : { engineVersion }),
+    ...(lineage === undefined || lineage === null ? {} : { lineage }),
     engine: null,
     prompt,
     name,

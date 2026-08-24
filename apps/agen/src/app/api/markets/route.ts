@@ -9,6 +9,7 @@
 import { NextResponse } from "next/server";
 
 import { modelStatus, startBuild } from "../../lib/builds";
+import { ClaimError, claimFrom } from "../../lib/registry/claim";
 import { tooManyBuilds, visitorOf } from "../../lib/throttle";
 
 /** The compiler shells out to `forge` and writes to disk; neither survives the edge. */
@@ -34,6 +35,16 @@ interface Body {
   prompt?: unknown;
   name?: unknown;
   symbol?: unknown;
+  /**
+   * What this market is being derived from, if anything. Optional.
+   *
+   * Accepted *here*, at build creation, and nowhere else — because this is the only moment the fact
+   * exists. Nothing on chain records that one configuration came from another, so a claim that is not
+   * captured before the work starts is a claim that cannot be recovered afterwards, for this market or
+   * any other. The launch route does not accept one, deliberately: a parent named at signing time
+   * would be a parent nobody was shown a review screen for.
+   */
+  lineage?: unknown;
 }
 
 function problemWith(body: Body): string | null {
@@ -70,6 +81,23 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: problem }, { status: 400 });
   }
 
+  /*
+   * The claim, read before the throttle and before any work.
+   *
+   * A malformed claim is refused rather than dropped, and it is worth being clear about why that is
+   * the kinder behaviour. A dropped claim produces a market whose lineage is silently absent for
+   * ever: the creator pressed "fork this", the build succeeded, the market launched, and the graph
+   * will never show the edge — with nothing anywhere to say so. Refusing costs them one retry while
+   * the fact is still recoverable.
+   */
+  let lineage;
+  try {
+    lineage = claimFrom(body.lineage);
+  } catch (error) {
+    if (!(error instanceof ClaimError)) throw error;
+    return NextResponse.json({ error: error.message }, { status: 400 });
+  }
+
   // Checked after the body, so a malformed request costs nobody their allowance, and before
   // the build, because the point is the spend it would start. See `throttle`.
   const throttled = tooManyBuilds(visitorOf(request));
@@ -81,6 +109,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     prompt: (body.prompt as string).trim(),
     name: (body.name as string).trim(),
     symbol: (body.symbol as string).trim().toUpperCase(),
+    lineage,
   });
 
   if (!started.ok) {

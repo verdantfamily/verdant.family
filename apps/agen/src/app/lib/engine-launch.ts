@@ -36,6 +36,7 @@ import { CHAIN_ID } from "./chain";
 import { AGEN_LAUNCH } from "@verdant/config";
 import { absoluteUrl } from "./instant";
 import { engineAddressesOrNull, engineTokenSalt, ENGINE_NOT_DEPLOYED } from "./programmable";
+import { recordLaunchAttempt } from "./registry/attempt";
 
 export class EngineLaunchError extends Error {
   constructor(
@@ -155,6 +156,42 @@ export async function prepareEngineLaunch(
       409,
     );
   }
+
+  /*
+   * The launch, written down before it can happen.
+   *
+   * Here and nowhere else, for two reasons that both point at this line. Everything the registry needs
+   * is known: the job, the creator, the fee receiver, both hashes, the predicted vault, the factory and
+   * the calldata. And nothing has been signed — what this function returns is unsigned calldata, and the
+   * decision to spend gas belongs to the wallet — so this is upstream of every signature rather than
+   * conditional on one.
+   *
+   * It is the last such point. After the return, the creator's lineage claim exists only on the job, and
+   * the market that appears on chain carries no trace of it: no event, no registry field, nothing.
+   * Reconciliation can find the market and match it to this row; it could never reconstruct the claim.
+   *
+   * Awaited and ignored. `recordLaunchAttempt` has no error channel — it resolves with an outcome
+   * whatever happens, bounds itself with its own timeout, and logs what it swallowed — so awaiting it
+   * cannot throw and cannot hang, and reading the outcome here would only invite a future edit to branch
+   * on it. Decision 5: the registry must never be able to fail a launch, and the shape of the call is
+   * where that is enforced rather than remembered.
+   */
+  await recordLaunchAttempt({
+    jobId: job.id,
+    chainId: CHAIN_ID,
+    configHash: engine.configHash,
+    implementationHash: engine.implementationHash,
+    encodedConfig: engine.encodedConfig,
+    schemaVersion: 1,
+    creator,
+    feeReceiver,
+    factory: addresses.factory,
+    predictedVault: prepared.predicted.vault,
+    calldata: prepared.call.data,
+    // Whatever the build was started with, unchanged. Absent on a build nobody claimed a parent for,
+    // which is most of them, and absent is what produces null lineage rather than a guessed edge.
+    lineage: job.lineage ?? null,
+  });
 
   return {
     engineVersion: 1,

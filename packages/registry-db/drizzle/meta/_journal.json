@@ -8,6 +8,13 @@
       "when": 1787591921466,
       "tag": "0000_programs",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1787595692330,
+      "tag": "0001_launch_attempts",
+      "breakpoints": true
     }
   ]
 }

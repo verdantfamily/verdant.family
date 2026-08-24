@@ -42,6 +42,7 @@ import type {
   FeeCollection,
   GenerationJob,
   JobStore,
+  LineageClaim,
   ModelProvider,
   ProviderHealth,
 } from "@verdant/market-compiler";
@@ -352,6 +353,14 @@ export async function startBuild(request: {
   readonly prompt: string;
   readonly name: string;
   readonly symbol: string;
+  /**
+   * What the creator said this market is derived from. Absent means nothing was claimed.
+   *
+   * Carried straight through to `newJob` and never touched again. This function is the only door
+   * through which a claim can reach a job, which is what makes "lineage is claimed, never computed"
+   * a property of the code rather than a convention.
+   */
+  readonly lineage?: LineageClaim | null;
 }): Promise<StartResult> {
   const provider = providerOrNull();
   if (provider === null) {

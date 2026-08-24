@@ -35,7 +35,7 @@
 
 import "server-only";
 
-import type { Decision, GenerationJob } from "@verdant/market-compiler";
+import type { Decision, GenerationJob, LineageClaim } from "@verdant/market-compiler";
 import {
   answerBuild,
   decideBuild,
@@ -285,12 +285,22 @@ export function positionOf(jobId: string): QueuePosition | null {
  * property that makes everything else here recoverable.
  */
 export async function submit(
-  request: { readonly prompt: string; readonly name: string; readonly symbol: string },
+  request: {
+    readonly prompt: string;
+    readonly name: string;
+    readonly symbol: string;
+    /** What this market was claimed to be derived from. Absent means nothing was claimed. */
+    readonly lineage?: LineageClaim | null;
+  },
   provider: ModelProvider,
 ): Promise<GenerationJob> {
   // Stamped at submission and never revisited. A build carries the engine it was started
   // under for its whole life, so flipping the flag mid-build cannot reinterpret a job that is
   // already running under the other pipeline.
+  //
+  // The lineage claim is stamped here for a related but distinct reason: this is the only moment it
+  // exists. Nothing on chain records that one configuration came from another, so a claim not written
+  // now is not recoverable later — for this market or for any other. See `LineageClaim`.
   const job = newJob({
     id: crypto.randomUUID(),
     prompt: request.prompt,
@@ -298,6 +308,9 @@ export async function submit(
     symbol: request.symbol,
     now: Math.floor(Date.now() / 1000),
     engineVersion: engineVersionForNewBuilds(),
+    ...(request.lineage === undefined || request.lineage === null
+      ? {}
+      : { lineage: request.lineage }),
   });
 
   await jobStore().create(job);

@@ -28,7 +28,23 @@ export const PROGRAM_TABLES = [
   "program_lineage",
 ] as const;
 
-const MIGRATION = "0000_programs";
+/**
+ * The table the second migration owns.
+ *
+ * Separate from `PROGRAM_TABLES` rather than appended to it, and the separation is load-bearing in
+ * two places. `migrate.test.ts` asserts that migration 0000 creates *exactly* the four Program
+ * tables, so a fifth name in that list would fail a passing M1 test for no reason other than
+ * bookkeeping. And the two migrations are genuinely independent: 0000 is the registry, 0001 is the
+ * record of launches that feed it, and 0001 can be rolled back on its own without touching a single
+ * Program row.
+ */
+export const ATTEMPT_TABLES = ["launch_attempts"] as const;
+
+/** Every table the registry's database holds once both migrations have run. */
+export const ALL_TABLES = [...PROGRAM_TABLES, ...ATTEMPT_TABLES] as const;
+
+const PROGRAMS_MIGRATION = "0000_programs";
+const ATTEMPTS_MIGRATION = "0001_launch_attempts";
 
 function read(file: string): string {
   return readFileSync(fileURLToPath(new URL(`../drizzle/${file}`, import.meta.url)), "utf8");
@@ -36,10 +52,20 @@ function read(file: string): string {
 
 /** The forward migration, as generated from `schema.ts`. */
 export function upSql(): string {
-  return read(`${MIGRATION}.sql`);
+  return read(`${PROGRAMS_MIGRATION}.sql`);
 }
 
 /** Its hand-written reverse. See the note at the top of the file it reads. */
 export function downSql(): string {
-  return read(`${MIGRATION}.down.sql`);
+  return read(`${PROGRAMS_MIGRATION}.down.sql`);
+}
+
+/** The second migration: `launch_attempts`, as generated from `schema.ts`. */
+export function attemptsUpSql(): string {
+  return read(`${ATTEMPTS_MIGRATION}.sql`);
+}
+
+/** Its hand-written reverse. */
+export function attemptsDownSql(): string {
+  return read(`${ATTEMPTS_MIGRATION}.down.sql`);
 }

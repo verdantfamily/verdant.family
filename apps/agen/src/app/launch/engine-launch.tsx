@@ -210,6 +210,32 @@ export function EngineLaunch({
   }, [job.id, address, payTo, factory, implementationHash, send]);
 
   const hash = send.data;
+
+  /*
+   * Say that a transaction exists, before knowing whether it worked.
+   *
+   * This fires on the hash rather than on the receipt, and the gap between the two is the whole point.
+   * A creator who signs and then closes the tab never reaches the effect below, so without this the
+   * server cannot tell that launch apart from one that was never signed at all — and those need
+   * opposite treatment. One is a market on chain waiting to be found; the other is nothing.
+   *
+   * Nothing is awaited and no failure is shown. The launch is between a signature and a receipt, and
+   * there is no answer a creator could act on: if this does not arrive, the market is still created and
+   * still registered, and only its lineage claim is at risk. See `api/markets/[id]/attempt`.
+   */
+  useEffect(() => {
+    if (hash === undefined) return;
+
+    void fetch(`/api/markets/${job.id}/attempt`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ txHash: hash }),
+    }).catch(() => {
+      // The sweep reads the chain regardless. Nothing to tell the creator: their transaction is on
+      // its way, which is what they are waiting for.
+    });
+  }, [hash, job.id]);
+
   useEffect(() => {
     if (!receipt.isSuccess || hash === undefined) return;
 

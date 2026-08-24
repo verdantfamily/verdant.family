@@ -13,6 +13,7 @@ import { NextResponse } from "next/server";
 import { isHex } from "viem";
 
 import { LaunchRecordError, readLaunch, recordLaunch } from "../../../../lib/launched";
+import { reconcileAfterReceipt } from "../../../../lib/registry/reconcile";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,6 +45,20 @@ export async function POST(
     }
 
     const record = await recordLaunch(id, body.txHash);
+
+    /*
+     * The first of reconciliation's two required sources.
+     *
+     * After `recordLaunch`, so the chain has already been asked what this transaction did and this only
+     * runs for a launch that really happened. Awaited rather than left dangling, because a serverless
+     * instance may be frozen the moment this handler returns and a background promise would simply not
+     * finish — the sweep would eventually cover it, but the fast path would silently never work.
+     *
+     * It cannot affect the response. `reconcileAfterReceipt` resolves whatever happens and logs what it
+     * swallowed: a creator whose market exists has to be told so, even if the registry is down.
+     */
+    await reconcileAfterReceipt(id);
+
     return NextResponse.json({ record }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     if (error instanceof LaunchRecordError) {

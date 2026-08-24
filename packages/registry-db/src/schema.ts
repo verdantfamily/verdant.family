@@ -227,6 +227,166 @@ export const programLineage = pgTable(
   ],
 );
 
+/**
+ * One launch, recorded before it was signed.
+ *
+ * ## Why a launch has to be written down before it happens
+ *
+ * Everything else in this schema can be rebuilt from the chain. Lineage cannot: no event, table or
+ * contract records that one configuration was derived from another, and the only moment anybody
+ * knows is when the creator said so. By the time a market is indexed, the claim is gone. So this
+ * table exists to carry that one fact across the gap between "a creator asked for this launch" and
+ * "a market exists", and reconciliation is what closes the gap.
+ *
+ * The gap is real and both ends of it can fail. A creator can be handed calldata and never sign.
+ * They can sign and the receipt can never reach the app. Neither is exceptional, which is why an
+ * attempt has a lifecycle rather than a boolean.
+ *
+ * ## The vocabulary is the X path's, deliberately
+ *
+ * `reserved`, `sending`, `launched`, `failed`, `indeterminate` — the same five
+ * `apps/agen/src/app/lib/x/types.ts` uses for sponsored Instant launches, with the same meanings.
+ * That path has been running against this chain for months and the distinction it draws is the one
+ * that matters: `failed` means no transaction was ever sent, `indeterminate` means one was and its
+ * outcome is unknown. A single "gave up" status would merge them, and the merge is how one launch
+ * gets retried into two markets.
+ *
+ * Here, `reserved` is written by `prepareEngineLaunch` as the calldata leaves the server, and
+ * `sending` when the browser reports a transaction hash. Nothing in this repository signs on a
+ * creator's behalf on this path, so the server never observes a send directly — which is exactly
+ * why the hash is reported back rather than assumed, and why `indeterminate` is reachable.
+ *
+ * ## No foreign key to `programs`, and that is the point
+ *
+ * An attempt is written *before* the Program exists — it is the thing that will create it. A
+ * reference into `programs` would make every first launch of a new configuration fail, which is
+ * every launch that matters. The claimed parent is likewise a plain column: a creator may claim a
+ * parent this registry has never seen, and that has to degrade to a missing edge rather than to a
+ * refused launch.
+ *
+ * So nothing here is validated by the database against another table, and reconciliation is where
+ * a claim meets the constraints on `program_lineage`. That ordering is not a weakness of the schema;
+ * it is decision 5 — the registry must never be able to fail a launch — expressed as an absence of
+ * constraints on the one table the launch path writes to.
+ */
+export const launchAttempts = pgTable(
+  "launch_attempts",
+  {
+    /** The server's own id for this attempt. Not the job's: one job may be prepared twice. */
+    id: text("id").primaryKey(),
+
+    /**
+     * Which build this launch is of.
+     *
+     * Not unique. A creator who prepares a launch, walks away, and comes back to prepare it again
+     * has two attempts for one build, and only one of them is going to land. Reconciliation decides
+     * which by looking at the chain, so the ambiguity is resolved by evidence rather than forbidden
+     * by a constraint that would refuse the second preparation.
+     */
+    jobId: text("job_id").notNull(),
+
+    chainId: integer("chain_id").notNull(),
+
+    /** The economics, as the identity the launch will produce. Lowercased. */
+    configHash: text("config_hash").notNull(),
+    /** The commitment the creator signed: economics bound to this chain and this engine. */
+    implementationHash: text("implementation_hash").notNull(),
+    /**
+     * The canonical bytes, so an attempt is readable without the indexer.
+     *
+     * There is deliberately no `dedupe_key` beside it, unlike `programs`. That value is derived from
+     * these bytes by `@verdant/registry`, and reconciliation derives it from the market's own copy of
+     * them — so a column here would be a second answer to what these economics normalise to, written
+     * on the one path where being wrong is permanent and read by nothing. The bytes are the artefact;
+     * the key is a function of them and is computed once, where it is used.
+     */
+    encodedConfig: text("encoded_config").notNull(),
+    schemaVersion: integer("schema_version").notNull(),
+
+    /** `msg.sender` at launch, and therefore the market's creator. Lowercased. */
+    creator: text("creator").notNull(),
+    /** Who collects the liquidity position's fees. Not the programmable recipients. */
+    feeReceiver: text("fee_receiver").notNull(),
+    /** The engine factory the calldata was addressed to. From the environment; see decision 8. */
+    factory: text("factory").notNull(),
+    /** Where the fee vault was predicted to land. Null where the caller could not say. */
+    predictedVault: text("predicted_vault"),
+
+    /**
+     * `keccak256` of the calldata that was handed over, and never the calldata itself.
+     *
+     * The bytes are recoverable from `encoded_config` and the launch parameters, so storing them
+     * would be storing a derived value twice. The hash is here because it is the one artefact that
+     * ties this row to the exact transaction a wallet was asked to sign, which is what makes an
+     * attempt auditable after the fact.
+     */
+    calldataHash: text("calldata_hash").notNull(),
+
+    /**
+     * The chain head when the calldata was prepared. The origin of the matching window.
+     *
+     * Not null, and an attempt that could not obtain one is not written at all. Decision 7 requires
+     * matching on economics *and* creator *and* a bounded block range; without this column the
+     * range does not exist, and matching on the first two alone is how a creator's second launch of
+     * the same mechanic inherits the first one's claim.
+     */
+    observedBlock: bigint("observed_block", { mode: "number" }).notNull(),
+
+    /**
+     * The claim, or nothing.
+     *
+     * Two nullable columns rather than a `jsonb` document, because these are the two things a claim
+     * is and a check constraint can then require them to be present or absent together. A claim
+     * with a parent and no kind is not a partial claim, it is a bug upstream.
+     *
+     * Never derived. The parent is whatever the creator's build carried from the moment it was
+     * started, and `no-inference.test.ts` asserts there is no function anywhere on this path that
+     * could produce one any other way.
+     */
+    lineageParentConfigHash: text("lineage_parent_config_hash"),
+    lineageKind: text("lineage_kind"),
+
+    status: text("status").notNull(),
+
+    /** Set when the browser reports the hash, before any receipt is read. */
+    txHash: text("tx_hash"),
+
+    /** Unix seconds, when the calldata left the server. The reserved window measures from here. */
+    preparedAt: bigint("prepared_at", { mode: "number" }).notNull(),
+    /**
+     * When the transaction hash arrived. The sending window measures from here, not from
+     * preparation: a creator who leaves the review screen open for an hour and then signs has an
+     * old preparation and a seconds-old transaction, and measuring from the former would call it
+     * indeterminate the moment it was sent.
+     */
+    sentAt: bigint("sent_at", { mode: "number" }),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+
+    /** Why it ended where it did, for a terminal status that had a reason. */
+    error: text("error"),
+  },
+  (table) => [
+    // The matching query, in the order it filters: these economics, by this creator.
+    index("launch_attempts_config_creator_idx").on(table.configHash, table.creator),
+    // The expiry sweep, which reads only the two non-terminal statuses.
+    index("launch_attempts_status_idx").on(table.status),
+    index("launch_attempts_job_idx").on(table.jobId),
+    check(
+      "launch_attempts_status_check",
+      sql`${table.status} in ('reserved', 'sending', 'launched', 'failed', 'indeterminate')`,
+    ),
+    check(
+      "launch_attempts_lineage_kind_check",
+      sql`${table.lineageKind} is null or ${table.lineageKind} in ('REVISION', 'FORK')`,
+    ),
+    // A parent without a kind, or a kind without a parent, is half a claim. Neither is storable.
+    check(
+      "launch_attempts_lineage_complete_check",
+      sql`(${table.lineageParentConfigHash} is null) = (${table.lineageKind} is null)`,
+    ),
+  ],
+);
+
 export const programRelations = relations(programs, ({ many }) => ({
   markets: many(programMarkets),
   versions: many(programVersions),

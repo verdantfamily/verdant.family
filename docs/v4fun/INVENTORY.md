@@ -22,6 +22,7 @@ test, CI gate or lint configuration was modified.
 - [Decisions](#decisions)
 - [Follow-ups](#follow-ups)
 - [Missing](#missing)
+- [M2 — a launch writes itself down](#m2-a-launch-writes-itself-down)
 
 ## Deployed contracts
 
@@ -568,3 +569,198 @@ What a Program registry needs that does not exist anywhere in this repository to
 10. **A Program-to-market backfill.** The two live markets predate the registry. Populating it
     means replaying `EngineMarketDeployed` and recovering `encodedConfig` from calldata — which
     the indexer already does, and which nothing currently persists outside its own store.
+
+## M2 — a launch writes itself down
+
+M1 gave Programs somewhere to live and filled it from markets that already existed. M2 makes a
+launch write to it as it happens, and captures the one fact that cannot be recovered afterwards.
+
+Scope is engine 1 only, and deliberately: `/launch/programmable` →
+`POST /api/markets/[id]/approve` → `POST /api/markets/[id]/launch` → `prepareEngineLaunch` →
+`prepareLaunch` → the creator's wallet. Engine 0, Instant, the X path, the MCP server, the agent
+API and `apps/web` are untouched and are not unified with it.
+
+- [The attempt lifecycle](#the-attempt-lifecycle)
+- [The expiry rule](#the-expiry-rule)
+- [Why lineage cannot be reconstructed](#why-lineage-cannot-be-reconstructed)
+- [Reconciliation, and how a market is matched to an attempt](#reconciliation-and-how-a-market-is-matched-to-an-attempt)
+- [What M2 closes](#what-m2-closes)
+- [Correction to this document](#correction-to-this-document)
+
+### The attempt lifecycle
+
+One table, [`launch_attempts`](../../packages/registry-db/drizzle/0001_launch_attempts.sql), in the
+registry's own Postgres. Migration `0001`, independent of `0000` and reversible without touching a
+Program row.
+
+The status vocabulary is the X path's, copied rather than invented — `reserved`, `sending`,
+`launched`, `failed`, `indeterminate`, with the meanings
+[`apps/agen/src/app/lib/x/types.ts`](../../apps/agen/src/app/lib/x/types.ts) already gives them.
+That path has been running sponsored Instant launches against this chain for months, and the
+distinction it draws is the one that matters: `failed` means no transaction was ever sent,
+`indeterminate` means one was and nobody knows what happened. A single "gave up" status would merge
+them, and the merge is how one abandoned launch becomes two markets.
+
+| Status | Written by | Means |
+| --- | --- | --- |
+| `reserved` | [`prepareEngineLaunch`](../../apps/agen/src/app/lib/engine-launch.ts), immediately before it returns | Calldata was prepared and handed to a wallet. No transaction is known. |
+| `sending` | `POST /api/markets/[id]/attempt`, on the hash and before the receipt | A transaction exists. Its outcome is not known. |
+| `launched` | [`reconcileLaunches`](../../packages/registry-db/src/reconcile.ts) | The market was found on chain. Terminal. |
+| `failed` | Expiry | The reserved window passed with nothing sent. Terminal. |
+| `indeterminate` | Expiry | A transaction was sent and no market was ever found. Terminal, never retried. |
+
+Transitions only move forward. Every mutation in
+[`attempts.ts`](../../packages/registry-db/src/attempts.ts) is guarded on the statuses it may move
+*from*, so a late callback cannot pull a settled attempt back into flight.
+
+**The write point is one line, and it is the only one that works.**
+`prepareEngineLaunch` immediately before its `return` is the only place where the job id, creator,
+fee receiver, `configHash`, `implementationHash`, predicted vault, factory and calldata are all
+known at once *and* nothing has been signed. Earlier, there is no creator —
+`AgenEngineFactory` takes it from `msg.sender`, so a build has none until a wallet connects. Later,
+the record would be conditional on the launch succeeding, which is precisely the case it exists to
+survive.
+
+**The registry cannot fail a launch.** [`recordLaunchAttempt`](../../apps/agen/src/app/lib/registry/attempt.ts)
+has no error channel: it resolves with an outcome whatever happens, bounds itself with a two-second
+timeout — covering the hang a `try`/`catch` does not, where a Postgres accepts a connection and
+never answers — returns its connection on every path, and logs what it swallowed. If every registry
+write fails, the launch completes, the market exists, and the sweep registers it afterwards with
+null lineage. That is the accepted cost and it is asserted directly, not intended.
+
+One thing it refuses to record: an attempt with no origin block. Matching needs a bounded block
+window, and a row that could only be matched on economics and creator is worse than no row — it is
+how one creator's second launch of the same mechanic would inherit the first one's claim.
+
+### The expiry rule
+
+Two windows, because the two non-terminal statuses are different facts measured from different
+columns.
+
+| From | Window | Measured from | Becomes |
+| --- | --- | --- | --- |
+| `reserved` | 30 minutes | `prepared_at` | `failed` |
+| `sending` | 24 hours | `sent_at` | `indeterminate` |
+
+A `reserved` attempt is a wallet dialog open over a review screen — a decision measured in seconds
+to minutes. Half an hour is generous for that, and short enough that an abandoned tab does not leave
+a row a later launch of the same economics by the same wallet could match against.
+
+A `sending` attempt is a transaction that exists, and whether it lands is a fact about the chain
+rather than about the creator's attention. A day is long enough for one stuck behind a gas spike, and
+bounded because `indeterminate` is a real answer where "still sending after a week" is not. It is
+measured from the hash and not from preparation: a creator who leaves the review screen open for an
+hour and then signs has an old preparation and a seconds-old transaction.
+
+Expiry is a clock, not a cancellation. Nothing on chain honours it, so a wallet that signs an hour
+after its attempt expired still produces a market — and the sweep still finds it, still matches it,
+and still writes its claim. What expiry guarantees is only that no attempt sits in a non-terminal
+status for ever.
+
+### Why lineage cannot be reconstructed
+
+M0 recorded this as MISSING item 5 and the position has not changed: **no event, table or contract
+records that one configuration was derived from another.** `EngineMarketDeployed` carries an index, a
+token, a creator, a pool, a vault, a locker, an engine version, a `configHash` and an
+`implementationHash`. None of those is a parent. The hook stores rules and derives their hash; it has
+never been told where they came from.
+
+So lineage is not late information — it is information that exists at exactly one moment, in exactly
+one place: the surface that accepted the edit, as it accepts it. A market indexed an hour later
+carries no trace of it, and neither does one indexed a second later.
+
+The consequence is captured at build creation and nowhere else. `POST /api/markets` accepts an
+optional `lineage: { parentProgramId, kind }`, validated by
+[`claim.ts`](../../apps/agen/src/app/lib/registry/claim.ts) and carried on the job as `LineageClaim`
+for the build's whole life, through rebuilds and edits. The launch route does not accept one,
+deliberately: a parent named at signing time would be a parent nobody was shown a review screen for.
+
+**A claim is never an inference.** There is no code path anywhere that could produce a parent from a
+configuration's contents — not from similarity, not from timing, not from a shared author.
+[`no-inference.test.ts`](../../packages/registry-db/src/no-inference.test.ts) asserts that as a
+property of the source rather than of the outputs: no module in `packages/registry`,
+`packages/registry-db` or the app's attempt path may contain the vocabulary of guessing, no
+`configHash` may be compared for anything but equality, `program_lineage` has exactly one writer, and
+every parent-shaped identifier is on a listed allow-set so a new one fails the suite. Behavioural
+tests would only show it for the inputs somebody thought to try.
+
+A malformed claim is refused at build creation rather than dropped, and the asymmetry is deliberate: a
+dropped claim is a market whose lineage is silently wrong for ever with no way for the creator to find
+out, while a refusal costs one retry while the fact still exists.
+
+**The two markets that already exist have no recoverable lineage, permanently.** CSCD and TAX
+launched before any of this, so nothing was captured and nothing can be. They reconcile with null
+lineage, which is the truthful answer rather than a gap to be filled in later.
+
+### Reconciliation, and how a market is matched to an attempt
+
+[`reconcileLaunches`](../../packages/registry-db/src/reconcile.ts) walks every engine market the
+indexer publishes, writes the Program, the version and the market through the *same* `programOf` the
+backfill uses, settles any matching attempt as `launched`, writes the claimed edge, and then expires
+what never landed. One transaction, idempotent, and expiry runs last so a market in the current batch
+is settled before the clock is allowed to call it abandoned.
+
+Two sources, both required, both calling the same function:
+
+- **The receipt route**, `POST /api/markets/[id]/launched`, after `recordLaunch` has verified the
+  transaction against the chain. Fast, and insufficient alone: it depends on the creator's tab still
+  being open.
+- **The sweep**, [`scripts/reconcile-registry.ts`](../../scripts/reconcile-registry.ts), on a
+  schedule. Complete, and insufficient alone: a registry minutes behind shows a creator nothing in the
+  minute after they launch.
+
+**Matching is never on `configHash` alone.** `deployMarket` is permissionless and a market's canonical
+configuration is public — it is on the review screen and in the build's own record — so two people
+launching byte-identical economics is expected rather than exceptional, and produces byte-identical
+`configHash`es *and* `implementationHash`es. An attempt matches a market only on all three of: the
+same `configHash`, the same creator, and a launch block within `ATTEMPT_BLOCK_WINDOW` of where the
+attempt was prepared. The window is 1,000,000 blocks — this chain mines roughly eight blocks a second,
+so that covers the 24-hour sending window with room, and it is bounded, which is the point. Where more
+than one attempt still fits, the one whose transaction hash the market carries wins; that is evidence
+rather than a tie-break.
+
+Two consequences worth stating, because both look like bugs and are not. A market with no matching
+attempt registers with null lineage rather than being skipped. And two creators claiming the same
+parent for the same economics collapse into **one** edge, because the child *is* the shared
+`configHash` — `program_lineage` describes Programs, while each launch keeps its own claim on its own
+attempt row.
+
+An unresolvable claim costs its own edge and nothing else. A parent this registry has never indexed,
+or a self-edge — reachable honestly, since the child's hash is not knowable when the claim is made —
+is counted and reported, and the market is registered regardless. The conditions are checked before
+the insert rather than caught after it, because a constraint violation inside a transaction aborts
+every Program written earlier in the run.
+
+### What M2 closes
+
+| M0 item | Status |
+| --- | --- |
+| 5 — Lineage | **Closed for launches from here on.** `program_lineage` is written from claims captured at build creation. Unrecoverable for CSCD and TAX, and for any market launched against the factory directly. |
+| 6 — A fork or revision count | **Closed.** Follows from 5: the edges exist and carry `kind`, so both are countable. |
+| 7 — The distinction between a revision and a fork | **Closed.** Claimed at build creation and stored on the edge. Authorship, never computed — the configurations differ either way, so nothing about their shape could decide it. |
+
+Items **3** (authorship beyond an address), **4** (Program names and descriptions) and **9**
+(cross-chain identity) are untouched and remain open. Item **8** was closed in M1 and is unaffected.
+
+### Correction to this document
+
+The launch-path audit this milestone was scoped from stated that `prepareLaunch` in
+[`packages/market-compiler/src/engine/prepare.ts`](../../packages/market-compiler/src/engine/prepare.ts)
+had **two** callers. It has **four**:
+
+1. [`engine/pipeline.ts`](../../packages/market-compiler/src/engine/pipeline.ts) — at build time, with
+   a stand-in creator, to produce the calldata the launchability proof executes.
+2. [`apps/agen/src/app/lib/engine-launch.ts`](../../apps/agen/src/app/lib/engine-launch.ts) — at wallet
+   time, with the real creator. The only one that leads to a signature.
+3. `packages/market-compiler/scripts/emit-journey.ts` — writes a Foundry fixture for
+   `EngineJourney.t.sol`.
+4. `packages/market-compiler/scripts/engine-benchmark.mjs` — measures encoding in a benchmark loop.
+
+Neither script signs anything, so the audit's *conclusion* — that the engine-v1 browser path is what
+produced CSCD and TAX — is unaffected, and so is decision 4's identification of the write point. The
+count is corrected because the audit is the document this milestone's scope was drawn from, and a
+reader checking that scope should not find a number that does not survive a grep.
+
+The audit also separated two steps this document had run together: `engine/pipeline.ts` *builds* the
+probe calldata, and [`engine-prove.ts`](../../apps/agen/src/app/lib/engine-prove.ts) is what executes
+it through `eth_call`.

@@ -104,8 +104,13 @@ export async function backfillPrograms(options: BackfillOptions): Promise<Backfi
  * The identity comes from `@verdant/registry`, which gets it from `@verdant/market-engine`. This
  * function derives nothing itself — it decodes, delegates, and checks the answer against what the
  * hook said.
+ *
+ * Exported for `reconcile.ts`, which must produce byte-identical rows for the same market. Two
+ * derivations of "what is this market's Program row" would mean a market's identity depended on
+ * which path observed it first, and `reconcile.test.ts` asserts the two agree by comparing full
+ * table snapshots. Sharing the function is what makes that assertion cheap to keep true.
  */
-function programOf(
+export function programOf(
   market: IndexerMarket,
   chainId: number,
 ): { readonly program: Program; readonly version: ProgramVersion } {

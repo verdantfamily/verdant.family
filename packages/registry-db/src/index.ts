@@ -22,9 +22,23 @@
  */
 
 export * as schema from "./schema.js";
-export { programLineage, programMarkets, programVersions, programs } from "./schema.js";
+export {
+  launchAttempts,
+  programLineage,
+  programMarkets,
+  programVersions,
+  programs,
+} from "./schema.js";
 
-export { PROGRAM_TABLES, downSql, upSql } from "./migrate.js";
+export {
+  ALL_TABLES,
+  ATTEMPT_TABLES,
+  PROGRAM_TABLES,
+  attemptsDownSql,
+  attemptsUpSql,
+  downSql,
+  upSql,
+} from "./migrate.js";
 
 export {
   REGISTRY_DATABASE_URL_VAR,
@@ -56,6 +70,40 @@ export {
 export {
   BackfillError,
   backfillPrograms,
+  programOf,
   type BackfillOptions,
   type BackfillResult,
 } from "./backfill.js";
+
+export {
+  ATTEMPT_BLOCK_WINDOW,
+  ATTEMPT_RESERVED_TTL_SECONDS,
+  ATTEMPT_SENDING_TTL_SECONDS,
+  attemptsFor,
+  expireAttempts,
+  listAttempts,
+  markAttemptLaunched,
+  markAttemptSending,
+  markAttemptSentForJob,
+  readAttempt,
+  reserveAttempt,
+  type ExpiryOptions,
+  type ExpiryResult,
+  type LaunchAttempt,
+  type LaunchAttemptStatus,
+  type AttemptLineageClaim,
+  type NewLaunchAttempt,
+} from "./attempts.js";
+
+export {
+  hasLineage,
+  parentsOf,
+  saveLineage,
+  type LineageOutcome,
+} from "./lineage.js";
+
+export {
+  reconcileLaunches,
+  type ReconcileOptions,
+  type ReconcileResult,
+} from "./reconcile.js";

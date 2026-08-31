@@ -31,7 +31,7 @@
     "@verdant/config": "workspace:*",
     "@verdant/market-engine": "workspace:*",
     "undici": "^7.16.0",
-    "viem": "^2.40.0"
+    "viem": "^2.56.0"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",

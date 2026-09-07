@@ -17,9 +17,9 @@
     "@verdant/market-engine": "workspace:*",
     "@verdant/sdk": "workspace:*",
     "@verdant/ui": "workspace:*",
-    "hono": "^4.12.33",
-    "ponder": "^0.17.4",
-    "viem": "^2.40.0"
+    "hono": "^4.13.5",
+    "ponder": "^0.17.9",
+    "viem": "^2.56.3"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
